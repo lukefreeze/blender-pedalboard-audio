@@ -1,0 +1,29 @@
+# --- Blender ---
+*.blend1
+*.blend2
+*.quit.blend
+*.autosave.blend
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+
+# --- C++ & Build Artifacts ---
+# Ignore the entire build folder where your C++ compiles
+build/
+bin/
+out/
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.sln
+*.vcxproj
+
+# --- OS Junk ---
+.DS_Store
+Thumbs.db
