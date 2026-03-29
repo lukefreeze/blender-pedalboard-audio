@@ -18,6 +18,7 @@ std::vector<float> process_audio_buffer(std::vector<float> input_buffer, float g
 }
 
 // This block creates the "Bridge" to Python
+// Change "wrapper" to "pedalboard_engine"
 PYBIND11_MODULE(pedalboard_engine, m) {
     m.doc() = "C++ Audio Engine for Blender VSE";
     m.def("process_buffer", &process_audio_buffer, "Processes an audio buffer with gain");
