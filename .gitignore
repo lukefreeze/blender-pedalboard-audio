@@ -23,6 +23,8 @@ out/
 *.pdb
 *.sln
 *.vcxproj
+*.pyd  <-- Add this
+*.exp  <-- Add this
 
 # --- OS Junk ---
 .DS_Store
