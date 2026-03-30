@@ -8,7 +8,7 @@
 
 // Data for our Mixer Strips
 struct Strip { int id; char name[32]; float vol = 0.5f; };
-std::vector<Strip> myStrips = { {1, "Audio 1"}, {2, "Audio 2"}, {3, "Audio 3"} };
+std::vector<Strip> myStrips = { {1, "CH 1"}, {2, "CH 2"}, {3, "CH 3"}, {4, "CH 4"} };
 
 // Boilerplate variables for DirectX
 static ID3D11Device* g_pd3dDevice = NULL;
@@ -94,8 +94,34 @@ int main() {
 
             ImGui::Separator();
 
-            // The Fader - Centered horizontally in the strip
-            ImGui::SetCursorPosX((windowWidth - 40) * 0.5f); // Center a 40px wide fader
+            // --- CENTER THE METER + FADER BLOCK ---
+            // Total width = 10 (meter) + 5 (dummy/spacing) + 40 (fader) = 55px
+            float blockWidth = 55.0f;
+            ImGui::SetCursorPosX((windowWidth - blockWidth) * 0.5f);
+
+            // --- DRAW PEAK METER ---
+            float meterValue = s.vol * 0.8f;
+            ImVec2 p0 = ImGui::GetCursorScreenPos();
+            ImVec2 p1 = ImVec2(p0.x + 10, p0.y + 200);
+
+            ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, IM_COL32(30, 30, 30, 255));
+
+            ImU32 meterColor = IM_COL32(0, 255, 0, 255);
+            if (meterValue > 0.7f) meterColor = IM_COL32(255, 255, 0, 255);
+            if (meterValue > 0.9f) meterColor = IM_COL32(255, 0, 0, 255);
+
+            float barHeight = 200.0f * meterValue;
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(p0.x, p1.y - barHeight),
+                p1,
+                meterColor
+            );
+
+            // This Dummy creates the 5px gap and defines the "click area" for the meter
+            ImGui::Dummy(ImVec2(10, 200));
+            ImGui::SameLine(0, 5); // 5px spacing between meter and fader
+
+            // --- DRAW THE FADER ---
             if (ImGui::VSliderFloat("##v", ImVec2(40, 200), &s.vol, 0.0f, 1.0f, "")) {
                 bridge.sendUpdate(s.id, s.vol, 0.0f);
             }

@@ -71,29 +71,33 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                     msg = data_queue.get_nowait()
                     data = json.loads(msg)
 
-                    scene = bpy.context.scene
-                    if not scene.sequence_editor:
-                        continue
+                    # The 'track_id' from C++ must match the 'channel' number in Blender
+                    target_channel = data.get("track_id")
+                    new_vol = data.get("volume")
 
-                    # Better Target Logic
-                    target_strip = scene.sequence_editor.active_strip
-                    if not target_strip or target_strip.type != "SOUND":
-                        selected = [
-                            s for s in context.selected_sequences if s.type == "SOUND"
-                        ]
-                        if selected:
-                            target_strip = selected[0]
+                    if target_channel is not None:
+                        scene = bpy.context.scene
+                        if scene.sequence_editor:
+                            found_any = False
+                            # Loop through ALL strips in the project
+                            for strip in scene.sequence_editor.sequences:
+                                # We check if it's a sound and if it's on the right row (channel)
+                                if (
+                                    strip.type == "SOUND"
+                                    and strip.channel == target_channel
+                                ):
+                                    strip.volume = new_vol
+                                    found_any = True
 
-                    if target_strip:
-                        if "volume" in data:
-                            target_strip.volume = data["volume"]
-                        if "pan" in data:
-                            target_strip.pan = data["pan"]
+                            if not found_any:
+                                print(
+                                    f"No audio strips found on Channel {target_channel}"
+                                )
 
-                        # Redraw specifically the Sequence Editor
-                        for area in context.screen.areas:
-                            if area.type == "SEQUENCE_EDITOR":
-                                area.tag_redraw()
+                            # Refresh the VSE display
+                            for area in context.screen.areas:
+                                if area.type == "SEQUENCE_EDITOR":
+                                    area.tag_redraw()
 
                 except Exception as e:
                     print(f"Pedalboard Modal Error: {e}")
