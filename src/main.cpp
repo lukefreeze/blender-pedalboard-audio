@@ -25,11 +25,12 @@ void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 int main() {
-    // 1. Create Windows Window
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("Pedalboard Window"), NULL };
-    ::RegisterClassEx(&wc);
-    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Pedalboard DAW Engine"), WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, NULL, NULL, wc.hInstance, NULL);
+    // 1. Create Windows Window (Use WNDCLASSEXA and CreateWindowA)
+    WNDCLASSEXA wc = { sizeof(WNDCLASSEXA), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, "PedalboardWindowClass", NULL };
+    ::RegisterClassExA(&wc);
 
+    // Change the title here - no more _T() macro, just a plain string
+    HWND hwnd = ::CreateWindowA(wc.lpszClassName, "Pedalboard DAW Engine", WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, NULL, NULL, wc.hInstance, NULL);
     // 2. Initialize Direct3D
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); ::UnregisterClass(wc.lpszClassName, wc.hInstance); return 1; }
 
@@ -246,5 +247,5 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         ::PostQuitMessage(0);
         return 0;
     }
-    return ::DefWindowProcW(hWnd, msg, wParam, lParam);
+    return ::DefWindowProcA(hWnd, msg, wParam, lParam);
 }
