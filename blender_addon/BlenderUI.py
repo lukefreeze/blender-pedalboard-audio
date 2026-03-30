@@ -50,36 +50,52 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-        # Always allow the timer to pass through
-        if event.type == "TIMER":
-            while not data_queue.empty():
-                try:
-                    msg = data_queue.get_nowait()
-                    data = json.loads(msg)
+            # 1. Kill the modal if the stop signal is sent
+            if PedalboardState.stop_signal:
+                self.cancel(context)
+                return {"FINISHED"}
 
-                    # Search the whole scene for the strip if active_strip fails
-                    target_strip = context.scene.sequence_editor.active_strip
-                    if not target_strip or target_strip.type != "SOUND":
-                        # Fallback: Find by name if provided, or just use selected
-                        target_strip = next(
-                            (
-                                s
-                                for s in context.selected_sequences
-                                if s.type == "SOUND"
-                            ),
-                            None,
-                        )
+            # 2. Handle the Timer (The heartbeat of our connection)
+            if event.type == "TIMER":
+                if not PedalboardState.is_connected:
+                    return {"PASS_THROUGH"}
 
-                    if target_strip:
-                        target_strip.volume = data.get("volume", target_strip.volume)
-                        target_strip.pan = data.get("pan", target_strip.pan)
-                        # This tells Blender: "Don't just change the data, REDRAW the UI"
-                        for area in context.screen.areas:
-                            if area.type == "SEQUENCE_EDITOR":
-                                area.tag_redraw()
-                except Exception as e:
-                    print(f"Update caught error: {e}")
+                while not data_queue.empty():
+                    try:
+                        msg = data_queue.get_nowait()
+                        data = json.loads(msg)
 
+                        # Use bpy.data for more stability than context.scene
+                        scene = bpy.context.scene
+                        if not scene.sequence_editor:
+                            continue
+
+                        # Target logic
+                        target_strip = scene.sequence_editor.active_strip
+                        if not target_strip or target_strip.type != "SOUND":
+                            selected = [s for s in context.selected_sequences if s.type == "SOUND"]
+                            if selected:
+                                target_strip = selected[0]
+
+                        if target_strip:
+                            # Apply updates
+                            if "volume" in data:
+                                target_strip.volume = data["volume"]
+                            if "pan" in data:
+                                target_strip.pan = data["pan"]
+
+                            # Force redraw of the VSE UI specifically
+                            for area in context.screen.areas:
+                                if area.type == 'SEQUENCE_EDITOR':
+                                    area.tag_redraw()
+
+                    except Exception as e:
+                        print(f"Pedalboard Modal Error: {e}")
+
+                return {"PASS_THROUGH"}
+
+            # 3. CRITICAL: Allow all other events (clicks, navigation) to pass to Blender
+            # so the modal doesn't "lock" the UI or die when you click away.
             return {"PASS_THROUGH"}
 
         # If we stop the service, kill the modal
