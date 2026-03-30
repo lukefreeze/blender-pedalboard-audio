@@ -16,31 +16,37 @@ class PedalboardState:
     stop_signal = False
     host = "127.0.0.1"
     port = 65432
-    # Ensure this matches your actual compiled .exe location
     executable_path = r"C:\Users\lukeb\Documents\BlenderTool\build\PedalboardDAW.exe"
 
 
 # --- 2. THE SOCKET THREAD ---
 def socket_server_loop():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        try:
-            s.bind((PedalboardState.host, PedalboardState.port))
-            s.listen()
-            PedalboardState.is_connected = True  # Set connected state
-            while not PedalboardState.stop_signal:
-                try:
-                    conn, addr = s.accept()
-                    with conn:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Good practice
+        s.bind((PedalboardState.host, PedalboardState.port))
+        s.listen()
+        PedalboardState.is_connected = True
+
+        while not PedalboardState.stop_signal:
+            try:
+                s.settimeout(0.5)
+                conn, addr = s.accept()
+                with conn:
+                    # NEW: A second loop to keep the connection alive!
+                    while not PedalboardState.stop_signal:
                         data = conn.recv(1024).decode()
-                        if data:
-                            data_queue.put(data)
-                except socket.timeout:
-                    continue
-        except Exception as e:
-            print(f"Socket Error: {e}")
-        finally:
-            PedalboardState.is_connected = False
+                        if (
+                            not data
+                        ):  # If data is empty, the C++ app closed the connection
+                            break
+                        data_queue.put(data)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"Socket Error: {e}")
+                break
+
+        PedalboardState.is_connected = False
 
 
 # --- 3. OPERATORS ---
@@ -50,58 +56,47 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-            # 1. Kill the modal if the stop signal is sent
-            if PedalboardState.stop_signal:
-                self.cancel(context)
-                return {"FINISHED"}
-
-            # 2. Handle the Timer (The heartbeat of our connection)
-            if event.type == "TIMER":
-                if not PedalboardState.is_connected:
-                    return {"PASS_THROUGH"}
-
-                while not data_queue.empty():
-                    try:
-                        msg = data_queue.get_nowait()
-                        data = json.loads(msg)
-
-                        # Use bpy.data for more stability than context.scene
-                        scene = bpy.context.scene
-                        if not scene.sequence_editor:
-                            continue
-
-                        # Target logic
-                        target_strip = scene.sequence_editor.active_strip
-                        if not target_strip or target_strip.type != "SOUND":
-                            selected = [s for s in context.selected_sequences if s.type == "SOUND"]
-                            if selected:
-                                target_strip = selected[0]
-
-                        if target_strip:
-                            # Apply updates
-                            if "volume" in data:
-                                target_strip.volume = data["volume"]
-                            if "pan" in data:
-                                target_strip.pan = data["pan"]
-
-                            # Force redraw of the VSE UI specifically
-                            for area in context.screen.areas:
-                                if area.type == 'SEQUENCE_EDITOR':
-                                    area.tag_redraw()
-
-                    except Exception as e:
-                        print(f"Pedalboard Modal Error: {e}")
-
-                return {"PASS_THROUGH"}
-
-            # 3. CRITICAL: Allow all other events (clicks, navigation) to pass to Blender
-            # so the modal doesn't "lock" the UI or die when you click away.
-            return {"PASS_THROUGH"}
-
-        # If we stop the service, kill the modal
+        # 1. Heartbeat check for exit
         if PedalboardState.stop_signal:
             self.cancel(context)
             return {"FINISHED"}
+
+        # 2. Process Incoming Data
+        if event.type == "TIMER":
+            if not PedalboardState.is_connected:
+                return {"PASS_THROUGH"}
+
+            while not data_queue.empty():
+                try:
+                    msg = data_queue.get_nowait()
+                    data = json.loads(msg)
+
+                    scene = bpy.context.scene
+                    if not scene.sequence_editor:
+                        continue
+
+                    # Better Target Logic
+                    target_strip = scene.sequence_editor.active_strip
+                    if not target_strip or target_strip.type != "SOUND":
+                        selected = [
+                            s for s in context.selected_sequences if s.type == "SOUND"
+                        ]
+                        if selected:
+                            target_strip = selected[0]
+
+                    if target_strip:
+                        if "volume" in data:
+                            target_strip.volume = data["volume"]
+                        if "pan" in data:
+                            target_strip.pan = data["pan"]
+
+                        # Redraw specifically the Sequence Editor
+                        for area in context.screen.areas:
+                            if area.type == "SEQUENCE_EDITOR":
+                                area.tag_redraw()
+
+                except Exception as e:
+                    print(f"Pedalboard Modal Error: {e}")
 
         return {"PASS_THROUGH"}
 
@@ -127,8 +122,6 @@ class VSE_OT_LaunchExternal(bpy.types.Operator):
 
     def execute(self, context):
         if os.path.exists(PedalboardState.executable_path):
-            # This 'creationflags' trick opens a new, separate CMD window
-            # so you can see C++ errors even if the app crashes.
             subprocess.Popen(
                 [PedalboardState.executable_path],
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
@@ -136,7 +129,7 @@ class VSE_OT_LaunchExternal(bpy.types.Operator):
             self.report({"INFO"}, "DAW Launched")
         else:
             self.report(
-                {"ERROR"}, f"Binary not found at: {PedalboardState.executable_path}"
+                {"ERROR"}, f"Binary not found: {PedalboardState.executable_path}"
             )
         return {"FINISHED"}
 
@@ -160,7 +153,6 @@ class VSE_PT_PedalboardBridge(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-
         box = layout.box()
         if PedalboardState.is_connected:
             box.label(text="CONNECTED", icon="CHECKMARK")
@@ -168,9 +160,7 @@ class VSE_PT_PedalboardBridge(bpy.types.Panel):
         else:
             box.label(text="DISCONNECTED", icon="CANCEL")
             layout.operator("vse.pedalboard_modal", text="Start Service", icon="PLAY")
-
         layout.separator(factor=1.5)
-
         col = layout.column()
         col.scale_y = 1.5
         col.operator("vse.pedalboard_launch", icon="WINDOW")
@@ -188,11 +178,6 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-
-
-def unregister():
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
 
 
 if __name__ == "__main__":
