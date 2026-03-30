@@ -1,19 +1,33 @@
 #include <iostream>
-#include <thread>
-#include <chrono>
-#include "socket_client.h" // Point to the header, not the cpp!
+#include <string>
+#include "socket_client.h"
 
 int main() {
-    std::cout << "Pedalboard DAW Engine Launching..." << std::endl;
+    std::cout << "--- Pedalboard Remote Control ---" << std::endl;
     BlenderBridge bridge;
 
     if (bridge.connectToBlender()) {
         std::cout << "Connected to Blender!" << std::endl;
-        bridge.sendUpdate(1, 0.5f, 0.0f);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::cout << "Enter a volume (0.0 to 1.0) or 'q' to quit:" << std::endl;
+
+        std::string input;
+        while (true) {
+            std::cout << "> ";
+            std::cin >> input;
+
+            if (input == "q") break;
+
+            try {
+                float vol = std::stof(input); // Convert text to number
+                bridge.sendUpdate(1, vol, 0.0f); // Send to Blender
+                std::cout << "Sent Volume: " << vol << std::endl;
+            } catch (...) {
+                std::cout << "Invalid input. Enter a number." << std::endl;
+            }
+        }
     } else {
-        std::cerr << "Connection Failed! Is Blender's Start Service active?" << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        std::cerr << "Connection Failed! Is 'Start Service' running in Blender?" << std::endl;
+        system("pause");
     }
 
     bridge.closeConnection();
