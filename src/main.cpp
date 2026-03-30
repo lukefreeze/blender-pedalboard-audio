@@ -73,19 +73,45 @@ int main() {
         ImGui::NewFrame();
 
         // --- DRAW YOUR MIXING DESK HERE ---
+        // --- DRAW YOUR MIXING DESK HERE ---
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::Begin("Mixer Console", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+        // Use a clean background color and no border for the main container
+        ImGui::Begin("Mixer Console", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
         for (auto& s : myStrips) {
-            ImGui::BeginGroup();
+            ImGui::PushID(s.id); // FIX: Solves the "Programmer Error" ID conflict
+
+            // Create a "Channel Strip" area for each track
+            // Width: 80px, Height: 300px (adjust as needed)
+            ImGui::BeginChild("TrackChild", ImVec2(80, 320), true);
+
+            // Center the text
+            float windowWidth = ImGui::GetWindowSize().x;
+            float textWidth = ImGui::CalcTextSize(s.name).x;
+            ImGui::SetCursorPosX((windowWidth - textWidth) * 0.5f);
             ImGui::Text(s.name);
+
+            ImGui::Separator();
+
+            // The Fader - Centered horizontally in the strip
+            ImGui::SetCursorPosX((windowWidth - 40) * 0.5f); // Center a 40px wide fader
             if (ImGui::VSliderFloat("##v", ImVec2(40, 200), &s.vol, 0.0f, 1.0f, "")) {
-                bridge.sendUpdate(s.id, s.vol, 0.0f); // Live Update!
+                bridge.sendUpdate(s.id, s.vol, 0.0f);
             }
-            ImGui::EndGroup();
-            ImGui::SameLine();
+
+            // Small Mute Button
+            ImGui::SetCursorPosX((windowWidth - 40) * 0.5f);
+            if (ImGui::Button("MUTE", ImVec2(40, 25))) {
+                // Mute logic here
+            }
+
+            ImGui::EndChild();
+            ImGui::PopID(); // FIX: Reset ID for the next track
+
+            ImGui::SameLine(); // Align next channel strip to the right
         }
+
         ImGui::End();
 
         // Rendering
