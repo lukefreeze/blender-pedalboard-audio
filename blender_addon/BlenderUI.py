@@ -50,44 +50,42 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-        if PedalboardState.stop_signal or not PedalboardState.is_connected:
-            self.cancel(context)
-            return {"FINISHED"}
-
+        # Always allow the timer to pass through
         if event.type == "TIMER":
             while not data_queue.empty():
-                msg = data_queue.get()
                 try:
+                    msg = data_queue.get_nowait()
                     data = json.loads(msg)
-                    # 1. Try to get the active strip
+
+                    # Search the whole scene for the strip if active_strip fails
                     target_strip = context.scene.sequence_editor.active_strip
-
-                    # 2. If no active strip, get the first selected sound strip
                     if not target_strip or target_strip.type != "SOUND":
-                        selected = [
-                            s for s in context.selected_sequences if s.type == "SOUND"
-                        ]
-                        if selected:
-                            target_strip = selected[0]
-
-                    if target_strip:
-                        if "volume" in data:
-                            target_strip.volume = data["volume"]
-                            print(
-                                f"Pedalboard: Set {target_strip.name} volume to {data['volume']}"
-                            )
-                        if "pan" in data:
-                            target_strip.pan = data["pan"]
-
-                        # Force the UI to refresh the slider visual
-                        context.area.tag_redraw()
-                    else:
-                        print(
-                            "Pedalboard: Received data, but no Audio Strip is selected/active!"
+                        # Fallback: Find by name if provided, or just use selected
+                        target_strip = next(
+                            (
+                                s
+                                for s in context.selected_sequences
+                                if s.type == "SOUND"
+                            ),
+                            None,
                         )
 
+                    if target_strip:
+                        target_strip.volume = data.get("volume", target_strip.volume)
+                        target_strip.pan = data.get("pan", target_strip.pan)
+                        # This tells Blender: "Don't just change the data, REDRAW the UI"
+                        for area in context.screen.areas:
+                            if area.type == "SEQUENCE_EDITOR":
+                                area.tag_redraw()
                 except Exception as e:
-                    print(f"Update Error: {e}")
+                    print(f"Update caught error: {e}")
+
+            return {"PASS_THROUGH"}
+
+        # If we stop the service, kill the modal
+        if PedalboardState.stop_signal:
+            self.cancel(context)
+            return {"FINISHED"}
 
         return {"PASS_THROUGH"}
 

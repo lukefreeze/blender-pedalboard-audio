@@ -21,6 +21,8 @@ int main() {
                 float vol = std::stof(input); // Convert text to number
                 bridge.sendUpdate(1, vol, 0.0f); // Send to Blender
                 std::cout << "Sent Volume: " << vol << std::endl;
+                // Give the socket a millisecond to breathe
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } catch (...) {
                 std::cout << "Invalid input. Enter a number." << std::endl;
             }
