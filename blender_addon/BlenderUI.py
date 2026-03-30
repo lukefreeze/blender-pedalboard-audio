@@ -58,20 +58,34 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
             while not data_queue.empty():
                 msg = data_queue.get()
                 try:
-                    if msg.startswith("{"):
-                        data = json.loads(msg)
-                        strip = context.scene.sequence_editor.active_strip
-                        if strip and strip.type == "SOUND":
-                            if "volume" in data:
-                                strip.volume = data["volume"]
-                            if "pan" in data:
-                                strip.pan = data["pan"]
-                    elif msg.startswith("VOL:"):
-                        val = float(msg.split(":")[1])
-                        strip = context.scene.sequence_editor.active_strip
-                        if strip and strip.type == "SOUND":
-                            strip.volume = val
-                    context.area.tag_redraw()
+                    data = json.loads(msg)
+                    # 1. Try to get the active strip
+                    target_strip = context.scene.sequence_editor.active_strip
+
+                    # 2. If no active strip, get the first selected sound strip
+                    if not target_strip or target_strip.type != "SOUND":
+                        selected = [
+                            s for s in context.selected_sequences if s.type == "SOUND"
+                        ]
+                        if selected:
+                            target_strip = selected[0]
+
+                    if target_strip:
+                        if "volume" in data:
+                            target_strip.volume = data["volume"]
+                            print(
+                                f"Pedalboard: Set {target_strip.name} volume to {data['volume']}"
+                            )
+                        if "pan" in data:
+                            target_strip.pan = data["pan"]
+
+                        # Force the UI to refresh the slider visual
+                        context.area.tag_redraw()
+                    else:
+                        print(
+                            "Pedalboard: Received data, but no Audio Strip is selected/active!"
+                        )
+
                 except Exception as e:
                     print(f"Update Error: {e}")
 
