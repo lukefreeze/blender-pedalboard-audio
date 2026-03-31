@@ -91,13 +91,11 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                             if "channel_masters" not in scene:
                                 scene["channel_masters"] = {}
 
-                            # 1. Track fader movement
+                            # 1. Get fader state and movement
                             old_fader_val = scene["channel_masters"].get(
                                 str(target_channel), 1.0
                             )
                             scene["channel_masters"][str(target_channel)] = new_vol
-
-                            # Is the C++ fader currently moving?
                             fader_is_moving = abs(new_vol - old_fader_val) > 0.0001
 
                             for strip in scene.sequence_editor.sequences:
@@ -105,26 +103,31 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                                     strip.type == "SOUND"
                                     and strip.channel == target_channel
                                 ):
+                                    # Initialize metadata if missing
                                     if "base_vol" not in strip:
                                         strip["base_vol"] = strip.volume
+                                    if "last_fader" not in strip:
+                                        strip["last_fader"] = new_vol
 
-                                    # 2. DETECT MANUAL BLENDER CHANGES
-                                    # We ONLY update base_vol if the fader is NOT moving.
-                                    # This prevents the 'Dead Fader' effect.
-                                    if not fader_is_moving:
-                                        expected_vol = strip["base_vol"] * new_vol
-                                        if abs(strip.volume - expected_vol) > 0.001:
-                                            # User moved it in Blender; recalculate what 100% should be
-                                            if new_vol > 0.01:
-                                                strip["base_vol"] = (
-                                                    strip.volume / new_vol
-                                                )
-                                            else:
-                                                strip["base_vol"] = strip.volume
+                                    # 2. THE SNAPSHOT CHECK
+                                    # We only update 'base_vol' if the Blender volume is different
+                                    # from what OUR LAST CALCULATION said it should be.
+                                    expected_vol = (
+                                        strip["base_vol"] * strip["last_fader"]
+                                    )
 
-                                    # 3. APPLY THE FADER
-                                    # This must happen every frame to keep the offset active
+                                    if abs(strip.volume - expected_vol) > 0.001:
+                                        # Someone moved the slider in Blender!
+                                        # Use the CURRENT fader position to reverse-calculate the new base.
+                                        if new_vol > 0.001:
+                                            strip["base_vol"] = strip.volume / new_vol
+                                        else:
+                                            strip["base_vol"] = strip.volume
+
+                                    # 3. APPLY AND UPDATE TRACKER
+                                    # We set the volume, then record WHICH fader value produced this volume.
                                     strip.volume = strip["base_vol"] * new_vol
+                                    strip["last_fader"] = new_vol
 
                             for area in context.screen.areas:
                                 if area.type == "SEQUENCE_EDITOR":
