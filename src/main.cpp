@@ -89,15 +89,21 @@ int main(int argc, char** argv) {
         std::string incoming = bridge.receiveData();
         if (!incoming.empty()) {
             for (auto& s : myStrips) {
-                std::string key = "\"" + std::to_string(s.id) + "\":";
-                size_t pos = incoming.find(key);
-                if (pos != std::string::npos) {
-                    size_t vStart = incoming.find_first_of("0123456789.", pos + key.length());
-                    size_t vEnd = incoming.find_first_of(",}", vStart);
-                    if (vStart != std::string::npos && vEnd != std::string::npos) {
-                        float restoredVol = std::stof(incoming.substr(vStart, vEnd - vStart));
-                        s.vol = restoredVol;
-                        if (s.id < 32) last_vols[s.id] = restoredVol;
+                // Find the specific track ID in the incoming string
+                std::string idKey = "\"track_id\":" + std::to_string(s.id);
+                size_t idPos = incoming.find(idKey);
+                if (idPos != std::string::npos) {
+                    size_t volPos = incoming.find("\"volume\":", idPos);
+                    if (volPos != std::string::npos) {
+                        // Extract the number and convert back to 0.0-1.5 range
+                        float rawVal = std::stof(incoming.substr(volPos + 9));
+                        float restoredVol = rawVal / 10000.0f;
+
+                        // Only apply if we aren't currently dragging the fader
+                        if (!ImGui::IsItemActive()) {
+                            s.vol = restoredVol;
+                            if (s.id < 32) last_vols[s.id] = restoredVol;
+                        }
                     }
                 }
             }
@@ -114,18 +120,18 @@ int main(int argc, char** argv) {
 
             float windowWidth = ImGui::GetWindowSize().x;
 
-            // Channel Name
+            // PRESERVED: Your Channel Name Logic
             float textWidth = ImGui::CalcTextSize(s.name).x;
             ImGui::SetCursorPosX((windowWidth - textWidth) * 0.5f);
             ImGui::Text(s.name);
             ImGui::Separator();
 
-            // Meter + Fader Block Centering
+            // PRESERVED: Meter + Fader Block Centering
             float blockWidth = 60.0f;
             ImGui::SetCursorPosX((windowWidth - blockWidth) * 0.5f);
 
-            // Peak Meter Drawing
-            float meterValue = s.vol / 1.5f; // Normalize for 0.0-1.5 range
+            // PRESERVED: Your Peak Meter Drawing
+            float meterValue = s.vol / 1.5f;
             ImVec2 p0 = ImGui::GetCursorScreenPos();
             ImVec2 p1 = ImVec2(p0.x + 10, p0.y + 250);
             ImGui::GetWindowDrawList()->AddRectFilled(p0, p1, IM_COL32(30, 30, 30, 255));
@@ -135,19 +141,16 @@ int main(int argc, char** argv) {
             ImGui::SameLine(0, 5);
 
             // --- THE FADER ---
-            // Range 0.0 to 1.5 (Pro mixing style)
-            // --- THE FADER (STRICT FLOAT UPDATE) ---
             if (ImGui::VSliderFloat("##v", ImVec2(45, 250), &s.vol, 0.0f, 1.5f, "")) {
-                // Force a small epsilon check to ensure we don't spam,
-                // but ensure the value sent is the actual float.
-                if (abs(s.vol - last_vols[s.id]) > 0.001f) {
-                    // Explicitly pass s.vol to the bridge
-                    bridge.sendUpdate(s.id, (float)s.vol, 0.0f);
+                int int_vol = (int)(s.vol * 10000.0f);
+                if (int_vol != (int)(last_vols[s.id] * 10000.0f)) {
                     last_vols[s.id] = s.vol;
+                    bridge.sendUpdate(s.id, (float)int_vol, 0.0f);
+                    printf("[DAW] Sent Ch %d: %d\n", s.id, int_vol);
                 }
             }
 
-            // Draw Unity Line (at 1.0)
+            // PRESERVED: Your Unity Line
             ImVec2 fMin = ImGui::GetItemRectMin();
             ImVec2 fMax = ImGui::GetItemRectMax();
             float unityY = fMax.y - ((fMax.y - fMin.y) * (1.0f / 1.5f));
@@ -155,22 +158,20 @@ int main(int argc, char** argv) {
 
             ImGui::Spacing();
 
-            // Numerical Input
+            // --- FIXED: Single Numerical Input ---
             ImGui::SetNextItemWidth(70.0f);
             ImGui::SetCursorPosX((windowWidth - 70.0f) * 0.5f);
-            if (ImGui::InputFloat("##num", &s.vol, 0.0f, 0.0f, "%.2f")) {
-                if (abs(s.vol - last_vols[s.id]) > 0.01f) {
-                    if (s.vol < 0.0f) s.vol = 0.0f;
-                    bridge.sendUpdate(s.id, s.vol, 0.0f);
-                    last_vols[s.id] = s.vol;
-                }
+            if (ImGui::InputFloat("##num", &s.vol, 0.01f, 0.1f, "%.2f")) {
+                if (s.vol < 0.0f) s.vol = 0.0f;
+                int int_vol = (int)(s.vol * 10000.0f);
+                bridge.sendUpdate(s.id, (float)int_vol, 0.0f);
+                last_vols[s.id] = s.vol;
             }
 
             ImGui::EndChild();
             ImGui::PopID();
             ImGui::SameLine();
         }
-
         ImGui::End();
 
         // RENDER

@@ -61,56 +61,75 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-        if PedalboardState.stop_signal:
-            self.cancel(context)
-            return {"FINISHED"}
-
         if event.type == "TIMER":
-            if not PedalboardState.is_connected:
-                return {"PASS_THROUGH"}
+            if PedalboardState.stop_signal:
+                self.cancel(context)
+                return {"FINISHED"}
+
+            # --- ADD THIS LINE HERE ---
+            scene = context.scene
 
             while not data_queue.empty():
                 try:
                     msg = data_queue.get_nowait()
-                    data = json.loads(msg)
+                    data = json.loads(msg.strip())
+
                     target_channel = data.get("track_id")
+                    incoming_int = int(data.get("volume", 10000))
+                    multiplier = incoming_int / 10000.0
 
-                    # 1. FORCE FLOAT CONVERSION
-                    # This prevents the "0 or 1" integer rounding issue
-                    new_vol = float(data.get("volume", 1.0))
+                    if target_channel is not None and scene.sequence_editor:
+                        for strip in scene.sequence_editor.sequences:
+                            # ... (Rest of your strip logic)
+                            if (
+                                strip.type == "SOUND"
+                                and strip.channel == target_channel
+                            ):
+                                # 1. Initialization
+                                if "base_vol" not in strip:
+                                    strip["base_vol"] = strip.volume
+                                    print(
+                                        f"[Init] Ch {target_channel} Base: {strip.volume}"
+                                    )
 
-                    if target_channel is not None:
-                        scene = bpy.context.scene
-                        if scene.sequence_editor:
-                            if "channel_masters" not in scene:
-                                scene["channel_masters"] = {}
-                            scene["channel_masters"][str(target_channel)] = new_vol
+                                # 2. Handle Manual Override (Blender UI moved)
+                                # We check if the strip.volume is different from what we LAST set it to.
+                                last_set_vol = strip.get(
+                                    "last_applied_total", strip.volume
+                                )
 
-                            # 2. ADJUST MULTIPLIER
-                            # We treat 1.0 as the 'Standard' volume.
-                            # If the fader is at 1.5, it boosts; if below 1.0, it cuts.
-                            multiplier = new_vol
-
-                            for strip in scene.sequence_editor.sequences:
-                                if (
-                                    strip.type == "SOUND"
-                                    and strip.channel == target_channel
-                                ):
-                                    # Ensure we have a base volume to multiply against
-                                    if "base_vol" not in strip:
-                                        strip["base_vol"] = (
-                                            strip.volume if strip.volume > 0 else 1.0
+                                if abs(strip.volume - last_set_vol) > 0.001:
+                                    # If the user changed the slider, adjust the anchor
+                                    if multiplier > 0.01:
+                                        strip["base_vol"] = strip.volume / multiplier
+                                        print(
+                                            f"[Blender] Manual Override! New Base: {strip['base_vol']:.3f}"
                                         )
 
-                                    # 3. APPLY VOLUME
-                                    # This scales the strip's original volume by the fader value
-                                    strip.volume = strip["base_vol"] * multiplier
+                                # 3. Calculate and Apply
+                                # Apply the current multiplier to the potentially NEW base_vol
+                                new_total = strip["base_vol"] * multiplier
+                                strip.volume = new_total
 
-                            for area in context.screen.areas:
-                                if area.type == "SEQUENCE_EDITOR":
-                                    area.tag_redraw()
+                                # 4. Update tracking properties
+                                strip["last_applied_total"] = new_total
+                                strip["last_int"] = incoming_int
+
+                                # Debug Logging
+                                if incoming_int != strip.get("prev_log_int"):
+                                    print(
+                                        f"[DAW -> Blender] Ch {target_channel} Val: {incoming_int}"
+                                    )
+                                    strip["prev_log_int"] = incoming_int
+
+                        # Trigger UI Refresh
+                        for area in context.screen.areas:
+                            if area.type == "SEQUENCE_EDITOR":
+                                area.tag_redraw()
+
                 except Exception as e:
-                    print(f"Pedalboard Modal Error: {e}")
+                    print(f"[Blender] Sync Error: {e}")
+
         return {"PASS_THROUGH"}
 
     def execute(self, context):
