@@ -28,6 +28,8 @@ int main() {
     // 1. Create Windows Window (Use WNDCLASSEXA and CreateWindowA)
     WNDCLASSEXA wc = { sizeof(WNDCLASSEXA), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, "PedalboardWindowClass", NULL };
     ::RegisterClassExA(&wc);
+    // ADD THIS HERE (Top of main)
+    static float last_vols[32] = { 1.0f, 1.0f, 1.0f, 1.0f }; // Initialize with default 1.0
 
     // Change the title here - no more _T() macro, just a plain string
     HWND hwnd = ::CreateWindowA(wc.lpszClassName, "Pedalboard DAW Engine", WS_OVERLAPPEDWINDOW, 100, 100, 800, 600, NULL, NULL, wc.hInstance, NULL);
@@ -75,8 +77,24 @@ int main() {
 
         std::string incoming = bridge.receiveData();
         if (!incoming.empty()) {
-            // This is where we will eventually parse the "Initial Sync"
-            // to move your faders to match Blender's existing levels.
+            // Basic parsing for our SYNC packet
+            // Note: In a larger project, use nlohmann/json.
+            // For now, we'll look for our "levels" keys manually.
+            for (auto& s : myStrips) {
+                std::string key = "\"" + std::to_string(s.id) + "\":";
+                size_t pos = incoming.find(key);
+                if (pos != std::string::npos) {
+                    // Find the value after the ":"
+                    size_t valStart = incoming.find_first_of("0123456789.", pos + key.length());
+                    size_t valEnd = incoming.find_first_of(",}", valStart);
+                    if (valStart != std::string::npos && valEnd != std::string::npos) {
+                        float restoredVol = std::stof(incoming.substr(valStart, valEnd - valStart));
+                        // UPDATE BOTH THE STRIP AND THE MEMORY
+                        s.vol = restoredVol;
+                        if (s.id < 32) last_vols[s.id] = restoredVol;
+                    }
+                }
+            }
         }
 
         // --- DRAW YOUR MIXING DESK HERE ---
@@ -130,7 +148,7 @@ int main() {
 
             // --- DRAW THE FADER (NEW LOGIC) ---
             // Keep track of the last sent volume for each channel (up to 32 channels)
-            static float last_vols[32] = { 0 };
+
 
             if (ImGui::VSliderFloat("##v", ImVec2(40, 200), &s.vol, 0.0f, 1.0f, "")) {
 

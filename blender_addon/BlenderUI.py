@@ -32,6 +32,16 @@ def socket_server_loop():
                 s.settimeout(0.5)
                 conn, addr = s.accept()
                 with conn:
+                    # 1. SEND INITIAL SYNC DATA TO C++
+                    scene = bpy.context.scene
+                    # Get stored values or default to 1.0
+                    masters = scene.get("channel_masters", {})
+                    # Convert IDProperty to a standard dict for JSON
+                    sync_packet = {
+                        "type": "SYNC",
+                        "levels": {str(k): v for k, v in masters.items()},
+                    }
+                    conn.sendall((json.dumps(sync_packet) + "\n").encode())
                     # NEW: A second loop to keep the connection alive!
                     while not PedalboardState.stop_signal:
                         data = conn.recv(1024).decode()
@@ -81,12 +91,13 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                             if "channel_masters" not in scene:
                                 scene["channel_masters"] = {}
 
-                            # Get previous fader value to detect movement
+                            # 1. Track fader movement
                             old_fader_val = scene["channel_masters"].get(
                                 str(target_channel), 1.0
                             )
                             scene["channel_masters"][str(target_channel)] = new_vol
 
+                            # Is the C++ fader currently moving?
                             fader_is_moving = abs(new_vol - old_fader_val) > 0.0001
 
                             for strip in scene.sequence_editor.sequences:
@@ -94,29 +105,26 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                                     strip.type == "SOUND"
                                     and strip.channel == target_channel
                                 ):
-                                    # Initialize base_vol if it doesn't exist
                                     if "base_vol" not in strip:
                                         strip["base_vol"] = strip.volume
 
-                                    # CASE 1: FADER AT THE TOP (UNITY/BYPASS)
-                                    if new_vol >= 0.999:
-                                        # If fader is NOT moving, and volume is different,
-                                        # the user is manually mixing in Blender. Update base.
-                                        if (
-                                            not fader_is_moving
-                                            and abs(strip.volume - strip["base_vol"])
-                                            > 0.001
-                                        ):
-                                            strip["base_vol"] = strip.volume
+                                    # 2. DETECT MANUAL BLENDER CHANGES
+                                    # We ONLY update base_vol if the fader is NOT moving.
+                                    # This prevents the 'Dead Fader' effect.
+                                    if not fader_is_moving:
+                                        expected_vol = strip["base_vol"] * new_vol
+                                        if abs(strip.volume - expected_vol) > 0.001:
+                                            # User moved it in Blender; recalculate what 100% should be
+                                            if new_vol > 0.01:
+                                                strip["base_vol"] = (
+                                                    strip.volume / new_vol
+                                                )
+                                            else:
+                                                strip["base_vol"] = strip.volume
 
-                                        # HARD LOCK: At 1.0, the volume IS the base volume.
-                                        # No multiplication = No rounding errors = No drift.
-                                        strip.volume = strip["base_vol"]
-
-                                    # CASE 2: FADER IS SCALING
-                                    else:
-                                        # Apply the multiplier
-                                        strip.volume = strip["base_vol"] * new_vol
+                                    # 3. APPLY THE FADER
+                                    # This must happen every frame to keep the offset active
+                                    strip.volume = strip["base_vol"] * new_vol
 
                             for area in context.screen.areas:
                                 if area.type == "SEQUENCE_EDITOR":
