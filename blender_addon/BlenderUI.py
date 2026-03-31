@@ -22,7 +22,7 @@ class PedalboardState:
 # --- 2. THE SOCKET THREAD ---
 def socket_server_loop():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Good practice
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((PedalboardState.host, PedalboardState.port))
         s.listen()
         PedalboardState.is_connected = True
@@ -32,22 +32,17 @@ def socket_server_loop():
                 s.settimeout(0.5)
                 conn, addr = s.accept()
                 with conn:
-                    # 1. SEND INITIAL SYNC DATA TO C++
                     scene = bpy.context.scene
-                    # Get stored values or default to 1.0
                     masters = scene.get("channel_masters", {})
-                    # Convert IDProperty to a standard dict for JSON
                     sync_packet = {
                         "type": "SYNC",
                         "levels": {str(k): v for k, v in masters.items()},
                     }
                     conn.sendall((json.dumps(sync_packet) + "\n").encode())
-                    # NEW: A second loop to keep the connection alive!
+
                     while not PedalboardState.stop_signal:
                         data = conn.recv(1024).decode()
-                        if (
-                            not data
-                        ):  # If data is empty, the C++ app closed the connection
+                        if not data:
                             break
                         data_queue.put(data)
             except socket.timeout:
@@ -66,12 +61,10 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
     _timer = None
 
     def modal(self, context, event):
-        # 1. Heartbeat check for exit
         if PedalboardState.stop_signal:
             self.cancel(context)
             return {"FINISHED"}
 
-        # 2. Process Incoming Data
         if event.type == "TIMER":
             if not PedalboardState.is_connected:
                 return {"PASS_THROUGH"}
@@ -80,62 +73,44 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                 try:
                     msg = data_queue.get_nowait()
                     data = json.loads(msg)
-
-                    # The 'track_id' from C++ must match the 'channel' number in Blender
                     target_channel = data.get("track_id")
-                    new_vol = data.get("volume")
+
+                    # 1. FORCE FLOAT CONVERSION
+                    # This prevents the "0 or 1" integer rounding issue
+                    new_vol = float(data.get("volume", 1.0))
 
                     if target_channel is not None:
                         scene = bpy.context.scene
                         if scene.sequence_editor:
                             if "channel_masters" not in scene:
                                 scene["channel_masters"] = {}
-
-                            # 1. Get fader state and movement
-                            old_fader_val = scene["channel_masters"].get(
-                                str(target_channel), 1.0
-                            )
                             scene["channel_masters"][str(target_channel)] = new_vol
-                            fader_is_moving = abs(new_vol - old_fader_val) > 0.0001
+
+                            # 2. ADJUST MULTIPLIER
+                            # We treat 1.0 as the 'Standard' volume.
+                            # If the fader is at 1.5, it boosts; if below 1.0, it cuts.
+                            multiplier = new_vol
 
                             for strip in scene.sequence_editor.sequences:
                                 if (
                                     strip.type == "SOUND"
                                     and strip.channel == target_channel
                                 ):
-                                    # Initialize metadata if missing
+                                    # Ensure we have a base volume to multiply against
                                     if "base_vol" not in strip:
-                                        strip["base_vol"] = strip.volume
-                                    if "last_fader" not in strip:
-                                        strip["last_fader"] = new_vol
+                                        strip["base_vol"] = (
+                                            strip.volume if strip.volume > 0 else 1.0
+                                        )
 
-                                    # 2. THE SNAPSHOT CHECK
-                                    # We only update 'base_vol' if the Blender volume is different
-                                    # from what OUR LAST CALCULATION said it should be.
-                                    expected_vol = (
-                                        strip["base_vol"] * strip["last_fader"]
-                                    )
-
-                                    if abs(strip.volume - expected_vol) > 0.001:
-                                        # Someone moved the slider in Blender!
-                                        # Use the CURRENT fader position to reverse-calculate the new base.
-                                        if new_vol > 0.001:
-                                            strip["base_vol"] = strip.volume / new_vol
-                                        else:
-                                            strip["base_vol"] = strip.volume
-
-                                    # 3. APPLY AND UPDATE TRACKER
-                                    # We set the volume, then record WHICH fader value produced this volume.
-                                    strip.volume = strip["base_vol"] * new_vol
-                                    strip["last_fader"] = new_vol
+                                    # 3. APPLY VOLUME
+                                    # This scales the strip's original volume by the fader value
+                                    strip.volume = strip["base_vol"] * multiplier
 
                             for area in context.screen.areas:
                                 if area.type == "SEQUENCE_EDITOR":
                                     area.tag_redraw()
-
                 except Exception as e:
                     print(f"Pedalboard Modal Error: {e}")
-
         return {"PASS_THROUGH"}
 
     def execute(self, context):
@@ -160,6 +135,7 @@ class VSE_OT_LaunchExternal(bpy.types.Operator):
 
     def execute(self, context):
         if os.path.exists(PedalboardState.executable_path):
+            # CREATE_NEW_CONSOLE ensures we see the crash error
             subprocess.Popen(
                 [PedalboardState.executable_path],
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
@@ -181,7 +157,6 @@ class VSE_OT_StopConnection(bpy.types.Operator):
         return {"FINISHED"}
 
 
-# --- 4. UI PANEL ---
 class VSE_PT_PedalboardBridge(bpy.types.Panel):
     bl_label = "Pedalboard Bridge"
     bl_idname = "VSE_PT_pedalboard_bridge"
@@ -204,18 +179,11 @@ class VSE_PT_PedalboardBridge(bpy.types.Panel):
         col.operator("vse.pedalboard_launch", icon="WINDOW")
 
 
-# --- 5. REGISTRATION ---
-classes = (
-    VSE_OT_Pedalboard_Modal,
-    VSE_OT_LaunchExternal,
-    VSE_OT_StopConnection,
-    VSE_PT_PedalboardBridge,
-)
-
-
 def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
+    bpy.utils.register_class(VSE_OT_Pedalboard_Modal)
+    bpy.utils.register_class(VSE_OT_LaunchExternal)
+    bpy.utils.register_class(VSE_OT_StopConnection)
+    bpy.utils.register_class(VSE_PT_PedalboardBridge)
 
 
 if __name__ == "__main__":
