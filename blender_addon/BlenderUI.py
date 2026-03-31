@@ -78,33 +78,46 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                     if target_channel is not None:
                         scene = bpy.context.scene
                         if scene.sequence_editor:
-                            # 1. Initialize our Master Fader dictionary if it's new
                             if "channel_masters" not in scene:
                                 scene["channel_masters"] = {}
 
-                            # 2. Store the C++ fader value for this channel
-                            # We use strings for keys because Blender ID properties like it better
+                            # Get previous fader value to detect movement
+                            old_fader_val = scene["channel_masters"].get(
+                                str(target_channel), 1.0
+                            )
                             scene["channel_masters"][str(target_channel)] = new_vol
 
-                            found_any = False
+                            fader_is_moving = abs(new_vol - old_fader_val) > 0.0001
+
                             for strip in scene.sequence_editor.sequences:
-                                # 3. Only affect sound strips on the specific channel
                                 if (
                                     strip.type == "SOUND"
                                     and strip.channel == target_channel
                                 ):
-                                    # 4. CAPTURE BASE VOLUME
-                                    # If we haven't 'remembered' the original volume yet, do it now.
-                                    # This allows the user to have different volumes per strip.
+                                    # Initialize base_vol if it doesn't exist
                                     if "base_vol" not in strip:
                                         strip["base_vol"] = strip.volume
 
-                                    # 5. APPLY THE MATH
-                                    # Final Volume = (Original Strip Volume) * (C++ Master Fader)
-                                    strip.volume = strip["base_vol"] * new_vol
-                                    found_any = True
+                                    # CASE 1: FADER AT THE TOP (UNITY/BYPASS)
+                                    if new_vol >= 0.999:
+                                        # If fader is NOT moving, and volume is different,
+                                        # the user is manually mixing in Blender. Update base.
+                                        if (
+                                            not fader_is_moving
+                                            and abs(strip.volume - strip["base_vol"])
+                                            > 0.001
+                                        ):
+                                            strip["base_vol"] = strip.volume
 
-                            # Refresh the VSE display
+                                        # HARD LOCK: At 1.0, the volume IS the base volume.
+                                        # No multiplication = No rounding errors = No drift.
+                                        strip.volume = strip["base_vol"]
+
+                                    # CASE 2: FADER IS SCALING
+                                    else:
+                                        # Apply the multiplier
+                                        strip.volume = strip["base_vol"] * new_vol
+
                             for area in context.screen.areas:
                                 if area.type == "SEQUENCE_EDITOR":
                                     area.tag_redraw()

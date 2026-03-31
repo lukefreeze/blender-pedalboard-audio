@@ -128,9 +128,18 @@ int main() {
             ImGui::Dummy(ImVec2(10, 200));
             ImGui::SameLine(0, 5); // 5px spacing between meter and fader
 
-            // --- DRAW THE FADER ---
+            // --- DRAW THE FADER (NEW LOGIC) ---
+            // Keep track of the last sent volume for each channel (up to 32 channels)
+            static float last_vols[32] = { 0 };
+
             if (ImGui::VSliderFloat("##v", ImVec2(40, 200), &s.vol, 0.0f, 1.0f, "")) {
-                bridge.sendUpdate(s.id, s.vol, 0.0f);
+
+                // Only send the update if the change is significant (more than 0.1%)
+                // This stops the "Fighting" between C++ and Blender
+                if (abs(s.vol - last_vols[s.id]) > 0.001f) {
+                    bridge.sendUpdate(s.id, s.vol, 0.0f);
+                    last_vols[s.id] = s.vol; // Record what we just sent
+                }
             }
 
             // Small Mute Button
