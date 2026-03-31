@@ -10,9 +10,13 @@ private:
     struct sockaddr_in server;
 
 public:
-    BlenderBridge(); // Constructor
+    BlenderBridge();
     bool connectToBlender();
     void sendUpdate(int track_id, float vol, float pan);
+
+    // ADD THIS LINE HERE:
+    std::string receiveData();
+
     void closeConnection();
 };
 

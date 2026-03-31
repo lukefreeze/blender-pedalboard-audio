@@ -78,21 +78,31 @@ class VSE_OT_Pedalboard_Modal(bpy.types.Operator):
                     if target_channel is not None:
                         scene = bpy.context.scene
                         if scene.sequence_editor:
+                            # 1. Initialize our Master Fader dictionary if it's new
+                            if "channel_masters" not in scene:
+                                scene["channel_masters"] = {}
+
+                            # 2. Store the C++ fader value for this channel
+                            # We use strings for keys because Blender ID properties like it better
+                            scene["channel_masters"][str(target_channel)] = new_vol
+
                             found_any = False
-                            # Loop through ALL strips in the project
                             for strip in scene.sequence_editor.sequences:
-                                # We check if it's a sound and if it's on the right row (channel)
+                                # 3. Only affect sound strips on the specific channel
                                 if (
                                     strip.type == "SOUND"
                                     and strip.channel == target_channel
                                 ):
-                                    strip.volume = new_vol
-                                    found_any = True
+                                    # 4. CAPTURE BASE VOLUME
+                                    # If we haven't 'remembered' the original volume yet, do it now.
+                                    # This allows the user to have different volumes per strip.
+                                    if "base_vol" not in strip:
+                                        strip["base_vol"] = strip.volume
 
-                            if not found_any:
-                                print(
-                                    f"No audio strips found on Channel {target_channel}"
-                                )
+                                    # 5. APPLY THE MATH
+                                    # Final Volume = (Original Strip Volume) * (C++ Master Fader)
+                                    strip.volume = strip["base_vol"] * new_vol
+                                    found_any = True
 
                             # Refresh the VSE display
                             for area in context.screen.areas:

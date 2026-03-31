@@ -7,7 +7,7 @@
 #include <vector>
 
 // Data for our Mixer Strips
-struct Strip { int id; char name[32]; float vol = 0.5f; };
+struct Strip { int id; char name[32]; float vol = 1.0f; }; // Default to 1.0 (100%)
 std::vector<Strip> myStrips = { {1, "CH 1"}, {2, "CH 2"}, {3, "CH 3"}, {4, "CH 4"} };
 
 // Boilerplate variables for DirectX
@@ -72,6 +72,12 @@ int main() {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        std::string incoming = bridge.receiveData();
+        if (!incoming.empty()) {
+            // This is where we will eventually parse the "Initial Sync"
+            // to move your faders to match Blender's existing levels.
+        }
 
         // --- DRAW YOUR MIXING DESK HERE ---
         // --- DRAW YOUR MIXING DESK HERE ---
