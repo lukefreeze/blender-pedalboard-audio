@@ -32,20 +32,23 @@ bool BlenderBridge::connectToBlender() {
     }
     return true;
 }
-
+void BlenderBridge::sendData(const std::string& data) {
+    if (sock != INVALID_SOCKET) {
+        // We add a newline (\n) so Blender's socket.recv() knows the message is finished
+        std::string packet = data + "\n";
+        send(sock, packet.c_str(), (int)packet.length(), 0);
+    }
+}
 void BlenderBridge::sendUpdate(int track_id, float vol, float pan) {
     if (sock == INVALID_SOCKET) return;
 
-    std::string json = "{ \"track_id\": " + std::to_string(track_id) +
-                       ", \"volume\": " + std::to_string(vol) +
-                       ", \"pan\": " + std::to_string(pan) + " }";
+    // We send volume as an integer to avoid locale/decimal issues between C++ and Python
+    int volInt = (int)(vol * 10000);
 
-    // We send the data, but we DO NOT close the socket here!
-    int result = send(sock, json.c_str(), (int)json.length(), 0);
+    std::string json = "{\"track_id\": " + std::to_string(track_id) +
+                       ", \"volume\": " + std::to_string(volInt) + "}";
 
-    if (result == SOCKET_ERROR) {
-        std::cerr << "Send failed. Connection lost." << std::endl;
-    }
+    sendData(json); // Use the existing sendData to handle the newline and sending
 }
 
 std::string BlenderBridge::receiveData() {

@@ -1,3 +1,4 @@
+#include "transport_ui.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -7,8 +8,9 @@
 #include <vector>
 #include <windows.h>
 
+
 // Linker settings for Stealth Mode
-#pragma comment(linker, "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+//#pragma comment(linker, "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 
 // Forward declarations for DX11 Boilerplate (usually kept at bottom or separate)
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -20,6 +22,7 @@ int main(int argc, char** argv) {
     int currentFrame = 0;
     int endFrame = 100;
     float fps = 24.0f; // Default to 24
+    bool isPlaying = false;
     // 2. WINDOW SETUP
     WNDCLASSEXA wc = { sizeof(WNDCLASSEXA), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, "DAWClass", NULL };
     RegisterClassExA(&wc);
@@ -85,25 +88,36 @@ int main(int argc, char** argv) {
             size_t efPos = latestPacket.find("\"frame_end\":");
             if (efPos != std::string::npos) endFrame = std::stoi(latestPacket.substr(efPos + 12));
 
+            // 1. Safety check: make sure the string is long enough before substr
             size_t fpsPos = latestPacket.find("\"fps\":");
-            if (fpsPos != std::string::npos) fps = std::stof(latestPacket.substr(fpsPos + 6));
+            if (fpsPos != std::string::npos && latestPacket.length() > fpsPos + 6) {
+                fps = std::stof(latestPacket.substr(fpsPos + 6));
+            }
+
+            // 2. Safety check for is_playing
+            size_t playPos = latestPacket.find("\"is_playing\":");
+            if (playPos != std::string::npos) {
+                isPlaying = (latestPacket.find("true", playPos) != std::string::npos);
+            }
 
             // 3. Update Strips using latestPacket
             for (auto& s : myStrips) {
                 std::string idKey = "\"track_id\":" + std::to_string(s.id);
-                size_t idPos = latestPacket.find(idKey); // FIXED: use latestPacket
+                size_t idPos = latestPacket.find(idKey);
 
                 if (idPos != std::string::npos) {
-                    size_t volPos = latestPacket.find("\"volume\":", idPos); // FIXED: use latestPacket
-                    if (volPos != std::string::npos) {
-                        float rawVal = std::stof(latestPacket.substr(volPos + 9)); // FIXED: use latestPacket
-                        float restoredVol = rawVal / 10000.0f;
+                    size_t volPos = latestPacket.find("\"volume\":", idPos);
+                    // CRITICAL SAFETY CHECK: Ensure volume exists and there's enough string left to read
+                    if (volPos != std::string::npos && latestPacket.length() > volPos + 10) {
+                        try {
+                            float rawVal = std::stof(latestPacket.substr(volPos + 9));
+                            float restoredVol = rawVal / 10000.0f;
 
-                        // Interaction Guard: Only sync if we aren't currently dragging the fader
-                        if (s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
-                            s.vol = restoredVol;
-                            s.last_sent_vol = restoredVol;
-                        }
+                            if (s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
+                                s.vol = restoredVol;
+                                s.last_sent_vol = restoredVol;
+                            }
+                        } catch (...) { /* Skip malformed data */ }
                     }
                 }
             }
@@ -113,29 +127,39 @@ int main(int argc, char** argv) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        // 1. Global Spacebar Check
+        if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
+            bridge.sendData("{\"command\": \"toggle_play\"}");
+        }
+
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
         ImGui::Begin("Mixer Console", NULL, ImGuiWindowFlags_NoDecoration);
 
-        // --- DIGITAL CLOCK LOGIC ---
+        // --- RESTORED DIGITAL CLOCK ---
         float totalSeconds = (fps > 0) ? (float)currentFrame / fps : 0.0f;
         int mins = (int)totalSeconds / 60;
         int secs = (int)totalSeconds % 60;
         int millis = (int)((totalSeconds - (int)totalSeconds) * 100);
 
-        // Large Digital Clock
-        ImGui::SetWindowFontScale(2.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.4f, 1.0f)); // Matrix Green
+        ImGui::SetWindowFontScale(3.0f);
         ImGui::Text("%02d:%02d:%02d", mins, secs, millis);
-        ImGui::SetWindowFontScale(1.0f); // Reset scale
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
 
-        // Small Frame Counter
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "FRAME: %d / %d", currentFrame, endFrame);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "FRAME: %d / %d | FPS: %.2f", currentFrame, endFrame, fps);
+        // ------------------------------
 
-        float progress = (endFrame > 0) ? (float)currentFrame / (float)endFrame : 0.0f;
-        ImGui::ProgressBar(progress, ImVec2(-1, 12), "");
         ImGui::Separator();
-        // --- END CLOCK ---
 
+        // --- DOCK TRANSPORT UI ---
+        // We pass 'true' or change the logic in transport_ui.cpp to NOT use ImGui::Begin
+        RenderTransportWindow(bridge, currentFrame, endFrame, isPlaying);
+
+        ImGui::Separator();
+
+        // 3. Fader Strips
         for (auto& s : myStrips) {
             MixerUI::RenderChannelStrip(s, bridge);
         }
