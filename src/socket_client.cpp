@@ -42,15 +42,15 @@ void BlenderBridge::sendData(const std::string& data) {
 void BlenderBridge::sendUpdate(int track_id, float vol, float pan) {
     if (sock == INVALID_SOCKET) return;
 
-    // We send volume as an integer to avoid locale/decimal issues between C++ and Python
-    int volInt = (int)(vol * 10000);
+    // Safety: If the float is already > 1.0, it means the UI range is wrong.
+    // We will force it into 0-10000 range for the integer.
+    int volInt = (int)(vol * 10000.0f);
 
-    std::string json = "{\"track_id\": " + std::to_string(track_id) +
-                       ", \"volume\": " + std::to_string(volInt) + "}";
+    std::string json = "{\"track_id\":" + std::to_string(track_id) +
+                       ",\"volume\":" + std::to_string(volInt) + "}\n";
 
-    sendData(json); // Use the existing sendData to handle the newline and sending
+    send(sock, json.c_str(), (int)json.length(), 0);
 }
-
 std::string BlenderBridge::receiveData() {
     if (sock == INVALID_SOCKET) return "";
 
