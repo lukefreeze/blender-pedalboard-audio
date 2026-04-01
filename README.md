@@ -11,6 +11,9 @@ A specialized tool to inject high-performance audio processing into the Blender 
 - **Python:** Blender Addon API & UI.
 - **C++:** Pedalboard wrapper.
 - **Git:** Version control and documentation.
+
+- Build Environment: Python 3.11.9 (Standardized for Blender 4.5 compatibility)
+- 
 ## Future Roadmap (Phase 2.0)
 - **AI Audio Restoration:** Integrate `DeepFilterNet` for real-time noise suppression.
 - **Voice Enhancement:** Explore `Resemble AI` for high-fidelity speech synthesis and cleanup within the VSE.
