@@ -32,19 +32,33 @@ def socket_server_loop():
                 s.settimeout(0.5)
                 conn, addr = s.accept()
                 with conn:
-                    scene = bpy.context.scene
-                    masters = scene.get("channel_masters", {})
-                    sync_packet = {
-                        "type": "SYNC",
-                        "levels": {str(k): v for k, v in masters.items()},
-                    }
-                    conn.sendall((json.dumps(sync_packet) + "\n").encode())
-
+                    # --- REPLACED SECTION START ---
                     while not PedalboardState.stop_signal:
-                        data = conn.recv(1024).decode()
-                        if not data:
-                            break
-                        data_queue.put(data)
+                        # 1. Fetch latest data every loop iteration
+                        scene = bpy.data.scenes[0]
+                        sync_packet = {
+                            "type": "SYNC",
+                            "frame_current": scene.frame_current,
+                            "frame_end": scene.frame_end,
+                            "fps": scene.render.fps / scene.render.fps_base,
+                        }
+
+                        try:
+                            # 2. Push updates to C++ (The Heartbeat)
+                            conn.sendall((json.dumps(sync_packet) + "\n").encode())
+
+                            # 3. Listen for Faders (Non-blocking)
+                            conn.setblocking(False)
+                            data = conn.recv(1024).decode()
+                            if data:
+                                data_queue.put(data)
+                        except (BlockingIOError, socket.error):
+                            pass
+
+                        import time
+
+                        time.sleep(0.01)  # Optional: Caps the heartbeat to ~100Hz
+                    # --- REPLACED SECTION END ---
             except socket.timeout:
                 continue
             except Exception as e:

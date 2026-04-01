@@ -15,8 +15,11 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 int main(int argc, char** argv) {
     // 1. DATA INITIALIZATION
-    std::vector<Strip> myStrips = { {1, "CH 1"}, {2, "CH 2"}, {3, "CH 3"}, {4, "CH 4"} };
 
+    std::vector<Strip> myStrips = { {1, "CH 1"}, {2, "CH 2"}, {3, "CH 3"}, {4, "CH 4"} };
+    int currentFrame = 0;
+    int endFrame = 100;
+    float fps = 24.0f; // Default to 24
     // 2. WINDOW SETUP
     WNDCLASSEXA wc = { sizeof(WNDCLASSEXA), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, "DAWClass", NULL };
     RegisterClassExA(&wc);
@@ -68,18 +71,35 @@ int main(int argc, char** argv) {
         }
 
         // SYNC INBOUND
+        // SYNC INBOUND
         std::string incoming = bridge.receiveData();
         if (!incoming.empty()) {
+            // 1. Find the start of the LAST packet in the buffer
+            size_t lastBrace = incoming.find_last_of('{');
+            std::string latestPacket = (lastBrace != std::string::npos) ? incoming.substr(lastBrace) : incoming;
+
+            // 2. Parse Frame Data from latestPacket
+            size_t cfPos = latestPacket.find("\"frame_current\":");
+            if (cfPos != std::string::npos) currentFrame = std::stoi(latestPacket.substr(cfPos + 16));
+
+            size_t efPos = latestPacket.find("\"frame_end\":");
+            if (efPos != std::string::npos) endFrame = std::stoi(latestPacket.substr(efPos + 12));
+
+            size_t fpsPos = latestPacket.find("\"fps\":");
+            if (fpsPos != std::string::npos) fps = std::stof(latestPacket.substr(fpsPos + 6));
+
+            // 3. Update Strips using latestPacket
             for (auto& s : myStrips) {
                 std::string idKey = "\"track_id\":" + std::to_string(s.id);
-                size_t idPos = incoming.find(idKey);
+                size_t idPos = latestPacket.find(idKey); // FIXED: use latestPacket
+
                 if (idPos != std::string::npos) {
-                    size_t volPos = incoming.find("\"volume\":", idPos);
+                    size_t volPos = latestPacket.find("\"volume\":", idPos); // FIXED: use latestPacket
                     if (volPos != std::string::npos) {
-                        float rawVal = std::stof(incoming.substr(volPos + 9));
+                        float rawVal = std::stof(latestPacket.substr(volPos + 9)); // FIXED: use latestPacket
                         float restoredVol = rawVal / 10000.0f;
 
-                        // Only sync if the user isn't currently moving the fader
+                        // Interaction Guard: Only sync if we aren't currently dragging the fader
                         if (s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
                             s.vol = restoredVol;
                             s.last_sent_vol = restoredVol;
@@ -96,6 +116,25 @@ int main(int argc, char** argv) {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
         ImGui::Begin("Mixer Console", NULL, ImGuiWindowFlags_NoDecoration);
+
+        // --- DIGITAL CLOCK LOGIC ---
+        float totalSeconds = (fps > 0) ? (float)currentFrame / fps : 0.0f;
+        int mins = (int)totalSeconds / 60;
+        int secs = (int)totalSeconds % 60;
+        int millis = (int)((totalSeconds - (int)totalSeconds) * 100);
+
+        // Large Digital Clock
+        ImGui::SetWindowFontScale(2.5f);
+        ImGui::Text("%02d:%02d:%02d", mins, secs, millis);
+        ImGui::SetWindowFontScale(1.0f); // Reset scale
+
+        // Small Frame Counter
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "FRAME: %d / %d", currentFrame, endFrame);
+
+        float progress = (endFrame > 0) ? (float)currentFrame / (float)endFrame : 0.0f;
+        ImGui::ProgressBar(progress, ImVec2(-1, 12), "");
+        ImGui::Separator();
+        // --- END CLOCK ---
 
         for (auto& s : myStrips) {
             MixerUI::RenderChannelStrip(s, bridge);
