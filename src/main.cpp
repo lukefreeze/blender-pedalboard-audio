@@ -101,33 +101,39 @@ int main(int argc, char** argv) {
                 size_t playPos = line.find("\"is_playing\":");
                 if (playPos != std::string::npos) isPlaying = (line.find("true", playPos) != std::string::npos);
 
-                // 2. Process Fader Restore or Updates
-                // Change the search to look for the word "RESTORE" anywhere in the line
-                bool isRestore = (line.find("\"type\": \"RESTORE\"") != std::string::npos) ||
-                                    (line.find("\"type\":\"RESTORE\"") != std::string::npos);
+                // 2. Process Fader/Mute/Solo Updates
+                // 1. Detect if this is a RESTORE packet (flexible on spacing)
+                bool isRestore = (line.find("\"type\"") != std::string::npos &&
+                                  line.find("\"RESTORE\"") != std::string::npos);
 
                 for (auto& s : myStrips) {
-                    std::string idKey = "\"track_id\": " + std::to_string(s.id);
-                    std::string idKeyAlt = "\"track_id\":" + std::to_string(s.id);
-
-                    // Check for both spaced and unspaced JSON (Python can vary)
-                    size_t idPos = line.find(idKey);
-                    if (idPos == std::string::npos) idPos = line.find(idKeyAlt);
-
+                    // 2. Search for the key only, then verify the number
+                    size_t idPos = line.find("\"track_id\":");
                     if (idPos != std::string::npos) {
-                        size_t volPos = line.find("\"volume\":", idPos);
-                        if (volPos != std::string::npos) {
-                            // Find the number after the colon
-                            size_t valueStart = line.find_first_of("0123456789", volPos);
-                            float rawVal = std::stof(line.substr(valueStart));
-                            float restoredVol = rawVal / 10000.0f;
+                        // Find the first digit after "track_id":
+                        size_t numStart = line.find_first_of("0123456789", idPos);
+                        int incomingId = std::stoi(line.substr(numStart));
 
-                            if (isRestore || s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
-                                s.vol = restoredVol;
-                                s.last_sent_vol = restoredVol;
+                        if (incomingId == s.id) {
+                            // --- SAFE VOLUME PARSING ---
+                            size_t volPos = line.find("\"volume\":");
+                            if (volPos != std::string::npos) {
+                                size_t valStart = line.find_first_of("0123456789", volPos);
+                                if (valStart != std::string::npos) {
+                                    float restoredVol = std::stof(line.substr(valStart)) / 10000.0f;
 
-                                // FORCE PRINT TO TERMINAL
-                                printf("C++ RESTORE EVENT: Strip %d set to %.2f\n", s.id, s.vol);
+                                    // Apply if it's a restore event OR the tool just started (last_sent_vol == -1)
+                                    if (isRestore || s.last_sent_vol == -1.0f || s.vol == s.last_sent_vol) {
+                                        s.vol = restoredVol;
+                                        s.last_sent_vol = restoredVol;
+                                    }
+                                }
+                            }
+
+                            // --- SAFE MUTE PARSING ---
+                            size_t mutePos = line.find("\"mute\":");
+                            if (mutePos != std::string::npos) {
+                                s.is_muted = (line.find("true", mutePos) != std::string::npos);
                             }
                         }
                     }

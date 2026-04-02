@@ -4,27 +4,55 @@ import bpy
 
 
 def process_command(msg):
-    # Split to handle clumped packets and prevent 'Extra Data' errors
     for raw_msg in msg.strip().split("\n"):
-        if not raw_msg.strip():
-            continue
-
+        if not raw_msg.strip(): continue
         try:
             data = json.loads(raw_msg)
             scene = bpy.context.scene
+            tid = data.get("track_id") # Get track_id early
 
-            # --- 1. HANDLE TRANSPORT COMMANDS (Play/Stop/Scrub) ---
+            # --- 1. HANDLE COMMANDS (Transport & Mute/Solo) ---
             if "command" in data:
                 cmd = data["command"]
+
+                # Transport
                 if cmd == "toggle_play":
                     bpy.ops.screen.animation_play()
                 elif cmd == "set_frame":
-                    new_frame = data.get("value") or data.get("frame") or 1
+                    new_frame = data.get("value") or 1
                     scene.frame_set(int(new_frame))
-                continue  # Move to next message, don't run volume logic on a transport command
+
+                # MUTE LOGIC (Keep this!)
+                elif cmd == "toggle_mute" and tid is not None:
+                    for strip in scene.sequence_editor.sequences:
+                        if strip.type == "SOUND" and strip.channel == tid:
+                            strip.mute = data.get("value", False)
+
+                # SOLO LOGIC (Add this!)
+                elif cmd == "toggle_solo" and tid is not None:
+                    target_strip = None
+                    # Find our target first
+                    for strip in scene.sequence_editor.sequences:
+                        if strip.type == "SOUND" and strip.channel == tid:
+                            target_strip = strip
+                            break
+
+                    if target_strip:
+                        is_solo_active = data.get("value", False)
+                        for strip in scene.sequence_editor.sequences:
+                            if strip.type == "SOUND":
+                                if is_solo_active:
+                                    # Mute every strip EXCEPT the one we soloed
+                                    strip.mute = (strip != target_strip)
+                                else:
+                                    # When un-soloing, we unmute everything
+                                    strip.mute = False
+                continue
 
             # --- 2. HANDLE VOLUME LOGIC ---
-            if "track_id" in data:
+            if tid is not None and "volume" in data:
+                # ... [Keep your existing volume multiplier logic here] ...
+                #
                 tid = data["track_id"]
 
                 # Convert 0-10000 back to 0.0-1.0
