@@ -55,6 +55,12 @@ def process_command(msg):
 
                             # C) APPLY CALCULATION: (Original/Base) * (Fader Position %)
                             new_vol = strip["base_vol"] * multiplier
+                            # --- ADD THESE TWO LINES BELOW ---
+                            strip["fader_pos"] = multiplier
+                            # ---------------------------------
+
+                            # Clamp at 100.0 (Blender's max)
+                            strip.volume = min(max(new_vol, 0.0), 100.0)
 
                             # Clamp at 100.0 (Blender's max)
                             strip.volume = min(max(new_vol, 0.0), 100.0)

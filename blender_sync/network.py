@@ -2,6 +2,7 @@ import json
 import os
 import queue
 import socket
+import time
 
 import bpy
 
@@ -21,42 +22,69 @@ def socket_server_loop():
         s.bind((PedalboardState.host, PedalboardState.port))
         s.listen()
 
-        # FIXED: Removed the cite tags
         PedalboardState.is_connected = True
 
         while not PedalboardState.stop_signal:
             try:
                 s.settimeout(0.5)
-                conn, addr = s.accept()
+                try:
+                    conn, addr = s.accept()
+                except socket.timeout:
+                    continue
+
                 with conn:
+                    print(f"--- NEW CONNECTION: {addr} ---")
+                    time.sleep(0.1)
+
+                    # --- RESTORE FADERS ON HANDSHAKE ---
+                    if bpy.context.scene.sequence_editor:
+                        for strip in bpy.context.scene.sequence_editor.sequences:
+                            if strip.type == "SOUND" and "fader_pos" in strip:
+                                print(
+                                    f"RESTORE: Sending Ch {strip.channel} -> {strip['fader_pos']}"
+                                )
+                                restore_pkt = {
+                                    "type": "RESTORE",
+                                    "track_id": strip.channel,
+                                    "volume": int(strip["fader_pos"] * 10000),
+                                }
+                                conn.sendall((json.dumps(restore_pkt) + "\n").encode())
+
+                    # --- MAIN SYNC LOOP ---
                     while not PedalboardState.stop_signal:
-                        scene = bpy.data.scenes[0]
-                        sync_packet = {
-                            "type": "SYNC",
-                            "frame_current": scene.frame_current,
-                            "frame_end": scene.frame_end,
-                            "fps": scene.render.fps / scene.render.fps_base,
-                            "is_playing": any(
-                                screen.is_animation_playing
-                                for screen in bpy.data.screens
-                            ),
-                        }
                         try:
+                            scene = bpy.context.scene
+                            sync_packet = {
+                                "type": "SYNC",
+                                "frame_current": scene.frame_current,
+                                "frame_end": scene.frame_end,
+                                "fps": scene.render.fps / scene.render.fps_base,
+                                "is_playing": any(
+                                    scr.is_animation_playing for scr in bpy.data.screens
+                                ),
+                            }
+
                             conn.sendall((json.dumps(sync_packet) + "\n").encode())
+
                             conn.setblocking(False)
-                            data = conn.recv(1024).decode()
-                            if data:
-                                PedalboardState.data_queue.put(data)
-                        except (BlockingIOError, socket.error):
-                            import time
+                            try:
+                                data = conn.recv(4096).decode()
+                                if data:
+                                    PedalboardState.data_queue.put(data)
+                                elif data == "":
+                                    print("Connection closed by Tool.")
+                                    break
+                            except (BlockingIOError, socket.error):
+                                pass
 
                             time.sleep(0.01)
-                            pass
-            except socket.timeout:
-                continue
-            except Exception as e:
-                print(f"Socket Error: {e}")
-                break
 
-        # FIXED: Removed the cite tags
+                        except (socket.error, BrokenPipeError):
+                            print("Socket Pipe Broken. Tool likely closed.")
+                            break
+
+            except Exception as e:
+                print(f"Connection Reset: {e}")
+                continue
+
         PedalboardState.is_connected = False

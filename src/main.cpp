@@ -1,3 +1,4 @@
+#include <sstream>
 #include "transport_ui.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -17,6 +18,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 int main(int argc, char** argv) {
     // 1. DATA INITIALIZATION
+    printf("Pedalboard Engine Started...\n");
 
     std::vector<Strip> myStrips = { {1, "CH 1"}, {2, "CH 2"}, {3, "CH 3"}, {4, "CH 4"} };
     int currentFrame = 0;
@@ -77,47 +79,57 @@ int main(int argc, char** argv) {
         // SYNC INBOUND
         std::string incoming = bridge.receiveData();
         if (!incoming.empty()) {
-            // 1. Find the start of the LAST packet in the buffer
-            size_t lastBrace = incoming.find_last_of('{');
-            std::string latestPacket = (lastBrace != std::string::npos) ? incoming.substr(lastBrace) : incoming;
+            // If we get too much data at once, it can lag.
+            // This stringstream approach is good, but let's make it safer.
+            std::stringstream ss(incoming);
+            std::string line;
+            while (std::getline(ss, line)) {
+                if (line.length() < 10) continue; // Ignore tiny/garbage fragments
 
-            // 2. Parse Frame Data from latestPacket
-            size_t cfPos = latestPacket.find("\"frame_current\":");
-            if (cfPos != std::string::npos) currentFrame = std::stoi(latestPacket.substr(cfPos + 16));
+                // ... (Keep the rest of your existing logic for currentFrame, fps, etc.)
 
-            size_t efPos = latestPacket.find("\"frame_end\":");
-            if (efPos != std::string::npos) endFrame = std::stoi(latestPacket.substr(efPos + 12));
+                // 1. Process Frame/Time Data
+                size_t cfPos = line.find("\"frame_current\":");
+                if (cfPos != std::string::npos) currentFrame = std::stoi(line.substr(cfPos + 16));
 
-            // 1. Safety check: make sure the string is long enough before substr
-            size_t fpsPos = latestPacket.find("\"fps\":");
-            if (fpsPos != std::string::npos && latestPacket.length() > fpsPos + 6) {
-                fps = std::stof(latestPacket.substr(fpsPos + 6));
-            }
+                size_t efPos = line.find("\"frame_end\":");
+                if (efPos != std::string::npos) endFrame = std::stoi(line.substr(efPos + 12));
 
-            // 2. Safety check for is_playing
-            size_t playPos = latestPacket.find("\"is_playing\":");
-            if (playPos != std::string::npos) {
-                isPlaying = (latestPacket.find("true", playPos) != std::string::npos);
-            }
+                size_t fpsPos = line.find("\"fps\":");
+                if (fpsPos != std::string::npos) fps = std::stof(line.substr(fpsPos + 6));
 
-            // 3. Update Strips using latestPacket
-            for (auto& s : myStrips) {
-                std::string idKey = "\"track_id\":" + std::to_string(s.id);
-                size_t idPos = latestPacket.find(idKey);
+                size_t playPos = line.find("\"is_playing\":");
+                if (playPos != std::string::npos) isPlaying = (line.find("true", playPos) != std::string::npos);
 
-                if (idPos != std::string::npos) {
-                    size_t volPos = latestPacket.find("\"volume\":", idPos);
-                    // CRITICAL SAFETY CHECK: Ensure volume exists and there's enough string left to read
-                    if (volPos != std::string::npos && latestPacket.length() > volPos + 10) {
-                        try {
-                            float rawVal = std::stof(latestPacket.substr(volPos + 9));
+                // 2. Process Fader Restore or Updates
+                // Change the search to look for the word "RESTORE" anywhere in the line
+                bool isRestore = (line.find("\"type\": \"RESTORE\"") != std::string::npos) ||
+                                    (line.find("\"type\":\"RESTORE\"") != std::string::npos);
+
+                for (auto& s : myStrips) {
+                    std::string idKey = "\"track_id\": " + std::to_string(s.id);
+                    std::string idKeyAlt = "\"track_id\":" + std::to_string(s.id);
+
+                    // Check for both spaced and unspaced JSON (Python can vary)
+                    size_t idPos = line.find(idKey);
+                    if (idPos == std::string::npos) idPos = line.find(idKeyAlt);
+
+                    if (idPos != std::string::npos) {
+                        size_t volPos = line.find("\"volume\":", idPos);
+                        if (volPos != std::string::npos) {
+                            // Find the number after the colon
+                            size_t valueStart = line.find_first_of("0123456789", volPos);
+                            float rawVal = std::stof(line.substr(valueStart));
                             float restoredVol = rawVal / 10000.0f;
 
-                            if (s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
+                            if (isRestore || s.vol == s.last_sent_vol || s.last_sent_vol == -1.0f) {
                                 s.vol = restoredVol;
                                 s.last_sent_vol = restoredVol;
+
+                                // FORCE PRINT TO TERMINAL
+                                printf("C++ RESTORE EVENT: Strip %d set to %.2f\n", s.id, s.vol);
                             }
-                        } catch (...) { /* Skip malformed data */ }
+                        }
                     }
                 }
             }
@@ -174,6 +186,21 @@ int main(int argc, char** argv) {
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         swapChain->Present(1, 0);
     }
+
+    // --- UPDATE THIS BLOCK AT THE VERY BOTTOM ---
+    printf("C++ DEBUG: Window closed. Cleaning up socket...\n");
+
+    // 1. Tell Blender we are disconnecting
+    bridge.sendData("{\"command\": \"closing\"}");
+
+    // 2. Shut down the WinSock connection
+    bridge.closeConnection();
+
+    // 3. Cleanup DX11 (Optional but good practice)
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
     return 0;
 }
 
