@@ -8,9 +8,11 @@ class BlenderBridge;
 
 struct Strip {
     int id;
-    char name[32];
+    const char* name;
     float vol = 1.0f;
     float last_sent_vol = -1.0f;
+    bool is_muted = false;  // Add this
+    bool is_soloed = false; // Add this
 };
 
 namespace MixerUI {
