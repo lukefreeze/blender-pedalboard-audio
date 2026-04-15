@@ -29,3 +29,12 @@ out/
 # --- OS Junk ---
 .DS_Store
 Thumbs.db
+
+DAW_Research/DeepFilterNet/
+deps/
+include/blender-4.5/
+blender_sync/Loader_working.py
+*.pyd
+*.obj
+*.exp
+*.lib
