@@ -11,6 +11,19 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+# Import racks UI — must be after pyd_path is added to sys.path
+try:
+    from Racks import draw_racks, register_racks, unregister_racks, handle_click as racks_handle_click, hit_test as racks_hit_test, update_led_states, rack_knob_hit_test
+    print("[RACKS] Racks.py loaded")
+except ImportError as e:
+    print(f"[RACKS] WARNING: could not import Racks.py: {e}")
+    def draw_racks(*a, **kw): pass
+    def register_racks(): pass
+    def unregister_racks(): pass
+    def racks_handle_click(*a, **kw): return False
+    def racks_hit_test(*a, **kw): return None
+    def update_led_states(*a, **kw): pass
+
 # ---------------------------------------------------------------------------
 # Version-aware engine import
 # ---------------------------------------------------------------------------
@@ -47,6 +60,7 @@ is_zooming    = False
 
 active_knob_track  = -1
 active_knob_type   = ""
+active_rack_knob   = None   # (rack_idx, param_idx) or None
 active_fader_track = -1
 
 # Double-click detection for fader snap-to-1
@@ -59,6 +73,22 @@ FADER_MAX = 1.25
 
 GAIN_MIN  = 0.25    # ~  -12 dB
 GAIN_MAX  = 4.0     # ~  +12 dB
+
+# Send button layout on fader strips
+SEND_BTN_H      = 20   # height of each send button (unscaled px)
+SEND_BTN_GAP    = 3    # gap between send buttons
+SEND_MIN_SLOTS  = 3    # always show at least this many send slots
+SEND_START_Y    = 165  # distance below base_y where send section starts (below gain knob)
+
+# Effect type abbreviations for send buttons
+EFFECT_ABBREV = {
+    "COMP_SINGLE": "CMP",
+    "COMP_MULTI":  "MBC",
+    "EQ":         "EQ",
+    "REVERB":     "R",
+    "NOISE_GATE": "NG",
+    "DELAY":      "D",
+}
 GAIN_DEFAULT = 1.0  # unity
 
 FADER_TRACK_BOTTOM = 530
@@ -951,6 +981,18 @@ def _meter_timer():
         is_playing    = bool(bpy.context.screen and
                              bpy.context.screen.is_animation_playing)
 
+        # Auto-detect new channels — sync if VSE has strips on channels
+        # beyond what we currently have tracks for
+        if scene.sequence_editor:
+            highest = max((s.channel for s in scene.sequence_editor.sequences_all
+                           if s.type == "SOUND" and s.sound), default=0)
+            needed  = max(DEFAULT_CHANNELS, highest)
+            if needed > len(tracks):
+                _sync_tracks_to_vse(scene, reset_values=False)
+                tracks = getattr(scene, "pb_sync_tracks", [])
+                for area in bpy.context.screen.areas:
+                    area.tag_redraw()
+
         # Look 2 frames ahead when playing to compensate for audio hardware
         # clock running slightly ahead of Blender's UI frame counter.
         # This keeps the meter visually in sync with what you hear.
@@ -1041,6 +1083,11 @@ def _meter_timer():
                     ml[i] = _engine_levels[i]
                 s.meter_levels = ml
             except Exception: pass
+
+        # Update rack LED states
+        try:
+            update_led_states(is_playing)
+        except Exception: pass
 
     except Exception as e:
         print(f"[METER] timer error: {e}")
@@ -1177,6 +1224,89 @@ def draw_numbox(x, y, w, h, value, highlighted=False):
 # ---------------------------------------------------------------------------
 # Draw callback
 # ---------------------------------------------------------------------------
+def _send_section_height(n_racks, scale):
+    """Total pixel height of the send button section for n_racks."""
+    slots = max(SEND_MIN_SLOTS, n_racks)
+    return slots * (SEND_BTN_H + SEND_BTN_GAP) * scale
+
+
+def _draw_send_buttons(sx, base_y, channel_idx, tracks, scale):
+    """Draw the send button column for one fader strip."""
+    scene  = bpy.context.scene
+    racks  = getattr(scene, "pb_racks", []) if scene else []
+    n_racks = len(racks)
+    slots   = max(SEND_MIN_SLOTS, n_racks)
+
+    btn_w = 100 * scale
+    btn_h = SEND_BTN_H * scale
+    btn_x = sx + 10*scale
+    start_y = base_y - SEND_START_Y*scale
+
+    for slot in range(slots):
+        by = start_y - slot * (btn_h + SEND_BTN_GAP*scale)
+
+        if slot < n_racks:
+            rack    = racks[slot]
+            attr    = f'ch{channel_idx}' if channel_idx < 9 else None
+            active  = getattr(rack, attr, False) if attr else False
+            abbrev  = EFFECT_ABBREV.get(rack.effect_type, rack.effect_type[:3])
+            label   = f"{abbrev} - {slot+1}"
+
+            if active:
+                bg  = (0.0,  0.18, 0.08, 1.0)
+                bc  = (0.0,  0.65, 0.35, 1.0)
+                dot = (0.0,  0.9,  0.5,  1.0)
+                tc  = (0.0,  0.85, 0.5,  1.0)
+            else:
+                bg  = (0.09, 0.09, 0.09, 1.0)
+                bc  = (0.22, 0.22, 0.22, 1.0)
+                dot = (0.2,  0.2,  0.2,  1.0)
+                tc  = (0.35, 0.35, 0.35, 1.0)
+        else:
+            # Empty placeholder slot
+            bg    = (0.06, 0.06, 0.06, 1.0)
+            bc    = (0.14, 0.14, 0.14, 1.0)
+            dot   = (0.14, 0.14, 0.14, 1.0)
+            tc    = (0.2,  0.2,  0.2,  1.0)
+            label = ""
+
+        draw_rect(btn_x, by, btn_w, btn_h, bg)
+
+        # Border
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        verts  = [(btn_x, by), (btn_x+btn_w, by),
+                  (btn_x+btn_w, by+btn_h), (btn_x, by+btn_h),
+                  (btn_x, by)]
+        batch  = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
+        shader.bind()
+        shader.uniform_float("color", bc)
+        batch.draw(shader)
+
+        # Active dot indicator
+        dot_r = 3 * scale
+        dot_x = btn_x + 8*scale
+        dot_y = by + btn_h/2
+        segs  = 10
+        import math as _m
+        verts2 = [(dot_x, dot_y)]
+        for si in range(segs+1):
+            a = 2*_m.pi*si/segs
+            verts2.append((dot_x+_m.cos(a)*dot_r,
+                           dot_y+_m.sin(a)*dot_r))
+        batch2 = batch_for_shader(shader, "TRI_FAN", {"pos": verts2})
+        shader.uniform_float("color", dot)
+        batch2.draw(shader)
+
+        # Label
+        if label:
+            blf.size(0, max(1, int(8*scale)))
+            blf.color(0, *tc)
+            blf.position(0, btn_x + 16*scale, by + btn_h/2 - 4*scale, 0)
+            blf.draw(0, label)
+            # Always reset to white so subsequent draws are not affected
+            blf.color(0, 1, 1, 1, 1)
+
+
 def draw_callback_px(self, context):
     global pb_ui_enabled, UI_SCALE, SCROLL_X, SCROLL_Y
     if not pb_ui_enabled: return
@@ -1197,44 +1327,32 @@ def draw_callback_px(self, context):
         tracks = getattr(bpy.context.scene, "pb_sync_tracks", [])
         base_y = height - (150*UI_SCALE) - SCROLL_Y
 
+        # Draw all allocated tracks contiguously — DEFAULT_CHANNELS minimum
+        # plus any extra channels that have strips above that count.
+        draw_col = 0
         for i, track in enumerate(tracks):
-            sx = (30*UI_SCALE) + (i*135*UI_SCALE) + SCROLL_X
+            sx = (30*UI_SCALE) + (draw_col*135*UI_SCALE) + SCROLL_X
+            draw_col += 1
             if sx+(120*UI_SCALE) < 0 or sx > width: continue
 
-            # Strip background — tall enough for numbox below fader
-            draw_rect(sx, base_y-(580*UI_SCALE),
-                      120*UI_SCALE, 600*UI_SCALE, (0.07,0.07,0.07,1.0))
+            # Strip background — tall enough for numbox + send buttons
+            n_racks_bg = len(getattr(bpy.context.scene, "pb_racks", []))
+            send_h_bg  = _send_section_height(n_racks_bg, UI_SCALE)
+            strip_h    = 600*UI_SCALE + send_h_bg
+            draw_rect(sx, base_y-strip_h,
+                      120*UI_SCALE, strip_h, (0.07,0.07,0.07,1.0))
 
             blf.size(0, int(11*UI_SCALE))
             blf.position(0, sx+(10*UI_SCALE), base_y+(5*UI_SCALE), 0)
             blf.draw(0, f"CH {i+1}")
 
-            # --- KNOBS ---
-            kx = sx + (60*UI_SCALE)
-            # Gain knob: map 0.25-4.0 range to 0-1 arc position
-            # Show value in dB (20*log10) so user sees familiar -12 to +12
-            import math as _m
-            gain_norm = (track.gain - GAIN_MIN) / (GAIN_MAX - GAIN_MIN)
-            gain_db   = round(20 * _m.log10(max(0.001, track.gain)), 1)
-            gain_label = f"G:{gain_db:+.1f}dB"
-            draw_circle_knob(kx, base_y-(150*UI_SCALE), 20*UI_SCALE,
-                gain_norm, (0.1,0.5,0.1), gain_label)
-            draw_circle_knob(kx, base_y-(210*UI_SCALE), 16*UI_SCALE,
-                (track.eq_high+24)/48, (0.2,0.2,0.6), f"H:{int(track.eq_high)}")
-            draw_circle_knob(kx, base_y-(260*UI_SCALE), 16*UI_SCALE,
-                (track.eq_mid+24)/48, (0.4,0.2,0.6), f"M:{int(track.eq_mid)}")
-            draw_circle_knob(kx, base_y-(310*UI_SCALE), 16*UI_SCALE,
-                (track.eq_low+24)/48, (0.6,0.2,0.4), f"L:{int(track.eq_low)}")
-
-            # --- MUTE & SOLO ---
+            # --- MUTE & SOLO ---  (drawn first — top of strip)
             m_c = (0.9,0.1,0.1,1.0) if track.mute else (0.2,0.2,0.2,1.0)
             draw_rect(sx+(10*UI_SCALE), base_y-(50*UI_SCALE),
                       45*UI_SCALE, 30*UI_SCALE, m_c)
             s_c = (0.9,0.9,0.1,1.0) if track.solo else (0.2,0.2,0.2,1.0)
             draw_rect(sx+(65*UI_SCALE), base_y-(50*UI_SCALE),
                       45*UI_SCALE, 30*UI_SCALE, s_c)
-
-            # Mute / Solo labels
             blf.size(0, int(9*UI_SCALE))
             blf.color(0,1,1,1,1)
             blf.position(0, sx+(24*UI_SCALE), base_y-(38*UI_SCALE), 0)
@@ -1242,9 +1360,36 @@ def draw_callback_px(self, context):
             blf.position(0, sx+(79*UI_SCALE), base_y-(38*UI_SCALE), 0)
             blf.draw(0, "S")
 
+            # --- GAIN KNOB --- (below mute/solo)
+            kx = sx + (60*UI_SCALE)
+            import math as _m
+            gain_norm  = (track.gain - GAIN_MIN) / (GAIN_MAX - GAIN_MIN)
+            gain_db    = round(20 * _m.log10(max(0.001, track.gain)), 1)
+            gain_label = f"G:{gain_db:+.1f}dB"
+            draw_circle_knob(kx, base_y-(100*UI_SCALE), 20*UI_SCALE,
+                gain_norm, (0.1,0.5,0.1), gain_label)
+
+            # --- SEND BUTTONS --- (below gain knob)
+            n_racks   = len(getattr(bpy.context.scene, "pb_racks", []))
+            send_h    = _send_section_height(n_racks, UI_SCALE)
+            _draw_send_buttons(sx, base_y, i, tracks, UI_SCALE)
+            # Reset blf color to white after send buttons to prevent bleed
+            blf.color(0, 1, 1, 1, 1)
+
+            # --- EQ KNOBS --- (below send buttons)
+            eq_start = 175*UI_SCALE + send_h
+            draw_circle_knob(kx, base_y-eq_start, 16*UI_SCALE,
+                (track.eq_high+24)/48, (0.2,0.2,0.6), f"H:{int(track.eq_high)}")
+            draw_circle_knob(kx, base_y-(eq_start+50*UI_SCALE), 16*UI_SCALE,
+                (track.eq_mid+24)/48, (0.4,0.2,0.6), f"M:{int(track.eq_mid)}")
+            draw_circle_knob(kx, base_y-(eq_start+100*UI_SCALE), 16*UI_SCALE,
+                (track.eq_low+24)/48, (0.6,0.2,0.4), f"L:{int(track.eq_low)}")
+
             # --- FADER ---
             f_h   = FADER_HEIGHT * UI_SCALE
-            f_y   = base_y - (FADER_TRACK_BOTTOM * UI_SCALE)
+            # Push fader down by send section height so it clears the buttons
+            n_racks_f = len(getattr(bpy.context.scene, "pb_racks", []))
+            f_y   = base_y - (FADER_TRACK_BOTTOM * UI_SCALE) - _send_section_height(n_racks_f, UI_SCALE)
             f_hw  = FADER_HANDLE_W * UI_SCALE
             f_hh  = FADER_HANDLE_H * UI_SCALE
             f_hx  = sx + (FADER_HANDLE_X_OFF * UI_SCALE)
@@ -1279,6 +1424,22 @@ def draw_callback_px(self, context):
             nb_x = sx + (15 * UI_SCALE)
             nb_y = f_y - (nb_h + 4*UI_SCALE)
             draw_numbox(nb_x, nb_y, nb_w, nb_h, track.volume)
+
+            # "SENDS" label — drawn above button 1
+            # Button 1 top = base_y - SEND_START_Y*scale
+            # Label sits (SEND_BTN_H + 4)px above button 1 top
+            blf.size(0, int(8*UI_SCALE))
+            blf.color(0, 0.35, 0.35, 0.35, 1.0)
+            blf.position(0, sx + 10*UI_SCALE,
+                         base_y - (SEND_START_Y - SEND_BTN_H - 6)*UI_SCALE, 0)
+            blf.draw(0, "SENDS")
+            blf.color(0, 1, 1, 1, 1)
+
+        # --- RACKS ---
+        try:
+            draw_racks(width, height, SCROLL_X, SCROLL_Y, UI_SCALE)
+        except Exception as e:
+            print(f"[RACKS] draw error: {e}")
 
         # --- SCROLLBARS ---
         draw_rect(0, 0, width, 25, (0.05,0.05,0.05,1.0))
@@ -1345,6 +1506,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         global pb_ui_enabled, UI_SCALE, SCROLL_X, SCROLL_Y, \
                is_panning, is_zooming, \
                active_knob_track, active_knob_type, active_fader_track, \
+               active_rack_knob, \
                is_dragging_h, is_dragging_v, \
                _last_click_time, _last_click_track
 
@@ -1359,6 +1521,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         is_inside   = 0<=rx<=region.width and 0<=ry<=region.height
         mid_drag    = is_panning or is_zooming
         widget_drag = (active_fader_track != -1 or active_knob_track != -1
+                       or active_rack_knob is not None
                        or is_dragging_h or is_dragging_v)
 
         if not (is_inside or mid_drag or widget_drag):
@@ -1413,7 +1576,6 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     new_gain = max(GAIN_MIN, min(GAIN_MAX, track.gain + delta * (GAIN_MAX - GAIN_MIN)))
                     apply_gain_to_channel(active_knob_track, old_gain, new_gain)
                     track.gain = new_gain
-                    # Update meter immediately so level reflects gain change
                     _meter_timer._last_frame = None
                     _meter_timer()
                 elif active_knob_type == "HIGH":
@@ -1426,6 +1588,38 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     track.eq_low  = max(-24.0, min(24.0, track.eq_low+delta*100))
                     if _pb_engine_active: _pb_rebuild_eq(active_knob_track)
                 context.area.tag_redraw()
+                return {"RUNNING_MODAL"}
+
+            if active_rack_knob is not None:
+                rack_idx, param_idx = active_rack_knob
+                racks = getattr(context.scene, "pb_racks", [])
+                if rack_idx < len(racks):
+                    rack   = racks[rack_idx]
+                    from Racks import EFFECT_PARAMS, set_rack_param
+                    delta  = (event.mouse_y - event.mouse_prev_y) * 0.004
+                    if rack.effect_type == "COMP_MULTI":
+                        if param_idx >= 16:
+                            # Gain fader — larger delta so handle tracks mouse
+                            from Racks import RACK_EXPANDED_H_MB, RACK_RAIL_H
+                            rh_mb   = RACK_EXPANDED_H_MB * UI_SCALE
+                            body_h  = rh_mb - RACK_RAIL_H * UI_SCALE
+                            fdr_h   = max((body_h*0.52 - 8*UI_SCALE - 26*UI_SCALE - 26*UI_SCALE - 2*UI_SCALE), 40*UI_SCALE)
+                            fdr_delta = (event.mouse_y - event.mouse_prev_y) / max(fdr_h, 1)
+                            old_v = getattr(rack, f'p{param_idx}', 0.5)
+                            new_v = max(0.0, min(1.0, old_v + fdr_delta))
+                            set_rack_param(rack, param_idx, new_v)
+                        else:
+                            # Knobs — relative delta
+                            old_v = getattr(rack, f'p{param_idx}', 0.0)
+                            new_v = max(0.0, min(1.0, old_v + delta))
+                            set_rack_param(rack, param_idx, new_v)
+                    else:
+                        params = EFFECT_PARAMS.get(rack.effect_type, [])
+                        if param_idx < len(params):
+                            old_v = getattr(rack, f'p{param_idx}', 0.0)
+                            new_v = max(0.0, min(1.0, old_v + delta))
+                            set_rack_param(rack, param_idx, new_v)
+                    context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
 
         if event.type == "LEFTMOUSE":
@@ -1444,8 +1638,11 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 f_hh   = FADER_HANDLE_H * UI_SCALE
                 nb_h   = NUMBOX_H * UI_SCALE
 
+                # Must mirror draw loop's draw_col logic exactly
+                _hit_draw_col = 0
                 for i, track in enumerate(context.scene.pb_sync_tracks):
-                    sx  = (30*UI_SCALE)+(i*135*UI_SCALE)+SCROLL_X
+                    sx  = (30*UI_SCALE)+(_hit_draw_col*135*UI_SCALE)+SCROLL_X
+                    _hit_draw_col += 1
                     kx  = sx+(60*UI_SCALE)
                     f_hx = sx+(FADER_HANDLE_X_OFF*UI_SCALE)
                     nb_x = sx+(15*UI_SCALE)
@@ -1457,14 +1654,17 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     fhb  = f_y - (f_hh/2)
                     fht  = f_y + f_h + (f_hh/2)
 
-                    # Knobs
-                    if math.dist((rx,ry),(kx,base_y-150*UI_SCALE))<20*UI_SCALE:
+                    # Knobs — positions must match draw loop exactly
+                    n_racks_k  = len(getattr(context.scene, "pb_racks", []))
+                    send_h_k   = _send_section_height(n_racks_k, UI_SCALE)
+                    eq_start_k = 175*UI_SCALE + send_h_k
+                    if math.dist((rx,ry),(kx,base_y-100*UI_SCALE))<20*UI_SCALE:
                         active_knob_track,active_knob_type=i,"GAIN"; return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-210*UI_SCALE))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,base_y-eq_start_k))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"HIGH"; return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-260*UI_SCALE))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,base_y-(eq_start_k+50*UI_SCALE)))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"MID";  return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-310*UI_SCALE))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,base_y-(eq_start_k+100*UI_SCALE)))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"LOW";  return {"RUNNING_MODAL"}
 
                     # Number box — single click opens popup, double-click snaps to 1.0
@@ -1515,10 +1715,45 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         context.area.tag_redraw()
                         return {"RUNNING_MODAL"}
 
+                    # Send buttons
+                    n_racks_s = len(getattr(context.scene, "pb_racks", []))
+                    slots_s   = max(SEND_MIN_SLOTS, n_racks_s)
+                    btn_x_s   = sx + 10*UI_SCALE
+                    btn_w_s   = 100*UI_SCALE
+                    btn_h_s   = SEND_BTN_H*UI_SCALE
+                    start_y_s = base_y - SEND_START_Y*UI_SCALE
+                    if btn_x_s <= rx <= btn_x_s+btn_w_s:
+                        for slot in range(slots_s):
+                            by_s = start_y_s - slot*(btn_h_s+SEND_BTN_GAP*UI_SCALE)
+                            if by_s <= ry <= by_s+btn_h_s and slot < n_racks_s:
+                                rack  = context.scene.pb_racks[slot]
+                                attr  = f'ch{i}' if i < 9 else None
+                                if attr:
+                                    setattr(rack, attr,
+                                            not getattr(rack, attr, False))
+                                    context.area.tag_redraw()
+                                return {"RUNNING_MODAL"}
+
+                # Check rack knob clicks
+                rk_hit = rack_knob_hit_test(rx, ry, region.height,
+                                            SCROLL_X, SCROLL_Y, UI_SCALE)
+                if rk_hit is not None:
+                    active_rack_knob = rk_hit
+                    return {"RUNNING_MODAL"}
+
+                # Check rack clicks (below fader section)
+                hit = racks_hit_test(rx, ry, region.height,
+                                     SCROLL_X, SCROLL_Y, UI_SCALE)
+                if hit:
+                    if racks_handle_click(hit, context):
+                        context.area.tag_redraw()
+                    return {"RUNNING_MODAL"}
+
             elif event.value == "RELEASE":
                 active_knob_track  = -1
                 active_knob_type   = ""
                 active_fader_track = -1
+                active_rack_knob   = None
                 is_dragging_h      = False
                 is_dragging_v      = False
 
@@ -1536,6 +1771,34 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 else:           SCROLL_Y += step
                 save_ui_state(); context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
+
+        # Trackpad two-finger pan
+        if event.type == "TRACKPADPAN" and is_inside:
+            SCROLL_X += event.mouse_x - event.mouse_prev_x
+            SCROLL_Y -= event.mouse_y - event.mouse_prev_y
+            save_ui_state(); context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        # Trackpad two-finger pinch zoom
+        # Delta is in X axis: prev_x > mouse_x = pinching in (zoom out)
+        #                      prev_x < mouse_x = pinching out (zoom in)
+        if event.type == "TRACKPADZOOM" and is_inside:
+            zoom_delta = (event.mouse_x - event.mouse_prev_x) * 0.003
+            new_scale  = max(0.3, min(3.0, UI_SCALE + zoom_delta))
+            cx = region.width  / 2
+            cy = region.height / 2
+            SCROLL_X  = cx - (cx - SCROLL_X) * (new_scale / max(UI_SCALE, 0.001))
+            SCROLL_Y  = cy - (cy - SCROLL_Y) * (new_scale / max(UI_SCALE, 0.001))
+            UI_SCALE  = new_scale
+            save_ui_state(); context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        if event.type == "HOME" and event.value == "PRESS":
+            SCROLL_X = 0.0
+            SCROLL_Y = 0.0
+            save_ui_state()
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
 
         return {"PASS_THROUGH"}
 
@@ -1568,17 +1831,22 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
     bl_label  = "Toggle Pedalboard"
 
     def execute(self, context):
-        global pb_ui_enabled
+        global pb_ui_enabled, SCROLL_X, SCROLL_Y
         load_ui_state()
         pb_ui_enabled = not pb_ui_enabled
-        save_ui_state()
         print(f"[TOGGLE] pb_ui_enabled={pb_ui_enabled}")
         if pb_ui_enabled:
+            # Always reset scroll to (0,0) on enable so the faders are
+            # immediately visible — user can scroll/zoom from there.
+            SCROLL_X = 0.0
+            SCROLL_Y = 0.0
+            save_ui_state()
             bpy.ops.vse.pb_interaction("INVOKE_DEFAULT")
             _ensure_meter_timer()
             prebuild_envelopes()
             _pb_engine_enable()
         else:
+            save_ui_state()
             _cancel_meter_timer()
             _pb_engine_disable()
         for area in context.screen.areas:
@@ -1586,24 +1854,81 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# Minimum number of faders always shown — matches Blender VSE default layout
+DEFAULT_CHANNELS = 9
+
+
+def _sync_tracks_to_vse(scene, reset_values=False):
+    """Sync pb_sync_tracks to VSE channel layout.
+
+    Always maintains at least DEFAULT_CHANNELS (9) faders so the mixer
+    matches Blender's default VSE layout even when channels are empty.
+    Auto-expands beyond 9 when strips appear on higher channels.
+    Metastrips (type=META) are treated as a single channel — their
+    interior strips are not recursed into.
+    Preserves existing fader/EQ values when reset_values=False.
+    """
+    if not scene: return
+
+    # Find the highest channel that has a sound strip (non-meta, top-level)
+    highest_strip_channel = 0
+    if scene.sequence_editor:
+        for s in scene.sequence_editor.sequences_all:
+            if s.type == "SOUND" and s.sound:
+                highest_strip_channel = max(highest_strip_channel, s.channel)
+
+    # Always show at least DEFAULT_CHANNELS faders
+    needed = max(DEFAULT_CHANNELS, highest_strip_channel)
+
+    existing = len(scene.pb_sync_tracks)
+
+    # Add any missing tracks
+    for i in range(existing, needed):
+        track = scene.pb_sync_tracks.add()
+        track.volume = 1.0
+        if scene.sequence_editor:
+            for s in scene.sequence_editor.sequences_all:
+                if s.channel == (i + 1) and s.type == "SOUND":
+                    track.mute = s.mute
+                    break
+
+    # If reset_values, reset faders to unity but preserve mute from strips
+    if reset_values:
+        for i, track in enumerate(scene.pb_sync_tracks):
+            track.volume = 1.0
+            track.gain   = 1.0
+            track.eq_low = track.eq_mid = track.eq_high = 0.0
+            if scene.sequence_editor:
+                for s in scene.sequence_editor.sequences_all:
+                    if s.channel == (i + 1) and s.type == "SOUND":
+                        track.mute = s.mute
+                        break
+
+    active = [s.channel for s in scene.sequence_editor.sequences_all
+              if s.type == "SOUND" and s.sound] if scene.sequence_editor else []
+    print(f"[TRACKS] {len(scene.pb_sync_tracks)} tracks "
+          f"(default={DEFAULT_CHANNELS}, "
+          f"highest strip ch={highest_strip_channel}, "
+          f"active={sorted(set(active))[:12]}{'...' if len(set(active))>12 else ''})")
+
+
+def _get_active_channel_count(scene):
+    """Return the number of VSE channels that have sound strips."""
+    if not scene or not scene.sequence_editor:
+        return 0
+    return len(set(
+        s.channel - 1
+        for s in scene.sequence_editor.sequences_all
+        if s.type == "SOUND" and s.sound
+    ))
+
+
 class VSE_OT_RefreshPBTracks(bpy.types.Operator):
     bl_idname = "vse.refresh_pb_tracks"
     bl_label  = "Refresh Tracks"
 
     def execute(self, context):
-        context.scene.pb_sync_tracks.clear()
-        if context.scene.sequence_editor:
-            for i in range(32):
-                track = context.scene.pb_sync_tracks.add()
-                # Default fader to 1.0 (unity) on refresh
-                track.volume = 1.0
-                for s in context.scene.sequence_editor.sequences_all:
-                    if s.channel == (i+1):
-                        track.mute = s.mute
-                        break
-        else:
-            for i in range(32):
-                context.scene.pb_sync_tracks.add()
+        _sync_tracks_to_vse(context.scene, reset_values=True)
 
         if pb_ui_enabled:
             prebuild_envelopes()
@@ -1669,6 +1994,7 @@ _handle = None
 
 def register():
     global _handle
+    register_racks()
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -1691,6 +2017,7 @@ def unregister():
     global _handle
     _cancel_meter_timer()
     _pb_engine_disable()
+    unregister_racks()
 
     if on_load_post in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(on_load_post)
