@@ -49,7 +49,8 @@ def get_engine():
 # ---------------------------------------------------------------------------
 # Runtime UI state
 # ---------------------------------------------------------------------------
-pb_ui_enabled = False
+pb_ui_enabled  = False
+HUD_AREA_PTR   = None   # pointer of the area where the HUD was enabled
 UI_SCALE      = 1.0
 SCROLL_X      = 0.0
 SCROLL_Y      = 0.0
@@ -1310,6 +1311,11 @@ def _draw_send_buttons(sx, base_y, channel_idx, tracks, scale):
 def draw_callback_px(self, context):
     global pb_ui_enabled, UI_SCALE, SCROLL_X, SCROLL_Y
     if not pb_ui_enabled: return
+    # Only draw in the specific area where the HUD was enabled —
+    # prevents the HUD appearing in other Shader Editor areas
+    if HUD_AREA_PTR is not None and bpy.context.area is not None:
+        if bpy.context.area.as_pointer() != HUD_AREA_PTR:
+            return
     region = bpy.context.region
     if not region: return
     width, height = region.width, region.height
@@ -1633,7 +1639,10 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 now    = time.time()
                 base_y = region.height-(150*UI_SCALE)-SCROLL_Y
                 f_h    = FADER_HEIGHT * UI_SCALE
-                f_y    = base_y-(FADER_TRACK_BOTTOM*UI_SCALE)
+                # Must match draw loop exactly — include send section height
+                n_racks_ht = len(getattr(context.scene, "pb_racks", []))
+                send_h_ht  = _send_section_height(n_racks_ht, UI_SCALE)
+                f_y    = base_y - (FADER_TRACK_BOTTOM*UI_SCALE) - send_h_ht
                 f_hw   = FADER_HANDLE_W * UI_SCALE
                 f_hh   = FADER_HANDLE_H * UI_SCALE
                 nb_h   = NUMBOX_H * UI_SCALE
@@ -1667,6 +1676,24 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     if math.dist((rx,ry),(kx,base_y-(eq_start_k+100*UI_SCALE)))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"LOW";  return {"RUNNING_MODAL"}
 
+                    # Fader track — checked BEFORE numbox so handle at
+                    # bottom position is always reachable
+                    if f_hx < rx < f_hx+f_hw and fhb < ry < fht:
+                        # Double-click on fader snaps to 1.0
+                        if (now - _last_click_time < DOUBLE_CLICK_TIME
+                                and _last_click_track == i):
+                            old_fader = track.volume
+                            apply_fader_to_channel(i, old_fader, 1.0)
+                            track.volume      = 1.0
+                            _last_click_time  = 0.0
+                            _last_click_track = -1
+                            context.area.tag_redraw()
+                            return {"RUNNING_MODAL"}
+                        _last_click_time  = now
+                        _last_click_track = i
+                        active_fader_track = i
+                        return {"RUNNING_MODAL"}
+
                     # Number box — single click opens popup, double-click snaps to 1.0
                     if nb_x < rx < nb_x+nb_w and nb_y < ry < nb_y+nb_h:
                         if (now - _last_click_time < DOUBLE_CLICK_TIME
@@ -1685,23 +1712,6 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                                 "INVOKE_DEFAULT", channel_idx=i,
                                 new_value=track.volume)
                         context.area.tag_redraw()
-                        return {"RUNNING_MODAL"}
-
-                    # Fader track
-                    if f_hx < rx < f_hx+f_hw and fhb < ry < fht:
-                        # Double-click on fader snaps to 1.0
-                        if (now - _last_click_time < DOUBLE_CLICK_TIME
-                                and _last_click_track == i):
-                            old_fader = track.volume
-                            apply_fader_to_channel(i, old_fader, 1.0)
-                            track.volume      = 1.0
-                            _last_click_time  = 0.0
-                            _last_click_track = -1
-                            context.area.tag_redraw()
-                            return {"RUNNING_MODAL"}
-                        _last_click_time  = now
-                        _last_click_track = i
-                        active_fader_track = i
                         return {"RUNNING_MODAL"}
 
                     # Mute / Solo
@@ -1831,11 +1841,15 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
     bl_label  = "Toggle Pedalboard"
 
     def execute(self, context):
-        global pb_ui_enabled, SCROLL_X, SCROLL_Y
+        global pb_ui_enabled, SCROLL_X, SCROLL_Y, HUD_AREA_PTR
         load_ui_state()
         pb_ui_enabled = not pb_ui_enabled
         print(f"[TOGGLE] pb_ui_enabled={pb_ui_enabled}")
         if pb_ui_enabled:
+            # Store the pointer of the area where the HUD is being enabled
+            # so the draw callback only fires for this specific area
+            HUD_AREA_PTR = context.area.as_pointer()
+            print(f"[TOGGLE] HUD area ptr={HUD_AREA_PTR}")
             # Always reset scroll to (0,0) on enable so the faders are
             # immediately visible — user can scroll/zoom from there.
             SCROLL_X = 0.0
@@ -1846,6 +1860,7 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
             prebuild_envelopes()
             _pb_engine_enable()
         else:
+            HUD_AREA_PTR = None
             save_ui_state()
             _cancel_meter_timer()
             _pb_engine_disable()
