@@ -43,7 +43,7 @@ _popup_y        = 0.0
 # rack starts at 30px → rack width = 1230 - 30 = 1200px
 RACK_WIDTH          = 1200         # matches 9-fader section width exactly
 RACK_EXPANDED_H     = 260
-RACK_EXPANDED_H_MB  = 340   # taller for multiband compressor
+RACK_EXPANDED_H_MB  = 400   # taller for multiband 3x2 knob grid
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
@@ -86,19 +86,17 @@ EFFECT_TYPES = [
 ]
 
 EFFECT_PARAMS = {
+    # COMP_SINGLE: p0=thr, p1=ratio, p2=attack, p3=release, p4=makeup, p5=knee
     "COMP_SINGLE": [
         ("THRESHOLD", "Threshold", -40.0,  0.0,  -18.0, "{:.0f}dB"),
         ("RATIO",     "Ratio",       1.0, 20.0,    4.0, "{:.1f}:1"),
         ("ATTACK",    "Attack",      0.1,100.0,   10.0, "{:.0f}ms"),
         ("RELEASE",   "Release",    10.0,1000.0,  80.0, "{:.0f}ms"),
         ("MAKEUP",    "Makeup",      0.0, 24.0,    0.0, "+{:.1f}dB"),
+        ("KNEE",      "Knee",        0.5, 24.0,    4.0, "{:.1f}dB"),
     ],
-    # Multiband compressor — 4 bands (Low, Low-Mid, High-Mid, High)
-    # p0-p3:   threshold per band  (-40..0 dB)
-    # p4-p7:   ratio per band      (1..20)
-    # p8-p11:  attack per band     (0.1..100 ms)
-    # p12-p15: release per band    (10..1000 ms)
-    # p16-p19: gain fader per band (-12..+12 dB, stored 0-1, 0.5=unity)
+    # COMP_MULTI: p0-p3=thr, p4-p7=ratio, p8-p11=attack,
+    #             p12-p15=release, p16-p19=gain, p20-p23=knee
     "COMP_MULTI": [
         ("THR_LOW",   "Low Thr",   -40.0,   0.0,  -18.0, "{:.0f}dB"),
         ("THR_LMD",   "LMid Thr",  -40.0,   0.0,  -18.0, "{:.0f}dB"),
@@ -116,6 +114,14 @@ EFFECT_PARAMS = {
         ("REL_LMD",   "LMid Rel",   10.0,1000.0,   80.0, "{:.0f}ms"),
         ("REL_HMD",   "HMid Rel",   10.0,1000.0,   80.0, "{:.0f}ms"),
         ("REL_HIGH",  "High Rel",   10.0,1000.0,   80.0, "{:.0f}ms"),
+        ("GAIN_LOW",  "Low Gain",  -12.0,  12.0,    0.0, "{:+.1f}dB"),
+        ("GAIN_LMD",  "LMid Gain", -12.0,  12.0,    0.0, "{:+.1f}dB"),
+        ("GAIN_HMD",  "HMid Gain", -12.0,  12.0,    0.0, "{:+.1f}dB"),
+        ("GAIN_HIGH", "High Gain", -12.0,  12.0,    0.0, "{:+.1f}dB"),
+        ("KNEE_LOW",  "Low Knee",    0.5,  24.0,    4.0, "{:.1f}dB"),
+        ("KNEE_LMD",  "LMid Knee",   0.5,  24.0,    4.0, "{:.1f}dB"),
+        ("KNEE_HMD",  "HMid Knee",   0.5,  24.0,    4.0, "{:.1f}dB"),
+        ("KNEE_HIGH", "High Knee",   0.5,  24.0,    4.0, "{:.1f}dB"),
     ],
     "EQ": [
         ("LOW",       "Low",        -24.0, 24.0,   0.0, "{:+.0f}dB"),
@@ -147,19 +153,18 @@ EFFECT_PARAMS = {
     ],
 }
 
+# PRESET_DATA: dict of effect_type -> list of (name, [normalised_params])
+# COMP_SINGLE: [thr, ratio, atk, rel, makeup, knee]  (p0-p5)
+# COMP_MULTI:  [thr*4, ratio*4, atk*4, rel*4, gain*4, knee*4] (p0-p23)
+PRESET_DATA = {'COMP_SINGLE': [('Vocal Compress', [0.55, 0.10526315789473684, 0.0990990990990991, 0.0707070707070707, 0.16666666666666666, 0.14893617021276595]), ('Gentle Glue', [0.4, 0.02631578947368421, 0.29929929929929927, 0.1919191919191919, 0.08333333333333333, 0.3191489361702128]), ('Drum Bus', [0.7, 0.2631578947368421, 0.009009009009009009, 0.09090909090909091, 0.125, 0.06382978723404255]), ('Heavy Squash', [0.25, 0.47368421052631576, 0.04904904904904905, 0.04040404040404041, 0.3333333333333333, 0.02127659574468085]), ('Transparent', [0.5, 0.05263157894736842, 0.49949949949949946, 0.494949494949495, 0.041666666666666664, 0.40425531914893614]), ('Broadcast Voice', [0.65, 0.15789473684210525, 0.04904904904904905, 0.050505050505050504, 0.25, 0.06382978723404255]), ('Intimate Whisper', [0.45, 0.07894736842105263, 0.39939939939939934, 0.29292929292929293, 0.125, 0.3191489361702128]), ('Telephone', [0.8, 1.0, 0.0, 0.010101010101010102, 0.4166666666666667, 0.0]), ('Radio Ready', [0.75, 0.3684210526315789, 0.019019019019019017, 0.030303030303030304, 0.3333333333333333, 0.0425531914893617]), ('Vintage Tape', [0.55, 0.10526315789473684, 0.19919919919919918, 0.1919191919191919, 0.125, 0.23404255319148937]), ('Dark Presence', [0.75, 0.5789473684210527, 0.009009009009009009, 0.020202020202020204, 0.4166666666666667, 0.02127659574468085]), ('Robot Voice', [0.85, 1.0, 0.0, 0.0, 0.5, 0.0]), ('Underwater', [0.5, 0.15789473684210525, 0.7997997997997998, 0.898989898989899, 0.16666666666666666, 0.48936170212765956]), ('Announcer', [0.6, 0.13157894736842105, 0.07907907907907907, 0.09090909090909091, 0.20833333333333334, 0.10638297872340426]), ('Whisper to Shout', [0.25, 0.7368421052631579, 0.04904904904904905, 0.1414141414141414, 0.3333333333333333, 0.14893617021276595])], 'COMP_MULTI': [('Voice Over Clean', [0.45, 0.5, 0.55, 0.6, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.19919919919919918, 0.14914914914914915, 0.0990990990990991, 0.07907907907907907, 0.1919191919191919, 0.1414141414141414, 0.09090909090909091, 0.0707070707070707, 0.5, 0.5, 0.5, 0.5, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595]), ('Voice Over Warm', [0.5, 0.55, 0.6, 0.65, 0.07894736842105263, 0.10526315789473684, 0.10526315789473684, 0.05263157894736842, 0.14914914914914915, 0.0990990990990991, 0.07907907907907907, 0.04904904904904905, 0.1414141414141414, 0.09090909090909091, 0.0707070707070707, 0.050505050505050504, 0.5833333333333334, 0.4583333333333333, 0.4166666666666667, 0.5, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426]), ('Voice Over Bright', [0.45, 0.5, 0.55, 0.65, 0.05263157894736842, 0.07894736842105263, 0.10526315789473684, 0.10526315789473684, 0.19919919919919918, 0.11911911911911911, 0.07907907907907907, 0.04904904904904905, 0.1717171717171717, 0.1111111111111111, 0.0707070707070707, 0.050505050505050504, 0.4583333333333333, 0.5, 0.5416666666666666, 0.5833333333333334, 0.2765957446808511, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426]), ('Male Voice', [0.55, 0.65, 0.5, 0.45, 0.10526315789473684, 0.15789473684210525, 0.07894736842105263, 0.05263157894736842, 0.0990990990990991, 0.07907907907907907, 0.14914914914914915, 0.19919919919919918, 0.09090909090909091, 0.0707070707070707, 0.1414141414141414, 0.1919191919191919, 0.5416666666666666, 0.5, 0.4583333333333333, 0.4166666666666667, 0.14893617021276595, 0.10638297872340426, 0.23404255319148937, 0.3191489361702128]), ('Female Voice', [0.45, 0.55, 0.65, 0.6, 0.05263157894736842, 0.10526315789473684, 0.15789473684210525, 0.10526315789473684, 0.19919919919919918, 0.11911911911911911, 0.05905905905905906, 0.07907907907907907, 0.1717171717171717, 0.09090909090909091, 0.050505050505050504, 0.0707070707070707, 0.4583333333333333, 0.5, 0.5416666666666666, 0.5, 0.3191489361702128, 0.19148936170212766, 0.10638297872340426, 0.14893617021276595]), ('Narration', [0.4, 0.45, 0.5, 0.55, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.29929929929929927, 0.2492492492492492, 0.19919919919919918, 0.14914914914914915, 0.29292929292929293, 0.24242424242424243, 0.1919191919191919, 0.1414141414141414, 0.5, 0.5, 0.5, 0.5, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766]), ('Podcast Ready', [0.55, 0.6, 0.65, 0.65, 0.10526315789473684, 0.10526315789473684, 0.15789473684210525, 0.10526315789473684, 0.0990990990990991, 0.07907907907907907, 0.05905905905905906, 0.04904904904904905, 0.09090909090909091, 0.0707070707070707, 0.050505050505050504, 0.050505050505050504, 0.5416666666666666, 0.5416666666666666, 0.5416666666666666, 0.5, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426, 0.10638297872340426]), ('Broadcast', [0.7, 0.75, 0.7, 0.65, 0.2631578947368421, 0.3684210526315789, 0.2631578947368421, 0.21052631578947367, 0.039039039039039033, 0.029029029029029027, 0.039039039039039033, 0.04904904904904905, 0.04040404040404041, 0.030303030303030304, 0.04040404040404041, 0.050505050505050504, 0.625, 0.5833333333333334, 0.5833333333333334, 0.5416666666666666, 0.06382978723404255, 0.06382978723404255, 0.06382978723404255, 0.10638297872340426]), ('Dark Presence', [0.8, 0.6, 0.45, 0.4, 0.47368421052631576, 0.15789473684210525, 0.05263157894736842, 0.05263157894736842, 0.019019019019019017, 0.0990990990990991, 0.19919919919919918, 0.29929929929929927, 0.030303030303030304, 0.09090909090909091, 0.1919191919191919, 0.29292929292929293, 0.6666666666666666, 0.5416666666666666, 0.4583333333333333, 0.4166666666666667, 0.02127659574468085, 0.10638297872340426, 0.23404255319148937, 0.3191489361702128]), ('Whisper Voice', [0.3, 0.35, 0.4, 0.45, 0.02631578947368421, 0.02631578947368421, 0.05263157894736842, 0.05263157894736842, 0.39939939939939934, 0.3493493493493493, 0.2492492492492492, 0.19919919919919918, 0.3434343434343434, 0.29292929292929293, 0.24242424242424243, 0.1919191919191919, 0.5, 0.5, 0.5, 0.5, 0.48936170212765956, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937]), ('Telephone MB', [0.85, 0.9, 0.9, 0.75, 1.0, 0.7368421052631579, 0.7368421052631579, 0.47368421052631576, 0.0, 0.0, 0.0, 0.009009009009009009, 0.0, 0.0, 0.0, 0.04040404040404041, 0.0, 0.6666666666666666, 0.6666666666666666, 0.0, 0.0, 0.0, 0.0, 0.0]), ('Loud & Proud', [0.8, 0.75, 0.75, 0.7, 0.47368421052631576, 0.3684210526315789, 0.3684210526315789, 0.2631578947368421, 0.009009009009009009, 0.019019019019019017, 0.019019019019019017, 0.029029029029029027, 0.020202020202020204, 0.030303030303030304, 0.030303030303030304, 0.04040404040404041, 0.7083333333333334, 0.625, 0.625, 0.5833333333333334, 0.02127659574468085, 0.02127659574468085, 0.06382978723404255, 0.06382978723404255]), ('Gentle Master', [0.3, 0.35, 0.4, 0.45, 0.02631578947368421, 0.02631578947368421, 0.02631578947368421, 0.02631578947368421, 0.49949949949949946, 0.39939939939939934, 0.3493493493493493, 0.29929929929929927, 0.3939393939393939, 0.3434343434343434, 0.29292929292929293, 0.24242424242424243, 0.5, 0.5, 0.5, 0.5, 0.48936170212765956, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937]), ('Drum Glue', [0.65, 0.6, 0.5, 0.4, 0.21052631578947367, 0.15789473684210525, 0.07894736842105263, 0.05263157894736842, 0.019019019019019017, 0.04904904904904905, 0.14914914914914915, 0.2492492492492492, 0.050505050505050504, 0.0707070707070707, 0.1414141414141414, 0.1919191919191919, 0.5833333333333334, 0.5416666666666666, 0.5, 0.4583333333333333, 0.06382978723404255, 0.10638297872340426, 0.19148936170212766, 0.2765957446808511]), ('Master Bus', [0.45, 0.5, 0.55, 0.6, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.2492492492492492, 0.19919919919919918, 0.14914914914914915, 0.0990990990990991, 0.24242424242424243, 0.1919191919191919, 0.1414141414141414, 0.09090909090909091, 0.5, 0.5, 0.5, 0.5, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595]), ('EXTREME Crush', [0.85, 0.85, 0.85, 0.85, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8333333333333334, 0.8333333333333334, 0.8333333333333334, 0.8333333333333334, 0.0, 0.0, 0.0, 0.0]), ('Robot Voice MB', [0.8, 0.85, 0.85, 0.7, 0.8947368421052632, 1.0, 1.0, 0.3684210526315789, 0.0, 0.0, 0.0, 0.0, 0.005050505050505051, 0.0, 0.0, 0.020202020202020204, 0.25, 0.75, 0.8333333333333334, 0.16666666666666666, 0.0, 0.0, 0.0, 0.0]), ('Underwater MB', [0.5, 0.4, 0.75, 0.85, 0.10526315789473684, 0.05263157894736842, 0.3684210526315789, 0.7368421052631579, 0.49949949949949946, 0.39939939939939934, 0.04904904904904905, 0.0, 0.494949494949495, 0.3939393939393939, 0.04040404040404041, 0.0, 0.9166666666666666, 0.5833333333333334, 0.3333333333333333, 0.08333333333333333, 0.48936170212765956, 0.3191489361702128, 0.06382978723404255, 0.0])]}
+# Legacy name lists for rack preset display
 PRESETS = {
-    "COMP_SINGLE": ["Vocal Compress", "Drum Bus", "Gentle Glue",
-                    "Heavy Squash", "Transparent"],
-    "COMP_MULTI":  ["Master Bus", "Drum Glue", "Broadcast",
-                    "Gentle Master", "Loud & Proud"],
-    "EQ":         ["Presence Boost", "Low Cut", "Air", "Mud Remove",
-                   "Telephone"],
-    "REVERB":     ["Small Room", "Large Hall", "Plate", "Spring",
-                   "Ambience"],
-    "NOISE_GATE": ["Tight Gate", "Soft Gate", "Drum Gate",
-                   "Vocal Gate", "Natural"],
-    "DELAY":      ["Slapback", "Quarter Note", "Dotted 8th",
-                   "Ping Pong", "Tape Echo"],
+    "COMP_SINGLE": [p[0] for p in PRESET_DATA["COMP_SINGLE"]],
+    "COMP_MULTI":  [p[0] for p in PRESET_DATA["COMP_MULTI"]],
+    "EQ":         ["Presence Boost", "Low Cut", "Air", "Mud Remove", "Telephone"],
+    "REVERB":     ["Small Room", "Large Hall", "Plate", "Spring", "Ambience"],
+    "NOISE_GATE": ["Tight Gate", "Soft Gate", "Drum Gate", "Vocal Gate", "Natural"],
+    "DELAY":      ["Slapback", "Quarter Note", "Dotted 8th", "Ping Pong", "Tape Echo"],
 }
 
 # ---------------------------------------------------------------------------
@@ -189,10 +194,10 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     p5: bpy.props.FloatProperty(default=0.0)
     p6: bpy.props.FloatProperty(default=0.0)
     p7: bpy.props.FloatProperty(default=0.0)
-    # Extended params for multiband compressor (p8-p19)
-    # p0-p3:  band thresholds (norm), p4-p7:  band ratios (norm)
-    # p8-p11: band attacks (norm),    p12-p15: band releases (norm)
-    # p16-p19: band gain faders (norm, default 0.5 = unity)
+    # Extended params (p8-p23)
+    # p0-p3:  thr, p4-p7:  ratio, p8-p11: attack, p12-p15: release
+    # p16-p19: gain (0.5=unity), p20-p23: knee
+    # COMP_SINGLE uses p0-p5 only
     p8:  bpy.props.FloatProperty(default=0.0)
     p9:  bpy.props.FloatProperty(default=0.0)
     p10: bpy.props.FloatProperty(default=0.0)
@@ -205,6 +210,10 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     p17: bpy.props.FloatProperty(default=0.5)
     p18: bpy.props.FloatProperty(default=0.5)
     p19: bpy.props.FloatProperty(default=0.5)
+    p20: bpy.props.FloatProperty(default=0.14)  # knee default ~4dB
+    p21: bpy.props.FloatProperty(default=0.14)
+    p22: bpy.props.FloatProperty(default=0.14)
+    p23: bpy.props.FloatProperty(default=0.14)
 
 
 def _rp(rack, idx, default=0.0):
@@ -252,8 +261,24 @@ def normalise_param(rack, param_idx, actual_value):
 
 
 def init_rack_defaults(rack):
-    """Set parameter values to defaults for the effect type."""
-    params = EFFECT_PARAMS.get(rack.effect_type, [])
+    """Set parameter values to defaults for the effect type — loads preset 0."""
+    rack.preset_idx = 0
+    _load_preset(rack, 0)
+
+
+def _load_preset(rack, preset_idx):
+    """Load a preset by index into rack params."""
+    etype    = rack.effect_type
+    presets  = PRESET_DATA.get(etype)
+    if presets and preset_idx < len(presets):
+        _, params = presets[preset_idx]
+        for i, val in enumerate(params):
+            attr = f'p{i}'
+            if hasattr(rack, attr):
+                setattr(rack, attr, float(max(0.0, min(1.0, val))))
+        return
+    # Fallback to EFFECT_PARAMS defaults for non-compressor types
+    params = EFFECT_PARAMS.get(etype, [])
     for i, (_, _, pmin, pmax, pdefault, _) in enumerate(params):
         if i < 8:
             setattr(rack, f'p{i}', normalise_param(rack, i, pdefault))
@@ -409,50 +434,51 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
         _draw_rect(bx, ry,
                    max(bar_w - scale, 1.0), bar_h, col)
 
-    # GR curve overlay (red dashed line, calculated from compressor settings)
+    # GR curve — soft knee transfer function
+    import math as _math
     scene = bpy.context.scene
     racks = getattr(scene, "pb_racks", [])
     if rack_idx < len(racks):
         rack = racks[rack_idx]
         if rack.effect_type in ("COMP_SINGLE", "COMP_MULTI"):
-            # Draw proper compressor transfer function curve
-            # X axis = input level (left=silence, right=loud)
-            # Y axis = output level (bottom=silence, top=loud)
-            # Below threshold: 45-degree line (unity gain)
-            # Above threshold: shallower slope determined by ratio
-            thr_norm   = rack.p0   # 0-1 normalised threshold
-            ratio_norm = rack.p1   # 0-1 normalised ratio
-
-            # Convert normalised to actual values
-            thr_db  = -40.0 + thr_norm * 40.0    # -40 to 0 dB
-            ratio   = 1.0   + ratio_norm * 19.0  # 1:1 to 20:1
+            thr_db  = -40.0 + rack.p0 * 40.0
+            ratio   =  1.0  + rack.p1 * 19.0
+            # COMP_SINGLE: p5=knee, COMP_MULTI: p20=knee band0
+            if rack.effect_type == "COMP_SINGLE":
+                knee_db = 0.5 + rack.p5  * 23.5
+            else:
+                knee_db = 0.5 + rack.p20 * 23.5
 
             pts = []
-            steps = 64
+            steps = 128
             for s in range(steps + 1):
-                # Input level in dB: map 0-1 across display to -60..0 dB
-                t        = s / steps
-                in_db    = -60.0 + t * 60.0
+                t     = s / steps
+                in_db = -60.0 + t * 60.0
+                half_k = knee_db * 0.5
 
-                # Transfer function
-                if in_db < thr_db:
-                    out_db = in_db  # no compression below threshold
+                # Soft knee transfer function
+                if in_db <= thr_db - half_k:
+                    out_db = in_db
+                elif in_db <= thr_db + half_k and knee_db > 0:
+                    x      = in_db - thr_db + half_k
+                    out_db = in_db + (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
                 else:
-                    # Gain reduction above threshold
-                    over   = in_db - thr_db
-                    out_db = thr_db + over / ratio
+                    out_db = thr_db + (in_db - thr_db) / ratio
 
-                # Map output dB (-60..0) to Y position in display
                 out_norm = (out_db + 60.0) / 60.0
-                py = ry + out_norm * rh
-                px = rx + t * rw
-                pts.append((px, py))
+                pts.append((rx + t*rw, ry + out_norm*rh))
 
             if len(pts) >= 2:
-                for i in range(0, len(pts)-1, 2):
+                for i in range(len(pts)-1):
                     _draw_line(pts[i][0], pts[i][1],
                                pts[i+1][0], pts[i+1][1],
                                (0.9, 0.2, 0.2, 0.85), max(1.5, scale*1.5))
+
+            # Threshold marker line
+            thr_norm = (thr_db + 60.0) / 60.0
+            thr_x    = rx + thr_norm * rw
+            _draw_line(thr_x, ry, thr_x, ry+rh,
+                       (0.6, 0.2, 0.2, 0.3), max(0.5, scale*0.5))
 
     # Frequency labels
     freq_labels = [("20", 0.0), ("200", 0.22), ("1k", 0.44),
@@ -605,59 +631,243 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
 
     # ----------------------------------------------------------------
-    # SPECTRUM DISPLAY — top portion, same width as band columns
+    # SPECTRUM DISPLAY — FabFilter style full-width GR curve
+    # Background: grey FFT bars showing audio content
+    # Foreground: smooth coloured GR curve dipping at compressed bands
     # ----------------------------------------------------------------
     spec_x = content_x
     spec_y = ry + fader_zone_h + 4*scale
     spec_w = content_w
     spec_h = spec_zone_h - 8*scale
 
+    # Background
     _draw_rect(spec_x, spec_y, spec_w, spec_h, (0.04, 0.04, 0.04, 1.0))
     bv = [(spec_x,spec_y),(spec_x+spec_w,spec_y),
           (spec_x+spec_w,spec_y+spec_h),(spec_x,spec_y+spec_h),(spec_x,spec_y)]
     bb = batch_for_shader(shader,"LINE_STRIP",{"pos":bv})
     shader.bind(); shader.uniform_float("color",(0.15,0.15,0.15,1.0)); bb.draw(shader)
 
-    # Grid lines
+    # Horizontal grid lines (dB scale)
     for gi in range(1, 5):
         gy = spec_y + gi/5 * spec_h
         _draw_rect(spec_x, gy, spec_w, max(0.5,scale*0.5), (0.09,0.09,0.09,1.0))
 
-    # Band dividers in spectrum — align with column edges
+    # dB scale labels on left
+    fs_db = max(1, int(7*scale))
+    for label, frac in [("+6",0.1),("0",0.3),("-6",0.5),("-12",0.7),("-24",0.9)]:
+        ly = spec_y + frac * spec_h
+        tw = _text_width(label, fs_db)
+        _draw_text(label, spec_x - tw - 3*scale, ly - fs_db/2,
+                   fs_db, (0.3,0.3,0.3,1.0))
+
+    # Get FFT data from timeline — real audio spectrum synced to playhead
+    fft_data = None
+    gr_data  = [0.0, 0.0, 0.0, 0.0]
+    try:
+        from Loader import _fft_timeline
+        import bpy as _bpy2
+        assigned = get_rack_channels(rack)
+        if assigned:
+            ch = list(assigned)[0]
+            tl = _fft_timeline.get(ch)
+            if tl is not None and len(tl['snapshots']) > 0:
+                scene2      = _bpy2.context.scene
+                cur_frame   = scene2.frame_current if scene2 else 0
+                start_frame = tl['start_frame']
+                fps         = tl['fps']
+                snap_sec    = tl['snap_frames'] / tl['sr']
+                elapsed_sec = (cur_frame - start_frame) / fps
+                snap_idx    = int(elapsed_sec / snap_sec)
+                snaps       = tl['snapshots']
+                snap_idx    = max(0, min(len(snaps)-1, snap_idx))
+                # snaps is (n_snaps, 4, 8) numpy array
+                frame_data  = snaps[snap_idx]  # shape (4, 8)
+                fft_data    = [frame_data[b].tolist() for b in range(4)]
+    except Exception as _fe:
+        import traceback as _tb
+        _tb.print_exc()
+        fft_data = None
+
+    # Also get GR levels for the GR bar
+    try:
+        from Loader import get_engine
+        engine = get_engine()
+        assigned2 = get_rack_channels(rack)
+        if engine and assigned2:
+            ch2 = list(assigned2)[0]
+            if 0 <= ch2 < 32:
+                gr_data = engine.get_state().get_gr_levels(ch2)
+    except Exception:
+        pass
+
+    # --- Background: grey FFT bars (full width, all bands combined) ---
+    FFT_BINS = 32
+    total_bars = FFT_BINS * 4
+    bar_w_full = spec_w / total_bars
+    for band in range(4):
+        col = BAND_COLORS[band]
+        if fft_data and fft_data[band]:
+            base_bins = list(fft_data[band])
+        else:
+            base_bins = [0.04] * FFT_BINS
+
+        # Use real FFT timeline data — no fake animation
+        for bi, base_val in enumerate(base_bins):
+            val     = max(0.0, min(1.0, base_val))
+            bar_idx = band * FFT_BINS + bi
+            bar_h   = val * spec_h * 0.85
+            bx      = spec_x + bar_idx * bar_w_full
+            r,g,b_c,a = col
+            _draw_rect(bx, spec_y, max(bar_w_full-0.5, 0.5), bar_h,
+                       (r*0.2+0.04, g*0.2+0.04, b_c*0.2+0.04, 0.9))
+
+    # --- Band divider lines ---
     for b in range(1, 4):
         dx = spec_x + b * band_w
-        _draw_rect(dx, spec_y, max(0.5,scale*0.5), spec_h, (0.25,0.25,0.25,1.0))
+        _draw_rect(dx, spec_y, max(0.5,scale*0.5), spec_h, (0.2,0.2,0.2,1.0))
+        # Crossover frequency labels
+        cross_labels = ["120hz", "800hz", "5khz"]
+        fs_cr = max(1, int(7*scale))
+        tw_cr = _text_width(cross_labels[b-1], fs_cr)
+        _draw_text(cross_labels[b-1], dx - tw_cr/2,
+                   spec_y + spec_h + 2*scale,
+                   fs_cr, (0.35,0.35,0.35,1.0))
 
-    # Per-band transfer curves — each curve spans its own band column
+    # --- Settings-driven frequency response curve ---
+    # Shows the effect of current knob settings on the frequency spectrum.
+    # Each band's gain setting + compression depth shapes the curve.
+    # Updates instantly as knobs move — no animation, pure representation.
+    #
+    # Curve logic per band:
+    #   - At 0dB gain with no threshold hit: flat at 0dB
+    #   - Gain knob shifts band up/down
+    #   - Threshold + ratio creates a soft-knee dip based on a nominal
+    #     input level (we use -18dB RMS as the reference signal level)
+    #     This shows how much the compressor would affect a typical signal
+    #
+    # Y axis: -12dB (bottom) to +12dB (top), 0dB = centre
+    # X axis: full spectrum left to right across all 4 bands
+
+    zero_db_y  = spec_y + spec_h * 0.5      # 0dB at vertical centre
+    db_per_px  = 12.0 / (spec_h * 0.5)      # 12dB maps to half height
+    scale_px   = (spec_h * 0.5) / 12.0      # pixels per dB
+
+    # Draw 0dB reference line
+    _draw_rect(spec_x, zero_db_y, spec_w, max(0.5, scale*0.5),
+               (0.35, 0.35, 0.35, 0.6))
+
+    # dB grid lines and labels
+    fs_db = max(1, int(7*scale))
+    for db_val, label in [(12,"+12"),(6,"+6"),(0,"0"),(-6,"-6"),(-12,"-12")]:
+        gy = zero_db_y - db_val * scale_px
+        if spec_y <= gy <= spec_y + spec_h:
+            _draw_rect(spec_x, gy, spec_w, max(0.5,scale*0.3),
+                       (0.12,0.12,0.12,1.0))
+            tw = _text_width(label, fs_db)
+            _draw_text(label, spec_x - tw - 3*scale, gy - fs_db*0.5,
+                       fs_db, (0.3,0.3,0.3,1.0))
+
+    # Compute per-band gain offset from knob settings
+    # Reference input: -18dB RMS — represents typical programme level
+    REF_INPUT_DB = -18.0
+
+    def band_output_db(b):
+        """Net dB change this band applies to the reference signal."""
+        thr_db  = -40.0 + _rp(rack, b)    * 40.0   # threshold
+        ratio   =  1.0  + _rp(rack, b+4)  * 19.0   # ratio
+        knee_db =  0.5  + _rp(rack, b+20) * 23.5   # knee
+        gain_db = (_rp(rack, b+16, 0.5) - 0.5) * 24.0  # band gain
+
+        # Soft knee gain reduction at reference input
+        half_k = knee_db * 0.5
+        in_db  = REF_INPUT_DB
+        if in_db <= thr_db - half_k:
+            gr_db = 0.0
+        elif in_db <= thr_db + half_k and knee_db > 0:
+            x     = in_db - thr_db + half_k
+            gr_db = (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
+        else:
+            gr_db = (in_db - thr_db) * (1.0/ratio - 1.0)
+
+        return gain_db + gr_db  # total net effect on signal
+
+    # Calculate net dB per band
+    band_db = [band_output_db(b) for b in range(4)]
+
+    # Build smooth curve — cubic smooth-step between band centres
+    # with flat regions within each band and smooth transitions at crossovers
+    N_PTS = 200
+    curve_pts = []
+    for i in range(N_PTS + 1):
+        fx     = i / N_PTS
+        band_f = fx * 4.0
+        band_i = min(3, int(band_f))
+        band_t = band_f - band_i
+
+        # Smooth blend at band boundaries
+        db_this = band_db[band_i]
+        db_next = band_db[min(3, band_i + 1)]
+        # Sigmoid transition — flat in band centre, smooth at edges
+        s       = band_t * band_t * (3.0 - 2.0 * band_t)
+        db_here = db_this + (db_next - db_this) * s
+
+        px = spec_x + fx * spec_w
+        py = zero_db_y - db_here * scale_px
+        py = max(spec_y + 2*scale, min(spec_y + spec_h - 2*scale, py))
+        curve_pts.append((px, py))
+
+    # Draw filled area between curve and 0dB line
+    for i in range(len(curve_pts) - 1):
+        px1, py1 = curve_pts[i]
+        px2, py2 = curve_pts[i+1]
+        band_here = min(3, int((px1 - spec_x) / band_w))
+        col       = BAND_COLORS[band_here]
+        r,g,b_c,a = col
+        y_top  = min(py1, zero_db_y)
+        y_bot  = max(py1, zero_db_y)
+        fill_h = y_bot - y_top
+        if fill_h > 0.5:
+            _draw_rect(px1, y_top, max(px2-px1, 0.5), fill_h,
+                       (r*0.35, g*0.35, b_c*0.35, 0.4))
+
+    # Draw the curve line
+    for i in range(len(curve_pts) - 1):
+        px1, py1 = curve_pts[i]
+        px2, py2 = curve_pts[i+1]
+        band_here = min(3, int((px1 - spec_x) / band_w))
+        col       = BAND_COLORS[band_here]
+        r,g,b_c,a = col
+        _draw_line(px1, py1, px2, py2,
+                   (min(1,r*1.4), min(1,g*1.4), min(1,b_c*1.4), 1.0),
+                   max(2.0, scale*2.0))
+
+    # Band centre dots (like IK Quad Comp)
     for band in range(4):
-        thr_norm   = _rp(rack, band)
-        ratio_norm = _rp(rack, band+4)
-        thr_db     = -40.0 + thr_norm  * 40.0
-        ratio      =   1.0 + ratio_norm * 19.0
-        col        = BAND_COLORS[band]
-        x0         = spec_x + band * band_w
-        x1         = spec_x + (band+1) * band_w
+        bx_c = spec_x + (band + 0.5) * band_w
+        db_b = band_db[band]
+        py_c = zero_db_y - db_b * scale_px
+        py_c = max(spec_y + 4*scale, min(spec_y + spec_h - 4*scale, py_c))
+        col  = BAND_COLORS[band]
+        r,g,b_c,a = col
+        _draw_circle(bx_c, py_c, 5*scale,
+                     (min(1,r*1.5), min(1,g*1.5), min(1,b_c*1.5), 1.0))
+        _draw_circle(bx_c, py_c, 5*scale, (0.1,0.1,0.1,0.6), filled=False)
+        # Value label
+        fs_lbl = max(1, int(7*scale))
+        lbl    = f"{db_b:+.1f}dB"
+        tw_lbl = _text_width(lbl, fs_lbl)
+        _draw_text(lbl, bx_c - tw_lbl/2, py_c + 8*scale,
+                   fs_lbl, (r, g, b_c, 0.9))
 
-        pts = []
-        for s in range(33):
-            t      = s / 32
-            in_db  = -60.0 + t * 60.0
-            out_db = in_db if in_db < thr_db else thr_db + (in_db-thr_db)/ratio
-            out_n  = (out_db + 60.0) / 60.0
-            pts.append((x0 + t*(x1-x0), spec_y + out_n*spec_h))
-
-        for s in range(0, len(pts)-1, 2):
-            _draw_line(pts[s][0], pts[s][1], pts[s+1][0], pts[s+1][1],
-                       col, max(1.5, scale*1.5))
-
-        # Freq label centred in band column, below spectrum
-        fs_fl = max(1, int(7*scale))
-        label = BAND_FREQS[band]
-        tw_fl = _text_width(label, fs_fl)
-        _draw_text(label,
-                   x0 + band_w/2 - tw_fl/2,
-                   spec_y - 10*scale,
-                   fs_fl, (col[0]*0.6, col[1]*0.6, col[2]*0.6, 1.0))
+    # Band name labels
+    for band in range(4):
+        col   = BAND_COLORS[band]
+        bx_c  = spec_x + (band + 0.5) * band_w
+        fs_bn = max(1, int(8*scale))
+        tw_bn = _text_width(BAND_NAMES[band], fs_bn)
+        _draw_text(BAND_NAMES[band], bx_c - tw_bn/2,
+                   spec_y + spec_h - 14*scale,
+                   fs_bn, (col[0]*0.8, col[1]*0.8, col[2]*0.8, 0.8))
 
     # ----------------------------------------------------------------
     # FADER + KNOB ZONE — bottom portion, 4 equal columns
@@ -741,15 +951,14 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         div_x = bx + fader_strip_w
         _draw_rect(div_x, ctrl_y, max(0.5,scale*0.5), ctrl_h, (0.18,0.18,0.18,1.0))
 
-        # --- 2x2 KNOB GRID ---
+        # --- 3x2 KNOB GRID (Thr/Ratio/Knee top, Atk/Rel/Gain bottom) ---
         knob_base_x = div_x + 4*scale
-        # Col centres
-        kx0 = knob_base_x + knob_col_gap * 0.5
-        kx1 = knob_base_x + knob_col_gap * 1.5
-        # Row centres — calculated so labels below top row
-        # don't overlap body of bottom row knobs
-        ky1 = ctrl_y + 4*scale + knob_label_h + knob_r          # bottom row
-        ky0 = ky1 + knob_r + knob_gap + knob_label_h + knob_r   # top row
+        knob_col_gap3 = knob_area_w / 3
+        kx0 = knob_base_x + knob_col_gap3 * 0.5
+        kx1 = knob_base_x + knob_col_gap3 * 1.5
+        kx2 = knob_base_x + knob_col_gap3 * 2.5
+        ky1 = ctrl_y + 4*scale + knob_label_h + knob_r
+        ky0 = ky1 + knob_r + knob_gap + knob_label_h + knob_r
 
         # Threshold (p0-p3)
         thr_n   = _rp(rack, band)
@@ -763,6 +972,12 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         _draw_knob(kx1, ky0, knob_r, rat_n, col,
                    "Ratio", f"{ratio:.1f}:1", scale)
 
+        # Knee (p20-p23)
+        kne_n  = _rp(rack, band+20, 0.14)
+        kne_db = 0.5 + kne_n*23.5
+        _draw_knob(kx2, ky0, knob_r, kne_n, col,
+                   "Knee", f"{kne_db:.1f}dB", scale)
+
         # Attack (p8-p11)
         atk_n  = _rp(rack, band+8)
         atk_ms = 0.1 + atk_n*99.9
@@ -774,6 +989,12 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         rel_ms = 10.0 + rel_n*990.0
         _draw_knob(kx1, ky1, knob_r, rel_n, col,
                    "Rel", f"{rel_ms:.0f}ms", scale)
+
+        # Gain (p16-p19)
+        gain_n  = _rp(rack, band+16, 0.5)
+        gain_db = (gain_n - 0.5) * 24.0
+        _draw_knob(kx2, ky1, knob_r, gain_n, col,
+                   "Gain", f"{gain_db:+.0f}dB", scale)
 
         # Column divider (not after last band)
         if band < 3:
@@ -918,18 +1139,35 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     if etype == "COMP_MULTI":
         _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
     else:
-        # Standard layout: knobs + spectrum + GR meters
-        params = EFFECT_PARAMS.get(etype, [])
-        knob_r = 20 * scale
-        ky     = ry + rh - RACK_RAIL_H*scale - KNOB_Y_OFFSET*scale
-        for pi, (pkey, plabel, pmin, pmax, pdef, pfmt) in enumerate(params[:5]):
-            kx     = rx + (KNOB_START_X + pi*KNOB_SPACING) * scale
-            norm   = getattr(rack, f'p{pi}', 0.0)
-            actual = pmin + norm*(pmax-pmin)
-            try:    val_str = pfmt.format(actual)
-            except: val_str = f"{actual:.1f}"
-            _draw_knob(kx, ky, knob_r, norm,
-                       (0.0, 0.65, 0.4), plabel, val_str, scale)
+        # Single band: 2x3 knob grid + spectrum + GR meters
+        # Row 1: Threshold | Ratio | Knee
+        # Row 2: Attack    | Release | Makeup
+        params  = EFFECT_PARAMS.get(etype, [])
+        col     = (0.0, 0.65, 0.4)
+        knob_r  = 18 * scale
+        # Knob grid origin
+        knob_area_w = KNOB_SECTION_W * scale
+        knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
+        body_top = ry
+        body_bot = ry + rh - RACK_RAIL_H*scale
+        mid_y    = (body_top + body_bot) * 0.5
+        ky0      = mid_y + knob_r + 14*scale   # top row
+        ky1      = mid_y - knob_r - 14*scale   # bottom row
+
+        # Draw all 6 knobs
+        param_order = [0,1,5, 2,3,4]  # Thr,Ratio,Knee / Atk,Rel,Makeup
+        for idx, pi in enumerate(param_order):
+            col_i = idx % 3
+            row_i = idx // 3
+            kx    = knob_kx[col_i]
+            ky    = ky0 if row_i == 0 else ky1
+            if pi < len(params):
+                pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
+                norm   = getattr(rack, f'p{pi}', 0.0)
+                actual = pmin + norm*(pmax-pmin)
+                try:    val_str = pfmt.format(actual)
+                except: val_str = f"{actual:.1f}"
+                _draw_knob(kx, ky, knob_r, norm, col, plabel, val_str, scale)
 
         div_x = rx + KNOB_SECTION_W * scale
         _draw_rect(div_x, ry+4*scale, max(1.0, scale),
@@ -938,6 +1176,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         spec_x = rx + SPEC_X * scale
         spec_y = ry + (body_h - spec_h) / 2 - 5*scale
         spec_w = SPEC_W * scale
+        # Pass rack to spectrum so it can draw soft-knee GR curve
         _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
 
         assigned = get_rack_channels(rack)
@@ -951,6 +1190,8 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     fs_ch = max(1, int(8*scale))
     _draw_text("CHANNELS", ch_right_x + 10*scale,
                ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
+
+
 
 
 def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
@@ -1275,12 +1516,15 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             cur_y -= rh + RACK_GAP * ui_scale
             continue
 
+
+
         rh = (RACK_EXPANDED_H_MB if rack.effect_type == "COMP_MULTI"
               else RACK_EXPANDED_H) * ui_scale
         rack_y = cur_y - rh
 
         if rack.effect_type == "COMP_MULTI":
-            # Multiband: hit test gain faders and 2x2 knob grid
+            # Multiband: hit test gain faders and 3x2 knob grid
+            # Must exactly mirror _draw_multiband_body geometry
             body_h       = rh - RACK_RAIL_H*ui_scale
             fader_zone_h = body_h * 0.52
             ch_btn_w     = 108*ui_scale
@@ -1295,14 +1539,14 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             ctrl_h       = fader_area_h - label_h
             fader_strip_w = 38*ui_scale
             knob_area_w  = band_w - fader_strip_w - 8*ui_scale
-            knob_r       = max(min(knob_area_w*0.22, ctrl_h*0.22), 12*ui_scale)
-            knob_col_gap = knob_area_w / 2
-            knob_row_gap = ctrl_h / 2
+            knob_r       = max(min(knob_area_w*0.15, 16*ui_scale), 10*ui_scale)
+            knob_label_h = 22*ui_scale
+            knob_gap     = 6*ui_scale
 
             for band in range(4):
                 bx = content_x + band * band_w
 
-                # Gain fader (p16-p19)
+                # Gain fader (p16-p19) — left strip
                 fdr_x = bx + 6*ui_scale
                 fdr_w = 10*ui_scale
                 fdr_h = ctrl_h - 26*ui_scale
@@ -1310,30 +1554,46 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                 if fdr_x <= rx <= fdr_x+fdr_w and fdr_y <= ry <= fdr_y+fdr_h:
                     return (i, band + 16)
 
-                # 2x2 knob grid
-                knob_base_x = bx + fader_strip_w + 4*ui_scale
-                kx0 = knob_base_x + knob_col_gap * 0.5
-                kx1 = knob_base_x + knob_col_gap * 1.5
-                _knob_label_h = 22*ui_scale
-                _knob_gap     = 6*ui_scale
-                ky1 = ctrl_y + 4*ui_scale + _knob_label_h + knob_r
-                ky0 = ky1 + knob_r + _knob_gap + _knob_label_h + knob_r
+                # 3x2 knob grid — must match draw exactly
+                div_x       = bx + fader_strip_w
+                knob_base_x = div_x + 4*ui_scale
+                knob_col_gap3 = knob_area_w / 3
+                kx0 = knob_base_x + knob_col_gap3 * 0.5
+                kx1 = knob_base_x + knob_col_gap3 * 1.5
+                kx2 = knob_base_x + knob_col_gap3 * 2.5
+                ky1 = ctrl_y + 4*ui_scale + knob_label_h + knob_r   # bottom row
+                ky0 = ky1 + knob_r + knob_gap + knob_label_h + knob_r  # top row
 
-                if math.dist((rx,ry),(kx0,ky0)) < knob_r+4*ui_scale:
-                    return (i, band)       # threshold
-                if math.dist((rx,ry),(kx1,ky0)) < knob_r+4*ui_scale:
-                    return (i, band+4)     # ratio
-                if math.dist((rx,ry),(kx0,ky1)) < knob_r+4*ui_scale:
-                    return (i, band+8)     # attack
-                if math.dist((rx,ry),(kx1,ky1)) < knob_r+4*ui_scale:
-                    return (i, band+12)    # release
+                kr  = knob_r + 4*ui_scale  # hit radius with tolerance
+                if math.dist((rx,ry),(kx0,ky0)) < kr:
+                    return (i, band)        # threshold
+                if math.dist((rx,ry),(kx1,ky0)) < kr:
+                    return (i, band+4)      # ratio
+                if math.dist((rx,ry),(kx2,ky0)) < kr:
+                    return (i, band+20)     # knee
+                if math.dist((rx,ry),(kx0,ky1)) < kr:
+                    return (i, band+8)      # attack
+                if math.dist((rx,ry),(kx1,ky1)) < kr:
+                    return (i, band+12)     # release
+                if math.dist((rx,ry),(kx2,ky1)) < kr:
+                    return (i, band+16)     # gain (also reachable via fader)
         else:
-            # Standard knobs
-            ky = rack_y + rh - RACK_RAIL_H*ui_scale - KNOB_Y_OFFSET*ui_scale
-            params = EFFECT_PARAMS.get(rack.effect_type, [])
-            for pi in range(min(5, len(params))):
-                kx = rack_x + (KNOB_START_X + pi*KNOB_SPACING) * ui_scale
-                if math.dist((rx, ry), (kx, ky)) < knob_r:
+            # Single band 2x3 knob grid — must mirror draw geometry exactly
+            # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
+            body_top  = rack_y
+            body_bot  = rack_y + rh - RACK_RAIL_H*ui_scale
+            mid_y     = (body_top + body_bot) * 0.5
+            ky0       = mid_y + knob_r + 14*ui_scale   # top row
+            ky1       = mid_y - knob_r - 14*ui_scale   # bottom row
+            kxs       = [rack_x + (KNOB_START_X + c*KNOB_SPACING)*ui_scale
+                         for c in range(3)]
+            param_order = [0, 1, 5,  2, 3, 4]
+            for idx, pi in enumerate(param_order):
+                col_i = idx % 3
+                row_i = idx // 3
+                kx    = kxs[col_i]
+                ky    = ky0 if row_i == 0 else ky1
+                if math.dist((rx, ry), (kx, ky)) < knob_r + 4*ui_scale:
                     return (i, pi)
 
         cur_y -= rh + RACK_GAP * ui_scale
@@ -1495,6 +1755,34 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
 # ---------------------------------------------------------------------------
 # Handle a click result from hit_test
 # ---------------------------------------------------------------------------
+def _trigger_reprocess(rack_idx, rack, context):
+    """Reprocess all channels affected by a rack change.
+    Handles: preset change, ON/OFF toggle, channel assign/deassign.
+    When a channel is deassigned or rack is bypassed, that channel
+    reverts to unprocessed audio.
+    """
+    try:
+        from Loader import (_pb_reprocess_channel, _pb_wire_rack_to_engine,
+                            _pb_channels)
+        # Reprocess currently assigned channels (new settings)
+        assigned = get_rack_channels(rack)
+        for ch in assigned:
+            _pb_wire_rack_to_engine(ch)
+            _pb_reprocess_channel(ch)
+
+        # Also reprocess any channels that are playing but not assigned
+        # (covers deselect case — they need to revert to unprocessed audio)
+        for ch in list(_pb_channels.keys()):
+            if ch not in assigned:
+                # This channel might have been deselected — rewire clears
+                # its effect slot, reprocess plays unprocessed audio
+                _pb_wire_rack_to_engine(ch)
+                _pb_reprocess_channel(ch)
+    except Exception as e:
+        print(f"[RACKS] reprocess failed: {e}")
+        import traceback; traceback.print_exc()
+
+
 def handle_click(hit, context):
     """Process a hit_test result. Returns True if redraw needed."""
     global _popup_open, _popup_x, _popup_y
@@ -1553,6 +1841,9 @@ def handle_click(hit, context):
         racks = getattr(context.scene, "pb_racks", [])
         if i < len(racks):
             racks[i].enabled = not racks[i].enabled
+            state = 'ON' if racks[i].enabled else 'BYPASSED'
+            print(f"[RACKS] rack {i} {state} — reprocessing")
+            _trigger_reprocess(i, racks[i], context)
         return True
 
     if zone == 'preset_left':
@@ -1562,6 +1853,9 @@ def handle_click(hit, context):
             rack    = racks[i]
             presets = PRESETS.get(rack.effect_type, ["Default"])
             rack.preset_idx = (rack.preset_idx - 1) % len(presets)
+            _load_preset(rack, rack.preset_idx)
+            print(f"[RACKS] preset → {presets[rack.preset_idx]}")
+            _trigger_reprocess(i, rack, context)
         return True
 
     if zone == 'preset_right':
@@ -1571,6 +1865,9 @@ def handle_click(hit, context):
             rack    = racks[i]
             presets = PRESETS.get(rack.effect_type, ["Default"])
             rack.preset_idx = (rack.preset_idx + 1) % len(presets)
+            _load_preset(rack, rack.preset_idx)
+            print(f"[RACKS] preset → {presets[rack.preset_idx]}")
+            _trigger_reprocess(i, rack, context)
         return True
 
     if zone == 'channel_btn':
@@ -1581,6 +1878,9 @@ def handle_click(hit, context):
             attr = f'ch{ch_idx}'
             rack = racks[i]
             setattr(rack, attr, not getattr(rack, attr, False))
+            state = 'assigned' if getattr(rack, attr) else 'removed'
+            print(f"[RACKS] ch{ch_idx+1} {state} from rack {i} — reprocessing")
+            _trigger_reprocess(i, rack, context)
         return True
 
     return False

@@ -6,6 +6,60 @@ pyd_path = r"C:\Users\lukeb\Documents\BlenderTool\blender_sync"
 if pyd_path not in sys.path:
     sys.path.append(pyd_path)
 
+# ---------------------------------------------------------------------------
+# Pedalboard — bundled wheel install into addon lib/ folder
+# ---------------------------------------------------------------------------
+import os, glob, subprocess
+
+def _ensure_pedalboard():
+    """Install pedalboard from bundled wheel into addon lib/ if not present."""
+    # Use pyd_path which is hardcoded correctly at top of file
+    # __file__ may not resolve correctly when loaded as a Blender addon
+    addon_dir = pyd_path
+    lib_dir   = os.path.join(addon_dir, "lib")
+
+    # Add lib to path regardless — covers already-installed case
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+
+    # Check if already importable
+    try:
+        import pedalboard
+        print(f"[PEDALBOARD] v{pedalboard.__version__} ready")
+        return True
+    except ImportError:
+        pass
+
+    # Find bundled wheel
+    wheels = glob.glob(os.path.join(addon_dir, "wheels", "pedalboard*.whl"))
+    if not wheels:
+        print("[PEDALBOARD] WARNING: no wheel found in wheels/ folder")
+        return False
+
+    print(f"[PEDALBOARD] Installing from {os.path.basename(wheels[0])}...")
+    os.makedirs(lib_dir, exist_ok=True)
+    result = subprocess.run([
+        sys.executable, "-m", "pip", "install",
+        "--target", lib_dir,
+        "--no-deps",
+        wheels[0]
+    ], capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print("[PEDALBOARD] Installed successfully")
+        try:
+            import pedalboard
+            print(f"[PEDALBOARD] v{pedalboard.__version__} ready")
+            return True
+        except ImportError as e:
+            print(f"[PEDALBOARD] Import failed after install: {e}")
+            return False
+    else:
+        print(f"[PEDALBOARD] Install failed: {result.stderr[-500:]}")
+        return False
+
+PEDALBOARD_AVAILABLE = _ensure_pedalboard()
+
 import blf
 import bpy
 import gpu
@@ -227,6 +281,17 @@ _pb_is_loop_restart = False     # True when stop was a loop transition
 _pb_stop_time       = 0.0       # wall time when stop fired
 _pb_last_frame      = -1        # last known frame, for loop jump detection
 _pb_last_loop_time  = 0.0       # wall time of last loop restart (cooldown)
+
+# FFT timeline — stores snapshots of per-band FFT during batch processing
+# _fft_timeline[ch] = {
+#   'snapshots': list of (n_bands, n_bins) arrays,
+#   'fps': frames per snapshot,
+#   'start_frame': timeline frame the audio starts at,
+#   'sr': sample rate
+# }
+_fft_timeline = {}
+
+
 
 
 def _pb_get_device():
@@ -485,6 +550,108 @@ def _pb_channel_volume(channel_idx):
     return sum(s.volume for s in strips) / len(strips)
 
 
+def _pb_wire_rack_to_engine(channel_idx):
+    """Write rack compressor params into the C++ effect chain for a channel.
+    Called at play-start so the real-time DSP uses current knob values.
+    """
+    engine = get_engine()
+    if not engine:
+        return
+
+    scene = bpy.context.scene
+    if not scene:
+        return
+
+    racks  = getattr(scene, "pb_racks", [])
+    state  = engine.get_state()
+
+    # Clear all effect slots for this channel first
+    for slot in range(8):
+        try:
+            fx = state.get_effect_slot(channel_idx, slot)
+            fx.enabled = False
+            fx.type    = 0  # FX_NONE
+        except Exception:
+            pass
+
+    slot_idx = 0
+
+    print(f"[WIRE] ch{channel_idx+1} checking {len(racks)} racks")
+    for rack in racks:
+        if not rack.enabled:
+            continue
+
+        try:
+            from Racks import get_rack_channels
+            assigned = get_rack_channels(rack)
+        except Exception:
+            assigned = []
+
+        print(f"[WIRE]   rack type={rack.effect_type} assigned={assigned}")
+        if channel_idx not in assigned:
+            continue
+
+        etype = rack.effect_type
+
+        if etype == "COMP_SINGLE":
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_COMP_SINGLE
+                fx.enabled = True
+                fx.params  = [rack.p0, rack.p1, rack.p2, rack.p3,
+                              rack.p4, rack.p5,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                slot_idx  += 1
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} "
+                      f"COMP_SINGLE thr={rack.p0:.2f} ratio={rack.p1:.2f} "
+                      f"knee={rack.p5:.2f}")
+            except Exception as e:
+                print(f"[WIRE] COMP_SINGLE failed: {e}")
+
+        elif etype == "COMP_MULTI":
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_COMP_MULTI
+                fx.enabled = True
+                fx.params  = [rack.p0,  rack.p1,  rack.p2,  rack.p3,
+                              rack.p4,  rack.p5,  rack.p6,  rack.p7,
+                              rack.p8,  rack.p9,  rack.p10, rack.p11,
+                              rack.p12, rack.p13, rack.p14, rack.p15,
+                              rack.p16, rack.p17, rack.p18, rack.p19,
+                              rack.p20, rack.p21, rack.p22, rack.p23]
+                slot_idx  += 1
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} "
+                      f"COMP_MULTI band0 thr={rack.p0:.2f} ratio={rack.p4:.2f}")
+            except Exception as e:
+                print(f"[WIRE] COMP_MULTI failed: {e}")
+
+        if slot_idx >= 8:
+            break
+
+    if slot_idx > 0:
+        print(f"[WIRE] ch{channel_idx+1} wired {slot_idx} effects — compression ACTIVE")
+    else:
+        print(f"[WIRE] ch{channel_idx+1} no matching rack assigned — no compression")
+
+
+def _pb_reprocess_channel(channel_idx):
+    """Reprocess and restart a channel from current playhead position.
+    Called when rack settings change during playback."""
+    import bpy as _bpy
+    scene = _bpy.context.scene
+    if not scene: return
+    is_playing = getattr(_bpy.context.screen, 'is_animation_playing', False)
+    if not is_playing: return
+    fps = scene.render.fps / scene.render.fps_base
+    # Calculate current playback position from wall clock
+    elapsed     = _time.time() - _pb_start_wall
+    current_pos = _pb_start_frame / fps + elapsed
+    print(f"[ENGINE] ch{channel_idx+1} reprocessing at {current_pos:.2f}s")
+    _pb_start_channel(channel_idx, current_pos)
+
+
 def _pb_start_channel(channel_idx, position_seconds):
     """Start or restart a channel handle from position_seconds."""
     global _pb_channels
@@ -501,8 +668,179 @@ def _pb_start_channel(channel_idx, position_seconds):
         _pb_channels.pop(channel_idx, None)
         return
 
+    # Wire rack params into C++ effect chain before playback starts
+    _pb_wire_rack_to_engine(channel_idx)
+
+    # Batch DSP processing via C++ engine.
+    # Blender 4.5 does not expose ISound* pointers so we cannot intercept
+    # the audio thread. Instead we process offline:
+    #   1. Extract raw samples from the aud.Sound via .data()
+    #   2. Pass numpy array to C++ process_buffer() — full DSP runs here
+    #   3. Write processed samples to temp wav
+    #   4. Play the temp wav via aud.Device
+    engine  = get_engine()
+    pb_sound = sound   # fallback
+
+    if engine:
+        # Only process through DSP if a rack is actually assigned to this channel
+        has_rack = False
+        try:
+            from Racks import get_rack_channels
+            scene = bpy.context.scene
+            racks = getattr(scene, "pb_racks", []) if scene else []
+            for rack in racks:
+                if rack.enabled and channel_idx in get_rack_channels(rack):
+                    has_rack = True
+                    break
+        except Exception:
+            pass
+
+        if has_rack:
+            try:
+                import tempfile, os, aud as _aud
+                import numpy as np
+                import wave, struct
+
+                # Get specs
+                try:
+                    sr  = int(sound.specs[0])
+                    nch = int(sound.specs[1])
+                except Exception:
+                    sr, nch = 44100, 2
+
+                # Extract raw samples — returns (n_frames, n_channels) float32
+                samples = sound.data()
+                if samples is None or samples.size == 0:
+                    raise RuntimeError("sound.data() returned empty array")
+
+                if samples.ndim == 1:
+                    samples = samples.reshape(-1, 1)
+                samples = np.ascontiguousarray(samples, dtype=np.float32)
+
+                print(f"[ENGINE] ch{channel_idx+1} processing "
+                      f"{samples.shape[0]} frames × {samples.shape[1]}ch "
+                      f"@ {sr}Hz through C++ DSP")
+
+                # Run full C++ effect chain
+                processed = engine.process_buffer(channel_idx, samples, sr)
+
+                # Build FFT timeline from processed audio
+                # Compute FFT every ~100ms = one snapshot per 100ms of audio
+                # Stored as list of 4-band × 32-bin arrays for Racks.py to read
+                try:
+                    proc_for_fft = np.asarray(processed, dtype=np.float32)
+                    if proc_for_fft.ndim == 2:
+                        mono_fft = proc_for_fft[:, 0]  # use left channel
+                    else:
+                        mono_fft = proc_for_fft.flatten()
+
+                    snap_frames   = int(sr * 0.08)  # snapshot every 80ms
+                    n_snaps       = max(1, len(mono_fft) // snap_frames)
+                    fft_snaps     = []
+                    BINS_PER_BAND = 32  # 32 bins per band → 128 total
+                    TOTAL_BINS    = BINS_PER_BAND * 4
+
+                    # Crossover frequencies matching C++ Linkwitz-Riley
+                    # Low: 20-120Hz, L-Mid: 120-800Hz,
+                    # H-Mid: 800-5000Hz, High: 5000-20000Hz
+                    CROSSOVERS = [20, 120, 800, 5000, 20000]
+
+                    for snap_i in range(n_snaps):
+                        start = snap_i * snap_frames
+                        chunk = mono_fft[start:start + snap_frames]
+                        if len(chunk) < 128:
+                            break
+                        win   = np.hanning(len(chunk)).astype(np.float32)
+                        fft_c = np.abs(np.fft.rfft(chunk * win))
+                        fft_c = fft_c / (len(chunk) * 0.5 + 1e-9)
+
+                        # Frequency resolution per bin
+                        freq_res  = sr / len(chunk)
+                        n_bins_fft = len(fft_c)
+
+                        # Map each band's frequency range to FFT bins
+                        # using logarithmic spacing within each band
+                        band_snap_list = []
+                        for b in range(4):
+                            f_lo = CROSSOVERS[b]
+                            f_hi = CROSSOVERS[b + 1]
+                            # Log-spaced frequency points within this band
+                            freqs  = np.logspace(
+                                np.log10(max(f_lo, 1)),
+                                np.log10(f_hi),
+                                BINS_PER_BAND)
+                            # Map frequencies to FFT bin indices
+                            idxs   = np.clip(
+                                (freqs / freq_res).astype(int),
+                                0, n_bins_fft - 1)
+                            band_vals = fft_c[idxs]
+                            band_db   = np.clip(
+                                (20*np.log10(band_vals+1e-9)+80)/80,
+                                0.0, 1.0).astype(np.float32)
+                            band_snap_list.append(band_db)
+
+                        band_snap = np.stack(band_snap_list)
+                        fft_snaps.append(band_snap)
+
+                    # Stack into (n_snaps, 4, 32)
+                    fft_array = np.stack(fft_snaps)
+                    scene_fps = (bpy.context.scene.render.fps /
+                                 bpy.context.scene.render.fps_base
+                                 if bpy.context.scene else 24.0)
+                    _fft_timeline[channel_idx] = {
+                        'snapshots'  : fft_array,
+                        'snap_frames': snap_frames,
+                        'start_frame': position_seconds * scene_fps,
+                        'sr'         : sr,
+                        'fps'        : scene_fps,
+                    }
+                    print(f"[ENGINE] ch{channel_idx+1} FFT timeline: "
+                          f"{len(fft_snaps)} snapshots")
+                except Exception as fe:
+                    print(f"[ENGINE] FFT timeline failed: {fe}")
+
+                # Write processed wav using wave module
+                # (aud.Sound.buffer() not available in Blender 4.5)
+                tmp_path = os.path.join(tempfile.gettempdir(),
+                                        f"pb_proc_ch{channel_idx}.wav")
+
+                proc_np = np.asarray(processed, dtype=np.float32)
+                int16   = np.clip(proc_np, -1.0, 1.0)
+                int16   = (int16 * 32767).astype(np.int16)
+
+                with wave.open(tmp_path, 'wb') as wf:
+                    wf.setnchannels(nch)
+                    wf.setsampwidth(2)
+                    wf.setframerate(sr)
+                    wf.writeframes(int16.tobytes())
+
+                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                    pb_sound = _aud.Sound.file(tmp_path)
+                    # Verify compression actually changed the audio
+                    proc_np  = np.asarray(processed, dtype=np.float32)
+                    in_rms   = float(np.sqrt(np.mean(samples**2)))
+                    out_rms  = float(np.sqrt(np.mean(proc_np**2)))
+                    ratio_db = 20*np.log10(out_rms/(in_rms+1e-9))
+                    print(f"[ENGINE] ch{channel_idx+1} DSP done — "
+                          f"wav={os.path.getsize(tmp_path)//1024}KB | "
+                          f"in_rms={in_rms:.4f} out_rms={out_rms:.4f} "
+                          f"level_change={ratio_db:+.1f}dB — "
+                          f"{'COMPRESSION APPLIED' if abs(ratio_db) > 0.1 else 'NO CHANGE DETECTED'}")
+
+
+                else:
+                    raise RuntimeError("processed wav write failed")
+
+            except Exception as e:
+                print(f"[ENGINE] ch{channel_idx+1} DSP failed ({e}) — "
+                      f"playing unprocessed")
+                import traceback; traceback.print_exc()
+        else:
+            print(f"[ENGINE] ch{channel_idx+1} no rack assigned — "
+                  f"playing unprocessed")
+
     device = _pb_get_device()
-    handle = device.play(sound)
+    handle = device.play(pb_sound)
     handle.volume = _pb_channel_volume(channel_idx)
     # Position 0 because we already trimmed sound to start at position_seconds
     handle.position = 0.0
@@ -1074,7 +1412,7 @@ def _meter_timer():
             _engine_levels[i] = (rms if rms > _engine_levels[i]
                                   else max(0.0, _engine_levels[i] - decay))
 
-        # Mirror to C++ engine state
+        # Mirror meter levels to C++ engine state
         engine = get_engine()
         if engine:
             try:
@@ -1083,6 +1421,34 @@ def _meter_timer():
                 for i in range(min(MAX_CHANNELS, len(ml))):
                     ml[i] = _engine_levels[i]
                 s.meter_levels = ml
+
+                # Read GR levels back from C++ for rack display
+                # Racks.py reads _gr_levels to drive GR meters
+                try:
+                    from Racks import _gr_levels, get_rack_channels
+                    scene = bpy.context.scene
+                    racks = getattr(scene, "pb_racks", []) if scene else []
+                    for ri, rack in enumerate(racks):
+                        if not rack.enabled: continue
+                        assigned = get_rack_channels(rack)
+                        for ch in assigned:
+                            if ch < 0 or ch >= MAX_CHANNELS: continue
+                            try:
+                                gr_vals = s.get_gr_levels(ch)
+                                # For single band use band 0,
+                                # for multiband use max across bands
+                                if rack.effect_type == "COMP_SINGLE":
+                                    _gr_levels.setdefault(ri, {})[ch] = (
+                                        gr_vals[0] / 24.0 if gr_vals else 0.0)
+                                elif rack.effect_type == "COMP_MULTI":
+                                    for b in range(min(4, len(gr_vals))):
+                                        _gr_levels.setdefault(ri, {})[ch] = (
+                                            max(gr_vals) / 24.0)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
             except Exception: pass
 
         # Update rack LED states
@@ -1458,6 +1824,13 @@ def draw_callback_px(self, context):
 
     except Exception as e:
         print(f"DRAW ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        # Always reset GPU blend state to prevent glitched background
+        try:
+            gpu.state.blend_set("NONE")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1625,6 +1998,16 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                             old_v = getattr(rack, f'p{param_idx}', 0.0)
                             new_v = max(0.0, min(1.0, old_v + delta))
                             set_rack_param(rack, param_idx, new_v)
+                    # Reprocess audio with new settings
+                    if _pb_engine_active:
+                        try:
+                            from Racks import get_rack_channels
+                            assigned = get_rack_channels(rack)
+                            for ch in assigned:
+                                _pb_wire_rack_to_engine(ch)
+                                _pb_reprocess_channel(ch)
+                        except Exception as e:
+                            print(f"[WIRE] live update failed: {e}")
                     context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
 
