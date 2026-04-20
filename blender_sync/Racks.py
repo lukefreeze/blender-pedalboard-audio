@@ -27,12 +27,19 @@ _IS_PLAYING = False
 _gr_levels = {}
 
 # LED pulse state — toggled by meter timer for "actively compressing" blink
-_led_states = {}   # rack_idx -> bool
+_led_states      = {}   # rack_idx -> bool
+# _gr_smooth_state removed — GR meters now use real GR timeline
 
-# Popup state
+# Popup state — effect selector
 _popup_open     = False
 _popup_x        = 0.0
 _popup_y        = 0.0
+
+# Reorder dropdown state
+_reorder_open     = False   # whether the reorder dropdown is open
+_reorder_rack_idx = -1      # which rack's badge was clicked
+_reorder_x        = 0.0
+_reorder_y        = 0.0
 
 # ---------------------------------------------------------------------------
 # Rack dimensions (in unscaled pixels, multiplied by UI_SCALE at draw time)
@@ -408,77 +415,153 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
         gx = rx + (i/8)*rw
         _draw_rect(gx, ry, max(0.5, scale*0.5), rh, (0.1,0.1,0.1,1.0))
 
-    # Spectrum bars — use GR levels if available, else static preview
-    gr = _gr_levels.get(rack_idx, {})
+    # Spectrum bars — real FFT timeline data, synced to playhead
+    # Falls back to a static logarithmic preview when no data available
+    fft_flat = None
+    try:
+        from Loader import _fft_timeline
+        import bpy as _bpys
+        scene_s   = _bpys.context.scene
+        racks_s   = getattr(scene_s, "pb_racks", [])
+        if rack_idx < len(racks_s):
+            from Racks import get_rack_channels
+            assigned_s = get_rack_channels(racks_s[rack_idx])
+            if assigned_s:
+                ch_s = list(assigned_s)[0]
+                tl   = _fft_timeline.get(ch_s)
+                if tl is not None and len(tl['snapshots']) > 0:
+                    cur_f    = scene_s.frame_current if scene_s else 0
+                    snap_sec = tl['snap_frames'] / tl['sr']
+                    elap_sec = (cur_f - tl['start_frame']) / tl['fps']
+                    snap_idx = int(elap_sec / snap_sec)
+                    snap_idx = max(0, min(len(tl['snapshots'])-1, snap_idx))
+                    frame_d  = tl['snapshots'][snap_idx]  # (4, 32)
+                    # Flatten all 4 bands into one 128-bin array
+                    import numpy as _np
+                    fft_flat = _np.concatenate([frame_d[b] for b in range(4)])
+    except Exception:
+        fft_flat = None
+
     bar_w = (rw - 4*scale) / SPEC_BANDS
     for b in range(SPEC_BANDS):
-        # Static preview pattern (sine curve shaped for realism)
-        t        = b / SPEC_BANDS
-        h_frac   = (math.sin(t * math.pi) * 0.7 +
-                    math.sin(t * math.pi * 3) * 0.2 +
-                    0.1)
-        h_frac   = max(0.05, min(0.95, h_frac))
-        bar_h    = h_frac * rh
-        bx       = rx + 2*scale + b * bar_w
-
-        # Colour by frequency zone
-        if t < 0.3:
-            col = (0.0, 0.7, 0.45, 0.75)   # green — lows
-        elif t < 0.6:
-            col = (0.0, 0.85, 0.55, 0.85)  # bright green — mids
-        elif t < 0.8:
-            col = (0.9, 0.65, 0.0, 0.7)    # amber — upper mids
+        t = b / SPEC_BANDS
+        if fft_flat is not None:
+            # Map bar index to FFT bin (log scale)
+            import math as _mth
+            bin_idx = int(_mth.pow(len(fft_flat), t)) - 1
+            bin_idx = max(0, min(len(fft_flat)-1, bin_idx))
+            h_frac  = float(fft_flat[bin_idx])
         else:
-            col = (0.7, 0.35, 0.0, 0.5)    # orange — highs
+            # Static logarithmic preview
+            import math as _mth
+            h_frac = (_mth.sin(t * _mth.pi) * 0.7 +
+                      _mth.sin(t * _mth.pi * 3) * 0.2 + 0.1)
+        h_frac  = max(0.04, min(0.95, h_frac))
+        bar_h   = h_frac * rh
+        bx      = rx + 2*scale + b * bar_w
 
-        _draw_rect(bx, ry,
-                   max(bar_w - scale, 1.0), bar_h, col)
+        if t < 0.3:
+            col = (0.0, 0.7, 0.45, 0.75)
+        elif t < 0.6:
+            col = (0.0, 0.85, 0.55, 0.85)
+        elif t < 0.8:
+            col = (0.9, 0.65, 0.0, 0.7)
+        else:
+            col = (0.7, 0.35, 0.0, 0.5)
 
-    # GR curve — soft knee transfer function
+        _draw_rect(bx, ry, max(bar_w - scale, 1.0), bar_h, col)
+
+    # Frequency response curve — IK Quad Comp style
+    # Shows net dB effect at reference level (-18dB) across full frequency range.
+    # Curve sits at 0dB centre line, dips when compressing, rises when makeup gain applied.
     import math as _math
     scene = bpy.context.scene
     racks = getattr(scene, "pb_racks", [])
     if rack_idx < len(racks):
         rack = racks[rack_idx]
-        if rack.effect_type in ("COMP_SINGLE", "COMP_MULTI"):
+        if rack.effect_type == "COMP_SINGLE":
             thr_db  = -40.0 + rack.p0 * 40.0
             ratio   =  1.0  + rack.p1 * 19.0
-            # COMP_SINGLE: p5=knee, COMP_MULTI: p20=knee band0
-            if rack.effect_type == "COMP_SINGLE":
-                knee_db = 0.5 + rack.p5  * 23.5
+            knee_db =  0.5  + rack.p5 * 23.5
+            mkp_db  =         rack.p4 * 24.0   # makeup gain 0..24dB
+
+            REF_DB  = -18.0
+            half_k  = knee_db * 0.5
+            if REF_DB <= thr_db - half_k:
+                gr_db = 0.0
+            elif REF_DB <= thr_db + half_k and knee_db > 0:
+                x     = REF_DB - thr_db + half_k
+                gr_db = (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
             else:
-                knee_db = 0.5 + rack.p20 * 23.5
+                gr_db = (REF_DB - thr_db) * (1.0/ratio - 1.0)
 
+            net_db     = mkp_db + gr_db   # net: makeup lifts, GR dips
+
+            # Y axis: -12dB (bottom) to +12dB (top), 0dB at centre
+            zero_y     = ry + rh * 0.5
+            px_per_db  = (rh * 0.5) / 12.0
+            scale_px   = px_per_db
+
+            # Draw 0dB centre line
+            _draw_rect(rx, zero_y, rw, max(0.5, scale*0.5),
+                       (0.25, 0.25, 0.25, 0.7))
+
+            # Build smooth curve — flat with a gentle dip in the compression zone
+            # Use a bell-curve dip centred in the mid-frequency range
+            N = 120
             pts = []
-            steps = 128
-            for s in range(steps + 1):
-                t     = s / steps
-                in_db = -60.0 + t * 60.0
-                half_k = knee_db * 0.5
+            for s in range(N + 1):
+                t      = s / N
+                # Frequency weighting — compression affects mids most noticeably
+                # Bell curve peaks at t=0.5 (mid frequency), tapers at extremes
+                freq_w = _math.sin(t * _math.pi) ** 0.5
+                db_here = net_db * freq_w
+                db_here = max(-12.0, min(12.0, db_here))
+                px = rx + t * rw
+                py = zero_y - db_here * scale_px
+                py = max(ry + 2*scale, min(ry + rh - 2*scale, py))
+                pts.append((px, py))
 
-                # Soft knee transfer function
-                if in_db <= thr_db - half_k:
-                    out_db = in_db
-                elif in_db <= thr_db + half_k and knee_db > 0:
-                    x      = in_db - thr_db + half_k
-                    out_db = in_db + (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
-                else:
-                    out_db = thr_db + (in_db - thr_db) / ratio
+            # Fill between curve and 0dB line
+            for s in range(len(pts)-1):
+                px1, py1 = pts[s]
+                px2, py2 = pts[s+1]
+                y_top  = min(py1, zero_y)
+                y_bot  = max(py1, zero_y)
+                fill_h = y_bot - y_top
+                if fill_h > 0.5:
+                    _draw_rect(px1, y_top, max(px2-px1, 0.5), fill_h,
+                               (0.9, 0.2, 0.2, 0.15))
 
-                out_norm = (out_db + 60.0) / 60.0
-                pts.append((rx + t*rw, ry + out_norm*rh))
-
+            # Draw curve line
             if len(pts) >= 2:
-                for i in range(len(pts)-1):
-                    _draw_line(pts[i][0], pts[i][1],
-                               pts[i+1][0], pts[i+1][1],
-                               (0.9, 0.2, 0.2, 0.85), max(1.5, scale*1.5))
+                for s in range(len(pts)-1):
+                    _draw_line(pts[s][0], pts[s][1],
+                               pts[s+1][0], pts[s+1][1],
+                               (0.9, 0.25, 0.25, 0.9), max(1.5, scale*1.5))
 
-            # Threshold marker line
-            thr_norm = (thr_db + 60.0) / 60.0
-            thr_x    = rx + thr_norm * rw
-            _draw_line(thr_x, ry, thr_x, ry+rh,
-                       (0.6, 0.2, 0.2, 0.3), max(0.5, scale*0.5))
+            # Centre dot showing net effect
+            mid_pt  = pts[N//2]
+            _draw_circle(mid_pt[0], mid_pt[1], 4*scale, (0.9, 0.25, 0.25, 1.0))
+
+            # Label the net dB value
+            fs_lbl = max(1, int(8*scale))
+            lbl    = f"{net_db:+.1f}dB"
+            tw_lbl = _text_width(lbl, fs_lbl)
+            _draw_text(lbl, mid_pt[0] - tw_lbl/2,
+                       mid_pt[1] + 8*scale,
+                       fs_lbl, (0.9, 0.3, 0.3, 0.9))
+
+            # dB scale
+            fs_sc = max(1, int(7*scale))
+            for db_val, lbl_s in [(12,"+12"),(6,"+6"),(0,"0"),(-6,"-6"),(-12,"-12")]:
+                gy = zero_y - db_val * scale_px
+                if ry <= gy <= ry + rh:
+                    _draw_rect(rx, gy, rw, max(0.3, scale*0.3),
+                               (0.1, 0.1, 0.1, 1.0))
+                    tw_s = _text_width(lbl_s, fs_sc)
+                    _draw_text(lbl_s, rx - tw_s - 3*scale, gy - fs_sc*0.5,
+                               fs_sc, (0.25, 0.25, 0.25, 1.0))
 
     # Frequency labels
     freq_labels = [("20", 0.0), ("200", 0.22), ("1k", 0.44),
@@ -508,36 +591,77 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
 
 
 def _draw_gr_meters(rx, ry, rh, rack_idx, assigned_channels, scale):
-    """Draw one slim GR meter per assigned channel."""
+    """Draw one slim GR meter per assigned channel.
+    GR meter: 0dB at TOP, reduction fills downward from top.
+    Like a VU meter — full bar = heavy compression, empty = no compression.
+    """
     if not assigned_channels: return
     bar_w   = GR_BAR_W * scale
     spacing = GR_BAR_SPACING * scale
     fs      = max(1, int(7*scale))
 
-    for i, ch_idx in enumerate(assigned_channels[:6]):  # max 6 GR meters
+    for i, ch_idx in enumerate(assigned_channels[:6]):
         bx = rx + i * spacing
-        # Channel label
+        # Channel label below meter
         tw = _text_width(str(ch_idx+1), fs)
         _draw_text(str(ch_idx+1), bx + bar_w/2 - tw/2,
-                   ry + rh + 4*scale, fs, (0.4,0.4,0.4,1.0))
+                   ry - 12*scale, fs, (0.4,0.4,0.4,1.0))
         # Meter background
         _draw_rect(bx, ry, bar_w, rh, (0.06, 0.06, 0.06, 1.0))
-        # GR fill — green from bottom, red peak at top
-        gr_val = _gr_levels.get(rack_idx, {}).get(ch_idx, 0.0)
-        gr_val = max(0.0, min(1.0, gr_val))
-        fill_h = (1.0 - gr_val) * rh
-        _draw_rect(bx, ry + rh - fill_h, bar_w, fill_h,
-                   (0.0, 0.75, 0.45, 0.85))
-        # Peak marker
-        if gr_val > 0.05:
-            peak_y = ry + rh - fill_h - 2*scale
-            _draw_rect(bx, peak_y, bar_w, max(2.0, 2*scale),
-                       (1.0, 0.2, 0.2, 0.9))
-        # dB scale markers
+
+        # GR value: 0..24dB maps to 0..1 fill from top downward
+        gr_val  = _gr_levels.get(rack_idx, {}).get(ch_idx, 0.0)
+        gr_frac = max(0.0, min(1.0, gr_val / 24.0))
+        fill_h  = gr_frac * rh
+
+        # Fill from TOP downward — more compression = taller fill
+        if fill_h > 0.5:
+            # Colour: green for light GR, amber for medium, red for heavy
+            if gr_frac < 0.25:
+                gr_col = (0.1, 0.8, 0.45, 0.85)   # green — gentle
+            elif gr_frac < 0.6:
+                gr_col = (0.9, 0.65, 0.1, 0.85)   # amber — moderate
+            else:
+                gr_col = (0.9, 0.2, 0.2, 0.85)    # red — heavy
+            _draw_rect(bx, ry + rh - fill_h, bar_w, fill_h, gr_col)
+
+        # dB tick marks
         for db_t in [0.25, 0.5, 0.75]:
-            my = ry + db_t * rh
-            _draw_rect(bx + bar_w - 3*scale, my, 3*scale,
-                       max(0.5, scale*0.5), (0.2,0.2,0.2,1.0))
+            my = ry + rh - db_t * rh
+            _draw_rect(bx, my, bar_w, max(0.5, scale*0.5),
+                       (0.25, 0.25, 0.25, 1.0))
+
+        # 0dB label at top
+        _draw_text("0", bx + bar_w + 2*scale, ry + rh - 3*scale,
+                   fs, (0.3,0.3,0.3,1.0))
+
+        # "GR" label
+        _draw_text("GR", bx + bar_w/2 - _text_width("GR",fs)/2,
+                   ry + rh + 2*scale, fs, (0.3,0.3,0.3,1.0))
+
+
+def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
+    """Premier Pro style: green signal bar + red GR cap. All bands identical colour."""
+    _draw_rect(bx, by, bw, bh, (0.04, 0.04, 0.04, 1.0))
+    sig_frac = max(0.0, min(1.0, signal_norm))
+    sig_h    = sig_frac * bh
+    if sig_h > 0.5:
+        gr_frac = max(0.0, min(1.0, gr_db / 12.0))
+        gr_h    = gr_frac * sig_h
+        green_h = sig_h - gr_h
+        if green_h > 0.5:
+            _draw_rect(bx, by, bw, green_h, (0.05, 0.55, 0.25, 0.85))
+            if green_h > 3*scale:
+                _draw_rect(bx, by + green_h - 2*scale, bw, 2*scale,
+                           (0.1, 0.9, 0.4, 0.95))
+        if gr_h > 0.5:
+            _draw_rect(bx, by + green_h, bw, gr_h, (0.85, 0.15, 0.15, 0.9))
+            if gr_h > 2*scale:
+                _draw_rect(bx, by + green_h + gr_h - 2*scale, bw, 2*scale,
+                           (1.0, 0.35, 0.35, 1.0))
+    for t in [0.25, 0.5, 0.75]:
+        ty = by + t * bh
+        _draw_rect(bx, ty, bw, max(0.5, scale*0.5), (0.2, 0.2, 0.2, 1.0))
 
 
 def _draw_channel_buttons(rx, ry, rack, scale):
@@ -660,10 +784,13 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         _draw_text(label, spec_x - tw - 3*scale, ly - fs_db/2,
                    fs_db, (0.3,0.3,0.3,1.0))
 
-    # Get FFT data from timeline — real audio spectrum synced to playhead
+    # Clear bars when rack is bypassed; otherwise fetch from timeline
     fft_data = None
     gr_data  = [0.0, 0.0, 0.0, 0.0]
-    try:
+    if not rack.enabled:
+        pass
+    else:
+     try:
         from Loader import _fft_timeline
         import bpy as _bpy2
         assigned = get_rack_channels(rack)
@@ -683,7 +810,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
                 # snaps is (n_snaps, 4, 8) numpy array
                 frame_data  = snaps[snap_idx]  # shape (4, 8)
                 fft_data    = [frame_data[b].tolist() for b in range(4)]
-    except Exception as _fe:
+     except Exception as _fe:
         import traceback as _tb
         _tb.print_exc()
         fft_data = None
@@ -947,6 +1074,46 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
                    fdr_w, max(1.0, scale),
                    (min(1.0,col[0]*1.4), min(1.0,col[1]*1.4), min(1.0,col[2]*1.4), 1.0))
 
+        # GR meter — slim bar to the right of the gain fader
+        # Shows live gain reduction for this band, 0dB at top filling downward
+        gr_meter_w = 6*scale
+        gr_meter_x = fdr_x + fdr_w + 3*scale
+        gr_meter_y = fdr_y
+        gr_meter_h = fdr_h
+
+        # Read GR + signal — zero when rack is bypassed
+        gr_db_band = 0.0
+        sig_norm   = 0.0
+        if rack.enabled:
+            try:
+                from Loader import _gr_timeline, _fft_timeline
+                import bpy as _grbpy2
+                scene_gr2    = _grbpy2.context.scene
+                assigned_gr2 = get_rack_channels(rack)
+                if assigned_gr2 and scene_gr2:
+                    ch_gr2 = list(assigned_gr2)[0]
+                    cur_f2 = scene_gr2.frame_current
+                    tl_gr2 = _gr_timeline.get(ch_gr2)
+                    if tl_gr2 is not None and len(tl_gr2['snapshots']) > 0:
+                        snap_sec2 = tl_gr2['snap_frames'] / tl_gr2['sr']
+                        elap_sec2 = (cur_f2 - tl_gr2['start_frame']) / tl_gr2['fps']
+                        snap_idx2 = max(0, min(len(tl_gr2['snapshots'])-1,
+                                              int(elap_sec2 / snap_sec2)))
+                        gr_db_band = float(tl_gr2['snapshots'][snap_idx2][band])
+                    tl_fft2 = _fft_timeline.get(ch_gr2)
+                    if tl_fft2 is not None and len(tl_fft2['snapshots']) > 0:
+                        snap_sec3 = tl_fft2['snap_frames'] / tl_fft2['sr']
+                        elap_sec3 = (cur_f2 - tl_fft2['start_frame']) / tl_fft2['fps']
+                        snap_idx3 = max(0, min(len(tl_fft2['snapshots'])-1,
+                                              int(elap_sec3 / snap_sec3)))
+                        sig_norm  = float(tl_fft2['snapshots'][snap_idx3][band].mean())
+            except Exception:
+                pass
+
+        _draw_gr_meter_band(gr_meter_x, gr_meter_y, gr_meter_w,
+                            gr_meter_h, gr_db_band, scale,
+                            signal_norm=sig_norm)
+
         # Thin divider after fader strip
         div_x = bx + fader_strip_w
         _draw_rect(div_x, ctrl_y, max(0.5,scale*0.5), ctrl_h, (0.18,0.18,0.18,1.0))
@@ -1051,18 +1218,40 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     ename  = enames.get(etype, etype)
     fs_name = max(1, int(11*scale))
 
-    # Rack number — glowing blue, no box, clearly a label not a button
+    # Rack number badge — clickable button to reorder racks
     badge_label = str(rack_idx + 1)
     badge_fs    = max(1, int(13*scale))
-    badge_x     = rx + 42*scale
-    badge_y     = ry + rh - 22*scale
-    _draw_text(badge_label, badge_x, badge_y,
-               badge_fs, (0.35, 0.7, 1.0, 1.0))
-    badge_w     = _text_width(badge_label, badge_fs) + 6*scale
+    badge_x     = rx + 6*scale
+    badge_y     = ry + rh - 28*scale
+    badge_w     = max(22*scale, _text_width(badge_label, badge_fs) + 12*scale)
+    badge_h     = 20*scale
 
-    # Effect name — shifted right to clear the number
+    # Badge background — highlight if reorder dropdown is open for this rack
+    badge_open  = _reorder_open and _reorder_rack_idx == rack_idx
+    badge_bg    = (0.2, 0.45, 0.75, 1.0) if badge_open else (0.12, 0.25, 0.45, 1.0)
+    _draw_rect(badge_x, badge_y, badge_w, badge_h, badge_bg)
+    # Border
+    bverts = [(badge_x, badge_y), (badge_x+badge_w, badge_y),
+              (badge_x+badge_w, badge_y+badge_h),
+              (badge_x, badge_y+badge_h), (badge_x, badge_y)]
+    bb2 = batch_for_shader(shader, "LINE_STRIP", {"pos": bverts})
+    shader.bind()
+    shader.uniform_float("color", (0.35, 0.7, 1.0, 0.7))
+    bb2.draw(shader)
+    # Number text centred in badge
+    tw_b = _text_width(badge_label, badge_fs)
+    _draw_text(badge_label, badge_x + badge_w/2 - tw_b/2,
+               badge_y + badge_h/2 - badge_fs/2,
+               badge_fs, (0.35, 0.7, 1.0, 1.0))
+    # Small dropdown arrow ▾
+    arr_fs = max(1, int(8*scale))
+    _draw_text("▾", badge_x + badge_w - 10*scale,
+               badge_y + 2*scale, arr_fs, (0.35, 0.7, 1.0, 0.8))
+    badge_w = badge_w + 6*scale  # offset for effect name
+
+    # Effect name — shifted right to clear the badge
     _draw_text(ename.upper(),
-               rx + 42*scale + badge_w,
+               badge_x + badge_w,
                ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
 
     # --- PRESET SELECTOR ---
@@ -1473,6 +1662,59 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     if _popup_open:
         _draw_add_popup(_popup_x, _popup_y, ui_scale)
 
+    # Reorder dropdown (drawn on top of everything)
+    if _reorder_open and _reorder_rack_idx >= 0:
+        import bpy as _bpy_ro
+        scene_ro = _bpy_ro.context.scene
+        racks_ro = getattr(scene_ro, "pb_racks", [])
+        n_racks  = len(racks_ro)
+        if n_racks > 1:
+            row_h = 22 * ui_scale
+            pad   = 6  * ui_scale
+            dw    = 100 * ui_scale
+            dh    = row_h * (n_racks + 1) + pad * 2  # +1 for title row
+
+            # Anchor below the badge that was clicked
+            dx = _reorder_x
+            dy = _reorder_y - dh
+
+            shader2 = gpu.shader.from_builtin("UNIFORM_COLOR")
+
+            # Shadow
+            _draw_rect(dx+3*ui_scale, dy-3*ui_scale, dw, dh,
+                       (0.0, 0.0, 0.0, 0.5))
+            # Background
+            _draw_rect(dx, dy, dw, dh, (0.13, 0.13, 0.13, 0.97))
+            # Border
+            bv = [(dx,dy),(dx+dw,dy),(dx+dw,dy+dh),
+                  (dx,dy+dh),(dx,dy)]
+            bb = batch_for_shader(shader2, "LINE_STRIP", {"pos": bv})
+            shader2.bind()
+            shader2.uniform_float("color", (0.35, 0.7, 1.0, 0.6))
+            bb.draw(shader2)
+
+            # Title row
+            fs_t = max(1, int(8*ui_scale))
+            _draw_rect(dx, dy+dh-row_h, dw, row_h, (0.1, 0.2, 0.35, 1.0))
+            _draw_text("MOVE TO POSITION",
+                       dx + pad, dy + dh - row_h + row_h*0.25,
+                       fs_t, (0.4, 0.7, 1.0, 0.9))
+
+            # One row per position
+            fs_r = max(1, int(11*ui_scale))
+            for pos in range(n_racks):
+                row_y   = dy + dh - row_h*(pos + 2)
+                is_cur  = (pos == _reorder_rack_idx)
+                if is_cur:
+                    _draw_rect(dx + pad*0.5, row_y,
+                               dw - pad, row_h,
+                               (0.2, 0.45, 0.75, 0.35))
+                lbl = f"  {pos + 1}  {'←' if is_cur else ''}"
+                col = (0.35, 0.7, 1.0, 1.0) if is_cur else (0.75, 0.75, 0.75, 1.0)
+                _draw_text(lbl, dx + pad,
+                           row_y + row_h * 0.2,
+                           fs_r, col)
+
 
 # ---------------------------------------------------------------------------
 # Hit testing — returns (rack_idx, zone, sub_idx) or None
@@ -1619,6 +1861,26 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     if not scene: return None
     racks = getattr(scene, "pb_racks", [])
 
+    # Reorder dropdown check — must happen before everything else
+    # since the dropdown floats on top
+    if _reorder_open and _reorder_rack_idx >= 0 and len(racks) > 1:
+        row_h = 22 * ui_scale
+        pad   = 6  * ui_scale
+        dw    = 100 * ui_scale
+        dh    = row_h * (len(racks) + 1) + pad * 2
+        dx    = _reorder_x
+        dy    = _reorder_y - dh
+        if dx <= rx <= dx+dw and dy <= ry <= dy+dh:
+            for pos in range(len(racks)):
+                row_y = dy + dh - row_h*(pos + 2)
+                if row_y <= ry <= row_y + row_h:
+                    return {'zone': 'reorder_select',
+                            'rack_idx': _reorder_rack_idx,
+                            'target_pos': pos}
+            return {'zone': 'reorder_dismiss'}
+        else:
+            return {'zone': 'reorder_dismiss'}
+
     base_y       = region_height - 150*ui_scale - scroll_y
     try:
         from Loader import _send_section_height
@@ -1676,6 +1938,15 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             del_y = rack_y + rh - 27*ui_scale
             if del_x <= rx <= del_x+18*ui_scale and del_y <= ry <= del_y+16*ui_scale:
                 return {'zone': 'delete_rack', 'rack_idx': i}
+
+            # Rack number badge — reorder dropdown trigger
+            badge_x2 = rack_x + 6*ui_scale
+            badge_y2 = rack_y + rh - 28*ui_scale
+            badge_w2 = 38*ui_scale   # matches draw width
+            badge_h2 = 20*ui_scale
+            if badge_x2 <= rx <= badge_x2+badge_w2 and                badge_y2 <= ry <= badge_y2+badge_h2:
+                return {'zone': 'rack_badge', 'rack_idx': i,
+                        'bx': badge_x2, 'by': badge_y2+badge_h2}
 
             # ON/OFF button (expanded: shifted left of delete)
             on_x = rack_x + rw - 68*ui_scale
@@ -1786,6 +2057,7 @@ def _trigger_reprocess(rack_idx, rack, context):
 def handle_click(hit, context):
     """Process a hit_test result. Returns True if redraw needed."""
     global _popup_open, _popup_x, _popup_y
+    global _reorder_open, _reorder_rack_idx, _reorder_x, _reorder_y
 
     if hit is None:
         if _popup_open:
@@ -1844,6 +2116,67 @@ def handle_click(hit, context):
             state = 'ON' if racks[i].enabled else 'BYPASSED'
             print(f"[RACKS] rack {i} {state} — reprocessing")
             _trigger_reprocess(i, racks[i], context)
+        return True
+
+    if zone == 'rack_badge':
+        i = hit['rack_idx']
+        if _reorder_open and _reorder_rack_idx == i:
+            # Already open for this rack — close it
+            _reorder_open = False
+            _reorder_rack_idx = -1
+        else:
+            _reorder_open     = True
+            _reorder_rack_idx = i
+            _reorder_x        = hit['bx']
+            _reorder_y        = hit['by']
+        return True
+
+    if zone == 'reorder_dismiss':
+        _reorder_open     = False
+        _reorder_rack_idx = -1
+        return True
+
+    if zone == 'reorder_select':
+        _reorder_open = False
+        i          = hit['rack_idx']
+        target_pos = hit['target_pos']
+        racks      = getattr(context.scene, "pb_racks", [])
+        if i != target_pos and 0 <= i < len(racks) and 0 <= target_pos < len(racks):
+            # Build reordered list by moving rack i to target_pos
+            # Remove from current position and insert at target
+            indices = list(range(len(racks)))
+            indices.pop(i)
+            indices.insert(target_pos, i)
+
+            # Snapshot all rack data before modifying
+            def snap(r):
+                return {
+                    'effect_type': r.effect_type,
+                    'enabled':     r.enabled,
+                    'collapsed':   r.collapsed,
+                    'preset_idx':  r.preset_idx,
+                    'params': {f'p{j}': getattr(r, f'p{j}', 0.0)
+                               for j in range(24)},
+                    'channels': {f'ch{j}': getattr(r, f'ch{j}', False)
+                                 for j in range(9)},
+                }
+            snapshots = [snap(racks[k]) for k in range(len(racks))]
+
+            # Write reordered data back
+            for new_i, old_i in enumerate(indices):
+                r  = racks[new_i]
+                s  = snapshots[old_i]
+                r.effect_type = s['effect_type']
+                r.enabled     = s['enabled']
+                r.collapsed   = s['collapsed']
+                r.preset_idx  = s['preset_idx']
+                for attr, val in s['params'].items():
+                    setattr(r, attr, val)
+                for attr, val in s['channels'].items():
+                    setattr(r, attr, val)
+
+            _reorder_rack_idx = -1
+            print(f"[RACKS] rack reordered: was {i+1} → now position {target_pos+1}")
         return True
 
     if zone == 'preset_left':

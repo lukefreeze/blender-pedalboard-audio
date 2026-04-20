@@ -281,6 +281,8 @@ _pb_is_loop_restart = False     # True when stop was a loop transition
 _pb_stop_time       = 0.0       # wall time when stop fired
 _pb_last_frame      = -1        # last known frame, for loop jump detection
 _pb_last_loop_time  = 0.0       # wall time of last loop restart (cooldown)
+_pb_proc_wav_cache  = {}        # channel_idx -> last processed wav path (for instant loop restart)
+_pb_full_wav_cache  = {}        # channel_idx -> full-track wav from frame_start (clean loop replay)
 
 # FFT timeline — stores snapshots of per-band FFT during batch processing
 # _fft_timeline[ch] = {
@@ -289,7 +291,10 @@ _pb_last_loop_time  = 0.0       # wall time of last loop restart (cooldown)
 #   'start_frame': timeline frame the audio starts at,
 #   'sr': sample rate
 # }
-_fft_timeline = {}
+_fft_timeline      = {}   # trimmed — from position_seconds to end
+_gr_timeline       = {}   # trimmed — from position_seconds to end
+_fft_timeline_full = {}   # full track — always from seq frame_start
+_gr_timeline_full  = {}   # full track — always from seq frame_start
 
 
 
@@ -645,11 +650,114 @@ def _pb_reprocess_channel(channel_idx):
     is_playing = getattr(_bpy.context.screen, 'is_animation_playing', False)
     if not is_playing: return
     fps = scene.render.fps / scene.render.fps_base
-    # Calculate current playback position from wall clock
-    elapsed     = _time.time() - _pb_start_wall
-    current_pos = _pb_start_frame / fps + elapsed
-    print(f"[ENGINE] ch{channel_idx+1} reprocessing at {current_pos:.2f}s")
+
+    # Use scene.frame_current for position — more reliable than wall clock
+    # which drifts after loops and repeated reprocesses
+    seq_start_s = ((scene.frame_preview_start if scene.use_preview_range
+                    else scene.frame_start) / fps)
+    seq_end_s   = ((scene.frame_preview_end   if scene.use_preview_range
+                    else scene.frame_end)   / fps)
+    current_pos = max(seq_start_s,
+                      min(seq_end_s - 0.1,
+                          scene.frame_current / fps))
+
+    print(f"[ENGINE] ch{channel_idx+1} reprocessing at {current_pos:.2f}s "
+          f"(frame {scene.frame_current}, "
+          f"seq {seq_start_s:.1f}s→{seq_end_s:.1f}s)")
+
+    # Sanity check — if current_pos is past end, snap to start
+    if current_pos >= seq_end_s - 0.5:
+        current_pos = seq_start_s
+        print(f"[ENGINE] ch{channel_idx+1} position past end, snapping to start")
+
     _pb_start_channel(channel_idx, current_pos)
+
+
+def _build_timelines(channel_idx, proc_np, sr, scene_fps,
+                     position_seconds, full_track=False):
+    """Build FFT and GR timelines from a processed numpy array.
+    Called for both trimmed (normal play) and full-track (loop cache) audio.
+    full_track=True stores into _fft_timeline_full/_gr_timeline_full.
+    """
+    import numpy as _np2
+    snap_frames   = int(sr * 0.08)
+    BINS_PER_BAND = 32
+    TOTAL_BINS    = BINS_PER_BAND * 4
+    CROSSOVERS    = [20, 120, 800, 5000, 20000]
+
+    mono = proc_np[:, 0] if proc_np.ndim == 2 else proc_np.flatten()
+    n_snaps = max(1, len(mono) // snap_frames)
+
+    fft_snaps = []
+    gr_snaps  = []
+
+    for snap_i in range(n_snaps):
+        start  = snap_i * snap_frames
+        chunk  = mono[start:start + snap_frames]
+        if len(chunk) < 128:
+            break
+        win    = _np2.hanning(len(chunk)).astype(_np2.float32)
+        fft_c  = _np2.abs(_np2.fft.rfft(chunk * win))
+        fft_c /= (len(chunk) * 0.5 + 1e-9)
+        freq_res = sr / len(chunk)
+        n_fft    = len(fft_c)
+
+        # FFT bins per band
+        band_fft = []
+        for b in range(4):
+            freqs = _np2.logspace(
+                _np2.log10(max(CROSSOVERS[b], 1)),
+                _np2.log10(CROSSOVERS[b+1]), BINS_PER_BAND)
+            idxs  = _np2.clip((freqs / freq_res).astype(int), 0, n_fft-1)
+            vals  = fft_c[idxs]
+            band_fft.append(_np2.clip(
+                (20*_np2.log10(vals+1e-9)+80)/80, 0.0, 1.0
+            ).astype(_np2.float32))
+        fft_snaps.append(_np2.stack(band_fft))
+
+        # GR per band
+        gr_snap = _np2.zeros(4, dtype=_np2.float32)
+        # (GR computation is lightweight — just use FFT energy vs threshold)
+        for b in range(4):
+            f_lo   = CROSSOVERS[b]
+            f_hi   = CROSSOVERS[b+1]
+            bin_lo = max(0, int(f_lo / freq_res))
+            bin_hi = min(n_fft-1, int(f_hi / freq_res))
+            if bin_hi > bin_lo:
+                rms = float(_np2.sqrt(_np2.mean(fft_c[bin_lo:bin_hi]**2)))
+                in_db = 20.0*_np2.log10(rms) if rms > 1e-9 else -80.0
+            else:
+                in_db = -80.0
+            gr_snap[b] = in_db  # store energy for now — GR computed in Racks
+        gr_snaps.append(gr_snap)
+
+    if not fft_snaps:
+        return
+
+    fft_arr = _np2.stack(fft_snaps)
+    gr_arr  = _np2.stack(gr_snaps)
+
+    tl = {
+        'snapshots'  : fft_arr,
+        'snap_frames': snap_frames,
+        'start_frame': position_seconds * scene_fps,
+        'sr'         : sr,
+        'fps'        : scene_fps,
+    }
+    gr_tl = {
+        'snapshots'  : gr_arr,
+        'snap_frames': snap_frames,
+        'start_frame': position_seconds * scene_fps,
+        'sr'         : sr,
+        'fps'        : scene_fps,
+    }
+
+    if full_track:
+        _fft_timeline_full[channel_idx] = tl
+        _gr_timeline_full[channel_idx]  = gr_tl
+    else:
+        _fft_timeline[channel_idx] = tl
+        _gr_timeline[channel_idx]  = gr_tl
 
 
 def _pb_start_channel(channel_idx, position_seconds):
@@ -657,14 +765,15 @@ def _pb_start_channel(channel_idx, position_seconds):
     global _pb_channels
     import aud
 
-    # Stop existing handle if any
+    # Keep existing handle alive until new sound is ready — prevents audio gap
     existing = _pb_channels.get(channel_idx)
-    if existing:
-        try: existing['handle'].stop()
-        except Exception: pass
 
     sound, base_vol = _pb_build_channel_sound(channel_idx, position_seconds)
     if sound is None:
+        # Nothing to play — stop existing and clear
+        if existing:
+            try: existing['handle'].stop()
+            except Exception: pass
         _pb_channels.pop(channel_idx, None)
         return
 
@@ -787,10 +896,18 @@ def _pb_start_channel(channel_idx, position_seconds):
                     scene_fps = (bpy.context.scene.render.fps /
                                  bpy.context.scene.render.fps_base
                                  if bpy.context.scene else 24.0)
+                    # start_frame = where the audio starts in the timeline
+                    # The bars index from this point so they sync correctly
+                    # on loop regardless of where play was pressed
+                    _scene_start = ((bpy.context.scene.frame_preview_start
+                                     if bpy.context.scene.use_preview_range
+                                     else bpy.context.scene.frame_start)
+                                    if bpy.context.scene else 1)
                     _fft_timeline[channel_idx] = {
                         'snapshots'  : fft_array,
                         'snap_frames': snap_frames,
                         'start_frame': position_seconds * scene_fps,
+                        'seq_start'  : _scene_start,
                         'sr'         : sr,
                         'fps'        : scene_fps,
                     }
@@ -798,6 +915,108 @@ def _pb_start_channel(channel_idx, position_seconds):
                           f"{len(fft_snaps)} snapshots")
                 except Exception as fe:
                     print(f"[ENGINE] FFT timeline failed: {fe}")
+
+                # Build GR timeline — real gain reduction per band per 80ms snapshot.
+                # Uses the same compressor math as the C++ soft knee algorithm.
+                # This drives the GR meters in the rack UI with accurate values.
+                try:
+                    # Get rack params for this channel to compute GR
+                    from Racks import get_rack_channels as _get_rack_ch
+                    scene_gr2 = bpy.context.scene
+                    racks_gr  = getattr(scene_gr2, "pb_racks", []) if scene_gr2 else []
+                    rack_gr   = None
+                    for _r in racks_gr:
+                        if _r.enabled and channel_idx in _get_rack_ch(_r):
+                            rack_gr = _r
+                            break
+
+                    if rack_gr is not None and rack_gr.effect_type == "COMP_MULTI":
+                        # Read per-band compressor params
+                        band_params = []
+                        for _b in range(4):
+                            thr_db  = -40.0 + getattr(rack_gr, f'p{_b}', 0.45)  * 40.0
+                            ratio   =  1.0  + getattr(rack_gr, f'p{_b+4}', 0.05) * 19.0
+                            knee_db =  0.5  + getattr(rack_gr, f'p{_b+20}', 0.14)* 23.5
+                            band_params.append((thr_db, ratio, knee_db))
+
+                        # Use the processed audio split into bands
+                        # We already have proc_for_fft from the FFT loop above
+                        # Recompute from processed samples
+                        proc_gr  = np.asarray(processed, dtype=np.float32)
+                        if proc_gr.ndim == 2:
+                            mono_gr = proc_gr[:, 0]
+                        else:
+                            mono_gr = proc_gr.flatten()
+
+                        gr_snaps     = []
+                        snap_frames2 = int(sr * 0.08)
+                        n_snaps2     = max(1, len(mono_gr) // snap_frames2)
+                        CROSSOVERS2  = [20, 120, 800, 5000, 20000]
+
+                        for snap_i2 in range(n_snaps2):
+                            start2 = snap_i2 * snap_frames2
+                            chunk2 = mono_gr[start2:start2 + snap_frames2]
+                            if len(chunk2) < 64:
+                                break
+
+                            # RMS per band for this chunk
+                            freq_res2   = sr / len(chunk2)
+                            fft_c2      = np.abs(np.fft.rfft(
+                                chunk2 * np.hanning(len(chunk2))))
+                            fft_c2      = fft_c2 / (len(chunk2) * 0.5 + 1e-9)
+
+                            gr_band_snap = np.zeros(4, dtype=np.float32)
+                            for _b in range(4):
+                                f_lo = CROSSOVERS2[_b]
+                                f_hi = CROSSOVERS2[_b + 1]
+                                bin_lo = max(0, int(f_lo / freq_res2))
+                                bin_hi = min(len(fft_c2)-1, int(f_hi / freq_res2))
+                                if bin_hi > bin_lo:
+                                    band_rms = float(np.sqrt(
+                                        np.mean(fft_c2[bin_lo:bin_hi]**2)))
+                                    # Convert to dB
+                                    if band_rms > 1e-9:
+                                        in_db = 20.0 * np.log10(band_rms)
+                                    else:
+                                        in_db = -80.0
+
+                                    # Soft knee GR
+                                    thr_db, ratio, knee_db = band_params[_b]
+                                    half_k = knee_db * 0.5
+                                    if in_db <= thr_db - half_k:
+                                        gr = 0.0
+                                    elif in_db <= thr_db + half_k and knee_db > 0:
+                                        x  = in_db - thr_db + half_k
+                                        gr = abs((1.0/ratio - 1.0) * (x*x)
+                                                 / (2.0*knee_db))
+                                    else:
+                                        gr = abs((in_db - thr_db) * (1.0/ratio - 1.0))
+
+                                    gr_band_snap[_b] = min(24.0, gr)
+
+                            gr_snaps.append(gr_band_snap)
+
+                        if gr_snaps:
+                            gr_array = np.stack(gr_snaps)  # (n_snaps, 4)
+                            _gr_timeline[channel_idx] = {
+                                'snapshots'  : gr_array,
+                                'snap_frames': snap_frames2,
+                                'start_frame': position_seconds * scene_fps,
+                                'seq_start'  : _scene_start,
+                                'sr'         : sr,
+                                'fps'        : scene_fps,
+                            }
+                            # Debug: print peak GR per band across whole timeline
+                            peak_gr = gr_array.max(axis=0)
+                            print(f"[ENGINE] ch{channel_idx+1} GR timeline: "
+                                  f"{len(gr_snaps)} snapshots | "
+                                  f"peak GR: "
+                                  f"Low={peak_gr[0]:.1f}dB "
+                                  f"LMid={peak_gr[1]:.1f}dB "
+                                  f"HMid={peak_gr[2]:.1f}dB "
+                                  f"High={peak_gr[3]:.1f}dB")
+                except Exception as gre:
+                    print(f"[ENGINE] GR timeline failed: {gre}")
 
                 # Write processed wav using wave module
                 # (aud.Sound.buffer() not available in Blender 4.5)
@@ -816,6 +1035,71 @@ def _pb_start_channel(channel_idx, position_seconds):
 
                 if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
                     pb_sound = _aud.Sound.file(tmp_path)
+                    _pb_proc_wav_cache[channel_idx] = tmp_path  # cache for loop restart
+
+                    # Build full-track wav for clean loop replay.
+                    # Only needed when play started mid-sequence.
+                    try:
+                        scene_ft = bpy.context.scene
+                        fps_ft   = scene_fps
+                        start_s  = ((scene_ft.frame_preview_start
+                                     if scene_ft.use_preview_range
+                                     else scene_ft.frame_start)
+                                    / fps_ft) if scene_ft else 0.0
+                        if position_seconds > start_s + 0.1:
+                            # Mid-track start — build full-track version
+                            snd_ft, _ = _pb_build_channel_sound(
+                                channel_idx, start_s)
+                            if snd_ft is not None:
+                                samp_ft = snd_ft.data()
+                                if samp_ft is not None and samp_ft.size > 0:
+                                    if samp_ft.ndim == 1:
+                                        samp_ft = samp_ft.reshape(-1, 1)
+                                    samp_ft = np.ascontiguousarray(
+                                        samp_ft, dtype=np.float32)
+                                    proc_ft = engine.process_buffer(
+                                        channel_idx, samp_ft, sr)
+                                    ft_path = os.path.join(
+                                        tempfile.gettempdir(),
+                                        f"pb_full_ch{channel_idx}.wav")
+                                    ft_np  = np.asarray(proc_ft, dtype=np.float32)
+                                    ft_i16 = (np.clip(ft_np,-1.0,1.0)*32767
+                                              ).astype(np.int16)
+                                    with wave.open(ft_path, 'wb') as wff:
+                                        wff.setnchannels(nch)
+                                        wff.setsampwidth(2)
+                                        wff.setframerate(sr)
+                                        wff.writeframes(ft_i16.tobytes())
+                                    if os.path.getsize(ft_path) > 0:
+                                        _pb_full_wav_cache[channel_idx] = ft_path
+                                        print(f"[ENGINE] ch{channel_idx+1} "
+                                              f"full-track cached "
+                                              f"({os.path.getsize(ft_path)//1024}KB)")
+
+                                        # Build full-track FFT + GR timelines
+                                        # These are what get used after a loop
+                                        try:
+                                            _build_timelines(
+                                                channel_idx,
+                                                np.asarray(proc_ft, dtype=np.float32),
+                                                sr, scene_fps, start_s,
+                                                full_track=True)
+                                        except Exception as _tle:
+                                            # Non-fatal — bars use trimmed timeline on loop
+                                            pass
+                        else:
+                            # Started from beginning — trimmed IS the full track
+                            _pb_full_wav_cache[channel_idx] = tmp_path
+                            print(f"[ENGINE] ch{channel_idx+1} "
+                                  f"started at beginning — trimmed = full-track")
+                            # Trimmed timelines are already correct for full track
+                            _fft_timeline_full[channel_idx] = _fft_timeline.get(channel_idx)
+                            _gr_timeline_full[channel_idx]  = _gr_timeline.get(channel_idx)
+                    except Exception as _fte:
+                        # Non-fatal — fall back to trimmed wav on loop
+                        _pb_full_wav_cache[channel_idx] = tmp_path
+                        print(f"[ENGINE] ch{channel_idx+1} full-track build failed "
+                              f"({_fte}) — loop will use trimmed")
                     # Verify compression actually changed the audio
                     proc_np  = np.asarray(processed, dtype=np.float32)
                     in_rms   = float(np.sqrt(np.mean(samples**2)))
@@ -839,6 +1123,11 @@ def _pb_start_channel(channel_idx, position_seconds):
             print(f"[ENGINE] ch{channel_idx+1} no rack assigned — "
                   f"playing unprocessed")
 
+    # Stop old handle now — new sound plays immediately after (minimal gap)
+    if existing:
+        try: existing['handle'].stop()
+        except Exception: pass
+
     device = _pb_get_device()
     handle = device.play(pb_sound)
     handle.volume = _pb_channel_volume(channel_idx)
@@ -850,6 +1139,7 @@ def _pb_start_channel(channel_idx, position_seconds):
         'start_wall'  : _time.time(),
         'start_pos'   : position_seconds,
         'channel_idx' : channel_idx,
+        'proc_wav'    : _pb_proc_wav_cache.get(channel_idx),
     }
     print(f"[ENGINE] ch{channel_idx+1} started at {round(position_seconds,2)}s "
           f"vol={round(handle.volume,3)}")
@@ -1055,14 +1345,75 @@ def _pb_loop_detect(scene, depsgraph=None):
         print(f"[ENGINE] loop jump detected: {_pb_last_frame}→{current}, "
               f"restarting from frame {effective_start}")
         _pb_last_loop_time = _time.time()
+
+        # CRITICAL: reset position tracking globals BEFORE replaying cache
+        # so that _pb_reprocess_channel uses correct position after loop
+        fps_loop        = scene.render.fps / scene.render.fps_base
+        _pb_start_frame = effective_start
+        _pb_start_wall  = _time.time()
+
+        # On loop, swap to full-track timelines so bars play from frame 1.
+        # Full-track timelines cover the entire sequence from seq start.
+        _loop_start_s = effective_start / fps_loop
+        for _ch_k in list(set(list(_fft_timeline_full.keys()) +
+                               list(_fft_timeline.keys()))):
+            _ft_fft = _fft_timeline_full.get(_ch_k)
+            _ft_gr  = _gr_timeline_full.get(_ch_k)
+            if _ft_fft is not None:
+                _ft_fft['start_frame'] = _loop_start_s * _ft_fft['fps']
+                _fft_timeline[_ch_k]   = _ft_fft
+            elif _fft_timeline.get(_ch_k) is not None:
+                _fft_timeline[_ch_k]['start_frame'] = (
+                    _loop_start_s * _fft_timeline[_ch_k]['fps'])
+            if _ft_gr is not None:
+                _ft_gr['start_frame']  = _loop_start_s * _ft_gr['fps']
+                _gr_timeline[_ch_k]    = _ft_gr
+            elif _gr_timeline.get(_ch_k) is not None:
+                _gr_timeline[_ch_k]['start_frame'] = (
+                    _loop_start_s * _gr_timeline[_ch_k]['fps'])
+
         # Stop existing handles
         channels_snapshot = dict(_pb_channels)
         _pb_channels.clear()
-        for ch in channels_snapshot.values():
-            try: ch['handle'].stop()
+        for ch_data in channels_snapshot.values():
+            try: ch_data['handle'].stop()
             except Exception: pass
-        # Restart from loop start
-        _pb_start_all_from_frame(scene, effective_start)
+
+        # Replay full-track cached wav (from frame_start) for clean loop.
+        # Falls back to trimmed cache if full-track not available.
+        device = _pb_get_device()
+        all_ch = set(list(_pb_full_wav_cache.keys()) +
+                     list(_pb_proc_wav_cache.keys()))
+        for ch_idx in all_ch:
+            full_wav    = _pb_full_wav_cache.get(ch_idx)
+            trimmed_wav = _pb_proc_wav_cache.get(ch_idx)
+            replay_wav  = (full_wav    if full_wav    and os.path.exists(full_wav)
+                           else trimmed_wav if trimmed_wav and os.path.exists(trimmed_wav)
+                           else None)
+            try:
+                if replay_wav:
+                    import aud as _aud_loop
+                    snd = _aud_loop.Sound.file(replay_wav)
+                    h   = device.play(snd)
+                    h.volume = _pb_channel_volume(ch_idx)
+                    h.position = 0.0
+                    _pb_channels[ch_idx] = {
+                        'handle'     : h,
+                        'start_wall' : _pb_start_wall,
+                        'start_pos'  : effective_start / fps_loop,
+                        'channel_idx': ch_idx,
+                        'proc_wav'   : replay_wav,
+                    }
+                    src = ("full-track" if replay_wav == full_wav
+                           else "trimmed fallback")
+                    wav_kb = os.path.getsize(replay_wav) // 1024
+                    print(f"[ENGINE] ch{ch_idx+1} loop: replay from {src} cache "
+                          f"({wav_kb}KB) from frame {effective_start}")
+                else:
+                    print(f"[ENGINE] ch{ch_idx+1} loop: no cache available — "
+                          f"will restart on next play")
+            except Exception as _le:
+                print(f"[ENGINE] ch{ch_idx+1} loop cache replay failed: {_le}")
 
     _pb_last_frame = current
 
