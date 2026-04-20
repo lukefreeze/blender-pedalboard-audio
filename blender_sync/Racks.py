@@ -182,16 +182,39 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     enabled:          bpy.props.BoolProperty(default=True)
     collapsed:        bpy.props.BoolProperty(default=False)
     preset_idx:       bpy.props.IntProperty(default=0)
-    # 9 channel assignment booleans
-    ch0: bpy.props.BoolProperty(default=False)
-    ch1: bpy.props.BoolProperty(default=False)
-    ch2: bpy.props.BoolProperty(default=False)
-    ch3: bpy.props.BoolProperty(default=False)
-    ch4: bpy.props.BoolProperty(default=False)
-    ch5: bpy.props.BoolProperty(default=False)
-    ch6: bpy.props.BoolProperty(default=False)
-    ch7: bpy.props.BoolProperty(default=False)
-    ch8: bpy.props.BoolProperty(default=False)
+    # 32 channel assignment booleans (matches MAX_CHANNELS in Loader.py)
+    ch0:  bpy.props.BoolProperty(default=False)
+    ch1:  bpy.props.BoolProperty(default=False)
+    ch2:  bpy.props.BoolProperty(default=False)
+    ch3:  bpy.props.BoolProperty(default=False)
+    ch4:  bpy.props.BoolProperty(default=False)
+    ch5:  bpy.props.BoolProperty(default=False)
+    ch6:  bpy.props.BoolProperty(default=False)
+    ch7:  bpy.props.BoolProperty(default=False)
+    ch8:  bpy.props.BoolProperty(default=False)
+    ch9:  bpy.props.BoolProperty(default=False)
+    ch10: bpy.props.BoolProperty(default=False)
+    ch11: bpy.props.BoolProperty(default=False)
+    ch12: bpy.props.BoolProperty(default=False)
+    ch13: bpy.props.BoolProperty(default=False)
+    ch14: bpy.props.BoolProperty(default=False)
+    ch15: bpy.props.BoolProperty(default=False)
+    ch16: bpy.props.BoolProperty(default=False)
+    ch17: bpy.props.BoolProperty(default=False)
+    ch18: bpy.props.BoolProperty(default=False)
+    ch19: bpy.props.BoolProperty(default=False)
+    ch20: bpy.props.BoolProperty(default=False)
+    ch21: bpy.props.BoolProperty(default=False)
+    ch22: bpy.props.BoolProperty(default=False)
+    ch23: bpy.props.BoolProperty(default=False)
+    ch24: bpy.props.BoolProperty(default=False)
+    ch25: bpy.props.BoolProperty(default=False)
+    ch26: bpy.props.BoolProperty(default=False)
+    ch27: bpy.props.BoolProperty(default=False)
+    ch28: bpy.props.BoolProperty(default=False)
+    ch29: bpy.props.BoolProperty(default=False)
+    ch30: bpy.props.BoolProperty(default=False)
+    ch31: bpy.props.BoolProperty(default=False)
     # 8 parameter values (covers all effect types)
     p0: bpy.props.FloatProperty(default=0.0)
     p1: bpy.props.FloatProperty(default=0.0)
@@ -223,6 +246,61 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     p23: bpy.props.FloatProperty(default=0.14)
 
 
+# ---------------------------------------------------------------------------
+# EQ band constants and helpers — defined early so _load_preset can use them
+# p0-p4 = gain (0.5 = 0dB, range -24..+24dB)
+# p5-p9 = freq (log-normalised 0-1 over 20Hz..20kHz)
+# p10-p14 = Q   (log-normalised 0-1 over 0.1..10.0)
+# ---------------------------------------------------------------------------
+EQ_BANDS = [
+    # (name, colour, filter_type, default_freq_hz, default_Q)
+    ("Low",    (0.25, 0.55, 1.0),  "low_shelf",  100.0,  0.7),
+    ("L-Mid",  (0.25, 0.85, 0.45), "peak",       300.0,  1.0),
+    ("Mid",    (0.85, 0.75, 0.15), "peak",      1000.0,  1.0),
+    ("H-Mid",  (1.0,  0.45, 0.15), "peak",      4000.0,  1.0),
+    ("High",   (0.9,  0.25, 0.7),  "high_shelf",10000.0, 0.7),
+]
+EQ_FREQ_MIN_LOG = math.log10(20.0)
+EQ_FREQ_MAX_LOG = math.log10(20000.0)
+EQ_Q_MIN_LOG    = math.log10(0.1)
+EQ_Q_MAX_LOG    = math.log10(10.0)
+
+
+def _eq_freq_from_norm(norm):
+    """Convert 0-1 norm to Hz (log scale)."""
+    return 10.0 ** (EQ_FREQ_MIN_LOG + norm * (EQ_FREQ_MAX_LOG - EQ_FREQ_MIN_LOG))
+
+
+def _eq_freq_to_norm(hz):
+    return max(0.0, min(1.0,
+        (math.log10(max(20.0, hz)) - EQ_FREQ_MIN_LOG) /
+        (EQ_FREQ_MAX_LOG - EQ_FREQ_MIN_LOG)))
+
+
+def _eq_q_from_norm(norm):
+    return 10.0 ** (EQ_Q_MIN_LOG + norm * (EQ_Q_MAX_LOG - EQ_Q_MIN_LOG))
+
+
+def _eq_q_to_norm(q):
+    return max(0.0, min(1.0,
+        (math.log10(max(0.1, q)) - EQ_Q_MIN_LOG) /
+        (EQ_Q_MAX_LOG - EQ_Q_MIN_LOG)))
+
+
+def _eq_get_band(rack, band_idx):
+    """Return (gain_db, freq_hz, q, freq_norm, q_norm) for a band."""
+    gain_norm = getattr(rack, f'p{band_idx}',      0.5)
+    freq_norm = getattr(rack, f'p{band_idx + 5}', -1.0)
+    q_norm    = getattr(rack, f'p{band_idx + 10}',-1.0)
+    gain_db   = (gain_norm - 0.5) * 48.0   # -24..+24 dB
+    _, _, _, def_freq, def_q = EQ_BANDS[band_idx]
+    if freq_norm < 0.0:
+        freq_norm = _eq_freq_to_norm(def_freq)
+    if q_norm < 0.0:
+        q_norm = _eq_q_to_norm(def_q)
+    return gain_db, _eq_freq_from_norm(freq_norm), _eq_q_from_norm(q_norm), freq_norm, q_norm
+
+
 def _rp(rack, idx, default=0.0):
     """Safely get rack param by index, returning default if not yet registered."""
     try:
@@ -233,9 +311,7 @@ def _rp(rack, idx, default=0.0):
 
 def get_rack_channels(rack):
     """Return list of assigned channel indices (0-based) for a rack."""
-    return [i for i, attr in enumerate(['ch0','ch1','ch2','ch3','ch4',
-                                         'ch5','ch6','ch7','ch8'])
-            if getattr(rack, attr, False)]
+    return [i for i in range(32) if getattr(rack, f'ch{i}', False)]
 
 
 def get_rack_params(rack):
@@ -284,7 +360,14 @@ def _load_preset(rack, preset_idx):
             if hasattr(rack, attr):
                 setattr(rack, attr, float(max(0.0, min(1.0, val))))
         return
-    # Fallback to EFFECT_PARAMS defaults for non-compressor types
+    # EQ: initialise gain to unity (0.5=0dB) and freq/Q from EQ_BANDS defaults
+    if etype == "EQ":
+        for band_idx, (_, _, _, def_freq, def_q) in enumerate(EQ_BANDS):
+            setattr(rack, f'p{band_idx}',      0.5)  # 0 dB gain
+            setattr(rack, f'p{band_idx + 5}',  _eq_freq_to_norm(def_freq))
+            setattr(rack, f'p{band_idx + 10}', _eq_q_to_norm(def_q))
+        return
+    # Fallback to EFFECT_PARAMS defaults for other types
     params = EFFECT_PARAMS.get(etype, [])
     for i, (_, _, pmin, pmax, pdefault, _) in enumerate(params):
         if i < 8:
@@ -415,65 +498,93 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
         gx = rx + (i/8)*rw
         _draw_rect(gx, ry, max(0.5, scale*0.5), rh, (0.1,0.1,0.1,1.0))
 
-    # Spectrum bars — real FFT timeline data, synced to playhead
-    # Falls back to a static logarithmic preview when no data available
+    # Spectrum bars — clear when rack is bypassed, no static fallback
     fft_flat = None
+    _rack_on = True
     try:
-        from Loader import _fft_timeline
-        import bpy as _bpys
-        scene_s   = _bpys.context.scene
-        racks_s   = getattr(scene_s, "pb_racks", [])
-        if rack_idx < len(racks_s):
-            from Racks import get_rack_channels
-            assigned_s = get_rack_channels(racks_s[rack_idx])
-            if assigned_s:
-                ch_s = list(assigned_s)[0]
-                tl   = _fft_timeline.get(ch_s)
-                if tl is not None and len(tl['snapshots']) > 0:
-                    cur_f    = scene_s.frame_current if scene_s else 0
-                    snap_sec = tl['snap_frames'] / tl['sr']
-                    elap_sec = (cur_f - tl['start_frame']) / tl['fps']
-                    snap_idx = int(elap_sec / snap_sec)
-                    snap_idx = max(0, min(len(tl['snapshots'])-1, snap_idx))
-                    frame_d  = tl['snapshots'][snap_idx]  # (4, 32)
-                    # Flatten all 4 bands into one 128-bin array
-                    import numpy as _np
-                    fft_flat = _np.concatenate([frame_d[b] for b in range(4)])
+        import bpy as _bpys0
+        _sc0   = _bpys0.context.scene
+        _rs0   = getattr(_sc0, "pb_racks", []) if _sc0 else []
+        _rack_on = _rs0[rack_idx].enabled if rack_idx < len(_rs0) else True
     except Exception:
-        fft_flat = None
+        pass
+
+    if _rack_on:
+        try:
+            from Loader import _fft_timeline
+            import bpy as _bpys
+            scene_s   = _bpys.context.scene
+            racks_s   = getattr(scene_s, "pb_racks", [])
+            if rack_idx < len(racks_s):
+                assigned_s = get_rack_channels(racks_s[rack_idx])
+                if assigned_s:
+                    ch_s = list(assigned_s)[0]
+                    tl   = _fft_timeline.get(ch_s)
+                    if tl is not None and len(tl['snapshots']) > 0:
+                        cur_f    = scene_s.frame_current if scene_s else 0
+                        snap_sec = tl['snap_frames'] / tl['sr']
+                        elap_sec = (cur_f - tl['start_frame']) / tl['fps']
+                        snap_f   = elap_sec / snap_sec
+                        snap_idx = int(snap_f)
+                        frac     = snap_f - snap_idx
+                        snap_idx = max(0, min(len(tl['snapshots'])-1, snap_idx))
+                        import numpy as _np
+                        frame_d  = tl['snapshots'][snap_idx]
+                        # Interpolate toward next snapshot for smooth bar motion
+                        if frac > 0.0 and snap_idx + 1 < len(tl['snapshots']):
+                            next_d  = tl['snapshots'][snap_idx + 1]
+                            frame_d = frame_d * (1.0 - frac) + next_d * frac
+                        fft_flat = _np.concatenate([frame_d[b] for b in range(4)])
+        except Exception:
+            fft_flat = None
 
     bar_w = (rw - 4*scale) / SPEC_BANDS
-    for b in range(SPEC_BANDS):
-        t = b / SPEC_BANDS
-        if fft_flat is not None:
-            # Map bar index to FFT bin (log scale)
-            import math as _mth
-            bin_idx = int(_mth.pow(len(fft_flat), t)) - 1
-            bin_idx = max(0, min(len(fft_flat)-1, bin_idx))
-            h_frac  = float(fft_flat[bin_idx])
-        else:
-            # Static logarithmic preview
-            import math as _mth
-            h_frac = (_mth.sin(t * _mth.pi) * 0.7 +
-                      _mth.sin(t * _mth.pi * 3) * 0.2 + 0.1)
-        h_frac  = max(0.04, min(0.95, h_frac))
-        bar_h   = h_frac * rh
-        bx      = rx + 2*scale + b * bar_w
+    if fft_flat is not None and _rack_on:
+        import math as _mth
+        n_bins = len(fft_flat)
 
-        if t < 0.3:
-            col = (0.0, 0.7, 0.45, 0.75)
-        elif t < 0.6:
-            col = (0.0, 0.85, 0.55, 0.85)
-        elif t < 0.8:
-            col = (0.9, 0.65, 0.0, 0.7)
-        else:
-            col = (0.7, 0.35, 0.0, 0.5)
+        # Log-spaced centre bin for each bar
+        centres = [_mth.pow(n_bins, b / SPEC_BANDS) - 1.0
+                   for b in range(SPEC_BANDS)]
 
-        _draw_rect(bx, ry, max(bar_w - scale, 1.0), bar_h, col)
+        # Sigma = half the gap to adjacent centres, wider for low-freq bars
+        # that share only a few real FFT bins between many display bars
+        sigmas = []
+        for b in range(SPEC_BANDS):
+            if b == 0:
+                gap = max(0.5, centres[1] - centres[0])
+            elif b == SPEC_BANDS - 1:
+                gap = max(0.5, centres[-1] - centres[-2])
+            else:
+                gap = max(0.5, (centres[b + 1] - centres[b - 1]) * 0.5)
+            sigmas.append(max(1.5, gap * 1.5))
 
-    # Frequency response curve — IK Quad Comp style
-    # Shows net dB effect at reference level (-18dB) across full frequency range.
-    # Curve sits at 0dB centre line, dips when compressing, rises when makeup gain applied.
+        for b in range(SPEC_BANDS):
+            t      = b / SPEC_BANDS
+            centre = centres[b]
+            sigma  = sigmas[b]
+            # Gaussian-weighted average — each bar blends across its neighbourhood
+            lo = max(0, int(centre - 3.0 * sigma))
+            hi = min(n_bins - 1, int(centre + 3.0 * sigma) + 1)
+            total_w = 0.0
+            total_v = 0.0
+            for i in range(lo, hi + 1):
+                w = _mth.exp(-0.5 * ((i - centre) / sigma) ** 2)
+                total_w += w
+                total_v += w * float(fft_flat[i])
+            h_frac = (total_v / total_w) if total_w > 0 else float(fft_flat[max(0, min(n_bins - 1, int(centre)))])
+            h_frac = max(0.04, min(0.95, h_frac))
+            bar_h  = h_frac * rh
+            bx     = rx + 2*scale + b * bar_w
+            if t < 0.3:   col = (0.0, 0.7,  0.45, 0.75)
+            elif t < 0.6: col = (0.0, 0.85, 0.55, 0.85)
+            elif t < 0.8: col = (0.9, 0.65, 0.0,  0.7)
+            else:         col = (0.7, 0.35, 0.0,  0.5)
+            _draw_rect(bx, ry, max(bar_w - scale, 1.0), bar_h, col)
+
+    # GR curve — classic soft knee transfer function (input→output diagonal).
+    # X = input level -60..0 dB, Y = output level -60..0 dB.
+    # 1:1 slope below threshold, compressed slope above, soft knee join.
     import math as _math
     scene = bpy.context.scene
     racks = getattr(scene, "pb_racks", [])
@@ -483,85 +594,33 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
             thr_db  = -40.0 + rack.p0 * 40.0
             ratio   =  1.0  + rack.p1 * 19.0
             knee_db =  0.5  + rack.p5 * 23.5
-            mkp_db  =         rack.p4 * 24.0   # makeup gain 0..24dB
 
-            REF_DB  = -18.0
-            half_k  = knee_db * 0.5
-            if REF_DB <= thr_db - half_k:
-                gr_db = 0.0
-            elif REF_DB <= thr_db + half_k and knee_db > 0:
-                x     = REF_DB - thr_db + half_k
-                gr_db = (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
-            else:
-                gr_db = (REF_DB - thr_db) * (1.0/ratio - 1.0)
-
-            net_db     = mkp_db + gr_db   # net: makeup lifts, GR dips
-
-            # Y axis: -12dB (bottom) to +12dB (top), 0dB at centre
-            zero_y     = ry + rh * 0.5
-            px_per_db  = (rh * 0.5) / 12.0
-            scale_px   = px_per_db
-
-            # Draw 0dB centre line
-            _draw_rect(rx, zero_y, rw, max(0.5, scale*0.5),
-                       (0.25, 0.25, 0.25, 0.7))
-
-            # Build smooth curve — flat with a gentle dip in the compression zone
-            # Use a bell-curve dip centred in the mid-frequency range
-            N = 120
             pts = []
-            for s in range(N + 1):
-                t      = s / N
-                # Frequency weighting — compression affects mids most noticeably
-                # Bell curve peaks at t=0.5 (mid frequency), tapers at extremes
-                freq_w = _math.sin(t * _math.pi) ** 0.5
-                db_here = net_db * freq_w
-                db_here = max(-12.0, min(12.0, db_here))
-                px = rx + t * rw
-                py = zero_y - db_here * scale_px
-                py = max(ry + 2*scale, min(ry + rh - 2*scale, py))
-                pts.append((px, py))
+            for s in range(129):
+                t      = s / 128.0
+                in_db  = -60.0 + t * 60.0
+                half_k = knee_db * 0.5
+                if in_db <= thr_db - half_k:
+                    out_db = in_db
+                elif in_db <= thr_db + half_k and knee_db > 0:
+                    x      = in_db - thr_db + half_k
+                    out_db = in_db + (1.0/ratio - 1.0)*(x*x)/(2.0*knee_db)
+                else:
+                    out_db = thr_db + (in_db - thr_db) / ratio
+                out_norm = (out_db + 60.0) / 60.0
+                pts.append((rx + t*rw, ry + out_norm*rh))
 
-            # Fill between curve and 0dB line
-            for s in range(len(pts)-1):
-                px1, py1 = pts[s]
-                px2, py2 = pts[s+1]
-                y_top  = min(py1, zero_y)
-                y_bot  = max(py1, zero_y)
-                fill_h = y_bot - y_top
-                if fill_h > 0.5:
-                    _draw_rect(px1, y_top, max(px2-px1, 0.5), fill_h,
-                               (0.9, 0.2, 0.2, 0.15))
+            # Thick red diagonal line — clearly visible over bars
+            for i in range(len(pts)-1):
+                _draw_line(pts[i][0], pts[i][1],
+                           pts[i+1][0], pts[i+1][1],
+                           (0.9, 0.2, 0.2, 0.9), max(2.5, scale*2.5))
 
-            # Draw curve line
-            if len(pts) >= 2:
-                for s in range(len(pts)-1):
-                    _draw_line(pts[s][0], pts[s][1],
-                               pts[s+1][0], pts[s+1][1],
-                               (0.9, 0.25, 0.25, 0.9), max(1.5, scale*1.5))
-
-            # Centre dot showing net effect
-            mid_pt  = pts[N//2]
-            _draw_circle(mid_pt[0], mid_pt[1], 4*scale, (0.9, 0.25, 0.25, 1.0))
-
-            # Label the net dB value
-            fs_lbl = max(1, int(8*scale))
-            lbl    = f"{net_db:+.1f}dB"
-            tw_lbl = _text_width(lbl, fs_lbl)
-            _draw_text(lbl, mid_pt[0] - tw_lbl/2,
-                       mid_pt[1] + 8*scale,
-                       fs_lbl, (0.9, 0.3, 0.3, 0.9))
-
-            # dB scale
-            fs_sc = max(1, int(7*scale))
-            for db_val, lbl_s in [(12,"+12"),(6,"+6"),(0,"0"),(-6,"-6"),(-12,"-12")]:
-                gy = zero_y - db_val * scale_px
-                if ry <= gy <= ry + rh:
-                    _draw_rect(rx, gy, rw, max(0.3, scale*0.3),
-                               (0.1, 0.1, 0.1, 1.0))
-                    tw_s = _text_width(lbl_s, fs_sc)
-                    _draw_text(lbl_s, rx - tw_s - 3*scale, gy - fs_sc*0.5,
-                               fs_sc, (0.25, 0.25, 0.25, 1.0))
+            # Threshold vertical marker
+            thr_norm = (thr_db + 60.0) / 60.0
+            thr_x    = rx + thr_norm * rw
+            _draw_line(thr_x, ry, thr_x, ry+rh,
+                       (0.6, 0.2, 0.2, 0.4), max(1.0, scale*1.0))
 
     # Frequency labels
     freq_labels = [("20", 0.0), ("200", 0.22), ("1k", 0.44),
@@ -600,54 +659,89 @@ def _draw_gr_meters(rx, ry, rh, rack_idx, assigned_channels, scale):
     spacing = GR_BAR_SPACING * scale
     fs      = max(1, int(7*scale))
 
+    import bpy as _bpy_gr
+    scene_gr = _bpy_gr.context.scene
+    racks_gr = getattr(scene_gr, "pb_racks", []) if scene_gr else []
+    rack_gr  = racks_gr[rack_idx] if rack_idx < len(racks_gr) else None
+    is_enabled = rack_gr.enabled if rack_gr else True
+
     for i, ch_idx in enumerate(assigned_channels[:6]):
         bx = rx + i * spacing
-        # Channel label below meter
         tw = _text_width(str(ch_idx+1), fs)
         _draw_text(str(ch_idx+1), bx + bar_w/2 - tw/2,
                    ry - 12*scale, fs, (0.4,0.4,0.4,1.0))
-        # Meter background
-        _draw_rect(bx, ry, bar_w, rh, (0.06, 0.06, 0.06, 1.0))
+        _draw_rect(bx, ry, bar_w, rh, (0.04, 0.04, 0.04, 1.0))
 
-        # GR value: 0..24dB maps to 0..1 fill from top downward
-        gr_val  = _gr_levels.get(rack_idx, {}).get(ch_idx, 0.0)
-        gr_frac = max(0.0, min(1.0, gr_val / 24.0))
-        fill_h  = gr_frac * rh
+        # Premier Pro style: green signal bar + red GR cap.
+        # Signal from FFT timeline. GR computed from signal + rack params
+        # (COMP_SINGLE has no separate GR timeline — compute it here).
+        sig_norm  = 0.0
+        gr_db_val = 0.0
+        if is_enabled:
+            try:
+                import math as _sgm
+                from Loader import _gr_timeline, _fft_timeline
+                cur_f = scene_gr.frame_current if scene_gr else 0
 
-        # Fill from TOP downward — more compression = taller fill
-        if fill_h > 0.5:
-            # Colour: green for light GR, amber for medium, red for heavy
-            if gr_frac < 0.25:
-                gr_col = (0.1, 0.8, 0.45, 0.85)   # green — gentle
-            elif gr_frac < 0.6:
-                gr_col = (0.9, 0.65, 0.1, 0.85)   # amber — moderate
-            else:
-                gr_col = (0.9, 0.2, 0.2, 0.85)    # red — heavy
-            _draw_rect(bx, ry + rh - fill_h, bar_w, fill_h, gr_col)
+                # Signal level — average across all bands
+                tl_f  = _fft_timeline.get(ch_idx)
+                if tl_f is not None and len(tl_f['snapshots']) > 0:
+                    sec_f  = tl_f['snap_frames'] / tl_f['sr']
+                    elap_f = (cur_f - tl_f['start_frame']) / tl_f['fps']
+                    idx_f  = max(0, min(len(tl_f['snapshots'])-1, int(elap_f/sec_f)))
+                    sig_norm = float(tl_f['snapshots'][idx_f].mean())
 
-        # dB tick marks
+                # GR: try timeline first (COMP_MULTI populates it)
+                tl_g  = _gr_timeline.get(ch_idx)
+                if tl_g is not None and len(tl_g['snapshots']) > 0:
+                    sec_g  = tl_g['snap_frames'] / tl_g['sr']
+                    elap_g = (cur_f - tl_g['start_frame']) / tl_g['fps']
+                    idx_g  = max(0, min(len(tl_g['snapshots'])-1, int(elap_g/sec_g)))
+                    gr_db_val = float(tl_g['snapshots'][idx_g].mean())
+                elif rack_gr and rack_gr.effect_type == "COMP_SINGLE":
+                    # Read GR directly from C++ engine — most accurate source.
+                    # gr_levels[ch][0] is updated each process_buffer call.
+                    # Value is positive dB of gain reduction (e.g. 3.5 = 3.5dB GR).
+                    try:
+                        from Loader import get_engine as _get_eng_sb
+                        _eng_sb = _get_eng_sb()
+                        if _eng_sb and assigned_gr2:
+                            _ch_sb = list(assigned_gr2)[0]
+                            _gv_sb = _eng_sb.get_state().get_gr_levels(_ch_sb)
+                            gr_db_val = min(12.0, max(0.0, float(_gv_sb[0])))
+                    except Exception:
+                        gr_db_val = 0.0
+            except Exception:
+                pass
+
+        sig_h   = max(0.0, min(1.0, sig_norm)) * rh
+        if sig_h > 0.5:
+            gr_h    = max(0.0, min(1.0, gr_db_val/12.0)) * sig_h
+            green_h = sig_h - gr_h
+            if green_h > 0.5:
+                _draw_rect(bx, ry, bar_w, green_h, (0.05, 0.55, 0.25, 0.85))
+                if green_h > 3*scale:
+                    _draw_rect(bx, ry+green_h-2*scale, bar_w, 2*scale,
+                               (0.1, 0.9, 0.4, 0.95))
+            if gr_h > 0.5:
+                _draw_rect(bx, ry+green_h, bar_w, gr_h, (0.85, 0.15, 0.15, 0.9))
+                if gr_h > 2*scale:
+                    _draw_rect(bx, ry+green_h+gr_h-2*scale, bar_w, 2*scale,
+                               (1.0, 0.35, 0.35, 1.0))
+
         for db_t in [0.25, 0.5, 0.75]:
-            my = ry + rh - db_t * rh
-            _draw_rect(bx, my, bar_w, max(0.5, scale*0.5),
-                       (0.25, 0.25, 0.25, 1.0))
-
-        # 0dB label at top
-        _draw_text("0", bx + bar_w + 2*scale, ry + rh - 3*scale,
-                   fs, (0.3,0.3,0.3,1.0))
-
-        # "GR" label
+            _draw_rect(bx, ry + db_t*rh, bar_w, max(0.5, scale*0.5),
+                       (0.2, 0.2, 0.2, 1.0))
         _draw_text("GR", bx + bar_w/2 - _text_width("GR",fs)/2,
                    ry + rh + 2*scale, fs, (0.3,0.3,0.3,1.0))
 
 
 def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
-    """Premier Pro style: green signal bar + red GR cap. All bands identical colour."""
+    """Premier Pro style: green signal bar rising from bottom + red GR cap on top."""
     _draw_rect(bx, by, bw, bh, (0.04, 0.04, 0.04, 1.0))
-    sig_frac = max(0.0, min(1.0, signal_norm))
-    sig_h    = sig_frac * bh
+    sig_h = max(0.0, min(1.0, signal_norm)) * bh
     if sig_h > 0.5:
-        gr_frac = max(0.0, min(1.0, gr_db / 12.0))
-        gr_h    = gr_frac * sig_h
+        gr_h    = max(0.0, min(1.0, gr_db / 12.0)) * sig_h
         green_h = sig_h - gr_h
         if green_h > 0.5:
             _draw_rect(bx, by, bw, green_h, (0.05, 0.55, 0.25, 0.85))
@@ -660,8 +754,7 @@ def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
                 _draw_rect(bx, by + green_h + gr_h - 2*scale, bw, 2*scale,
                            (1.0, 0.35, 0.35, 1.0))
     for t in [0.25, 0.5, 0.75]:
-        ty = by + t * bh
-        _draw_rect(bx, ty, bw, max(0.5, scale*0.5), (0.2, 0.2, 0.2, 1.0))
+        _draw_rect(bx, by + t*bh, bw, max(0.5, scale*0.5), (0.2, 0.2, 0.2, 1.0))
 
 
 def _draw_channel_buttons(rx, ry, rack, scale):
@@ -784,7 +877,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         _draw_text(label, spec_x - tw - 3*scale, ly - fs_db/2,
                    fs_db, (0.3,0.3,0.3,1.0))
 
-    # Clear bars when rack is bypassed; otherwise fetch from timeline
+    # Get FFT data — clear when rack is bypassed
     fft_data = None
     gr_data  = [0.0, 0.0, 0.0, 0.0]
     if not rack.enabled:
@@ -804,11 +897,17 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
                 fps         = tl['fps']
                 snap_sec    = tl['snap_frames'] / tl['sr']
                 elapsed_sec = (cur_frame - start_frame) / fps
-                snap_idx    = int(elapsed_sec / snap_sec)
+                snap_f      = elapsed_sec / snap_sec
+                snap_idx    = int(snap_f)
+                frac        = snap_f - snap_idx
                 snaps       = tl['snapshots']
                 snap_idx    = max(0, min(len(snaps)-1, snap_idx))
-                # snaps is (n_snaps, 4, 8) numpy array
-                frame_data  = snaps[snap_idx]  # shape (4, 8)
+                # snaps is (n_snaps, 4, 8) numpy array — interpolate for smooth motion
+                import numpy as _np2
+                frame_data  = snaps[snap_idx]
+                if frac > 0.0 and snap_idx + 1 < len(snaps):
+                    next_data  = snaps[snap_idx + 1]
+                    frame_data = frame_data * (1.0 - frac) + next_data * frac
                 fft_data    = [frame_data[b].tolist() for b in range(4)]
      except Exception as _fe:
         import traceback as _tb
@@ -1081,7 +1180,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         gr_meter_y = fdr_y
         gr_meter_h = fdr_h
 
-        # Read GR + signal — zero when rack is bypassed
+        # Read GR + signal from timelines — zero when rack is bypassed
         gr_db_band = 0.0
         sig_norm   = 0.0
         if rack.enabled:
@@ -1170,6 +1269,358 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
                        (0.18,0.18,0.18,1.0))
       except Exception as e:
         print(f"[MB] band {band} draw error: {e}")
+
+
+
+# ---------------------------------------------------------------------------
+# EQ rack body
+# ---------------------------------------------------------------------------
+
+
+def _eq_biquad_response(freq_hz, gain_db, band_filter_type, q, f_test):
+    """
+    Compute magnitude response in dB at f_test Hz for one EQ band.
+    Uses Audio EQ Cookbook biquad formulae (same as Loader.py).
+    sample_rate assumed 48000 for display purposes.
+    """
+    sr = 48000.0
+    w0 = 2.0 * math.pi * freq_hz / sr
+    wt = 2.0 * math.pi * f_test  / sr
+    cw0, sw0 = math.cos(w0), math.sin(w0)
+    cwt       = math.cos(wt)
+    swt       = math.sin(wt)
+    alpha     = sw0 / (2.0 * q)
+    A         = 10.0 ** (gain_db / 40.0)
+
+    if band_filter_type == "low_shelf":
+        sq = 2.0 * math.sqrt(A) * alpha
+        b0 = A*((A+1) - (A-1)*cw0 + sq)
+        b1 = 2*A*((A-1) - (A+1)*cw0)
+        b2 = A*((A+1) - (A-1)*cw0 - sq)
+        a0 = (A+1) + (A-1)*cw0 + sq
+        a1 = -2*((A-1) + (A+1)*cw0)
+        a2 = (A+1) + (A-1)*cw0 - sq
+    elif band_filter_type == "high_shelf":
+        sq = 2.0 * math.sqrt(A) * alpha
+        b0 = A*((A+1) + (A-1)*cw0 + sq)
+        b1 = -2*A*((A-1) + (A+1)*cw0)
+        b2 = A*((A+1) + (A-1)*cw0 - sq)
+        a0 = (A+1) - (A-1)*cw0 + sq
+        a1 = 2*((A-1) - (A+1)*cw0)
+        a2 = (A+1) - (A-1)*cw0 - sq
+    else:  # peak
+        alpha_a = sw0 / (2.0 * q)
+        b0 = 1 + alpha_a * A
+        b1 = -2 * cw0
+        b2 = 1 - alpha_a * A
+        a0 = 1 + alpha_a / A
+        a1 = -2 * cw0
+        a2 = 1 - alpha_a / A
+
+    # Evaluate H(e^jwt) via the bilinear s→z substitution
+    # |H(z)| at z=e^jwt:  num = b0 + b1*e^-jwt + b2*e^-2jwt
+    #                      den = a0 + a1*e^-jwt + a2*e^-2jwt
+    try:
+        nr = b0/a0 + (b1/a0)*cwt + (b2/a0)*math.cos(2*wt)
+        ni = -(b1/a0)*swt - (b2/a0)*math.sin(2*wt)
+        dr = 1.0   + (a1/a0)*cwt + (a2/a0)*math.cos(2*wt)
+        di = -(a1/a0)*swt - (a2/a0)*math.sin(2*wt)
+        mag_sq = (nr*nr + ni*ni) / max(1e-30, dr*dr + di*di)
+        return 10.0 * math.log10(max(1e-10, mag_sq))
+    except Exception:
+        return 0.0
+
+
+def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
+    """
+    Draw the parametric EQ rack body.
+
+    Layout (left→right across full rack width minus channel buttons):
+      • Full-width frequency response display (top ~60% of body)
+        - Dark background with dB grid and frequency labels
+        - Live FFT bars from the assigned channel (same as COMP_SINGLE)
+        - Coloured frequency response curve computed from current knob values
+        - Draggable band handle dots on the curve
+      • 5-knob row (bottom ~40% of body): one column per band
+        Each column: Gain knob (large) + Freq knob + Q knob
+      • Channel buttons — right edge (same as all racks)
+    """
+    import math as _m
+
+    rail_h   = RACK_RAIL_H * scale
+    body_h   = rh - rail_h
+    ch_btn_w = 108 * scale          # reserved for channel buttons on right
+    margin   = 24 * scale
+
+    # Content area
+    cx  = rx + margin
+    cw  = rw - ch_btn_w - margin * 2
+    cy  = ry
+    ch  = body_h
+
+    # Split body vertically
+    curve_frac  = 0.58
+    curve_h     = ch * curve_frac - 4 * scale
+    knob_zone_y = cy + ch * curve_frac + 4 * scale
+    knob_zone_h = ch * (1.0 - curve_frac) - 8 * scale
+
+    curve_x = cx
+    curve_y = cy + ch - curve_h - 4 * scale
+    curve_w = cw
+
+    # -----------------------------------------------------------------------
+    # FREQUENCY RESPONSE DISPLAY
+    # -----------------------------------------------------------------------
+    # Background
+    _draw_rect(curve_x, curve_y, curve_w, curve_h, (0.04, 0.04, 0.04, 1.0))
+
+    # dB grid lines: +18, +12, +6, 0, -6, -12, -18, -24
+    db_range  = 24.0   # display ±24 dB
+    zero_db_y = curve_y + curve_h * 0.5
+    px_per_db = (curve_h * 0.5) / db_range
+
+    for db_val in (18, 12, 6, 0, -6, -12, -18, -24):
+        gy     = zero_db_y + db_val * px_per_db
+        bright = 0.18 if db_val == 0 else 0.09
+        alpha  = 0.9  if db_val == 0 else 0.5
+        if curve_y <= gy <= curve_y + curve_h:
+            _draw_rect(curve_x, gy, curve_w, max(0.5, scale * 0.5),
+                       (bright, bright, bright, alpha))
+            label = f"{db_val:+d}" if db_val != 0 else "0"
+            fs_db = max(1, int(7 * scale))
+            tw_db = _text_width(label, fs_db)
+            _draw_text(label, curve_x - tw_db - 3 * scale,
+                       gy - fs_db / 2, fs_db, (0.35, 0.35, 0.35, 1.0))
+
+    # Frequency grid lines (1 octave steps: 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k)
+    freq_grid = [32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+    for fg in freq_grid:
+        t  = (_m.log10(fg) - EQ_FREQ_MIN_LOG) / (EQ_FREQ_MAX_LOG - EQ_FREQ_MIN_LOG)
+        gx = curve_x + t * curve_w
+        _draw_rect(gx, curve_y, max(0.5, scale * 0.5), curve_h,
+                   (0.11, 0.11, 0.11, 1.0))
+        lbl = "1k" if fg == 1000 else ("2k" if fg == 2000 else
+              "4k" if fg == 4000 else "8k" if fg == 8000 else
+              "16k" if fg == 16000 else str(fg))
+        fs_f = max(1, int(7 * scale))
+        _draw_text(lbl, gx + 2 * scale, curve_y - 11 * scale,
+                   fs_f, (0.28, 0.28, 0.28, 1.0))
+
+    # Border
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    bv = [(curve_x, curve_y), (curve_x + curve_w, curve_y),
+          (curve_x + curve_w, curve_y + curve_h),
+          (curve_x, curve_y + curve_h), (curve_x, curve_y)]
+    bb = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
+    shader.bind(); shader.uniform_float("color", (0.18, 0.18, 0.18, 1.0))
+    bb.draw(shader)
+
+    # --- Live FFT bars (background, same source as COMP_SINGLE) ---
+    if rack.enabled:
+        try:
+            from Loader import _fft_timeline
+            scene_eq  = bpy.context.scene
+            assigned_eq = get_rack_channels(rack)
+            if assigned_eq and scene_eq:
+                ch_eq  = list(assigned_eq)[0]
+                tl_eq  = _fft_timeline.get(ch_eq)
+                if tl_eq and len(tl_eq['snapshots']) > 0:
+                    cur_f  = scene_eq.frame_current
+                    sec_eq = tl_eq['snap_frames'] / tl_eq['sr']
+                    elap   = (cur_f - tl_eq['start_frame']) / tl_eq['fps']
+                    si     = max(0, min(len(tl_eq['snapshots']) - 1,
+                                       int(elap / sec_eq)))
+                    import numpy as _np_eq
+                    fdata  = tl_eq['snapshots'][si]
+                    frac_e = elap / sec_eq - si
+                    if frac_e > 0.0 and si + 1 < len(tl_eq['snapshots']):
+                        fdata = fdata * (1.0 - frac_e) + tl_eq['snapshots'][si + 1] * frac_e
+                    fft_flat = _np_eq.concatenate([fdata[b] for b in range(4)])
+                    n_bins   = len(fft_flat)
+                    n_bars   = SPEC_BANDS
+                    bar_w_eq = curve_w / n_bars
+                    centres  = [_m.pow(n_bins, b / n_bars) - 1.0
+                                 for b in range(n_bars)]
+                    sigmas   = []
+                    for b in range(n_bars):
+                        if b == 0:     gap = max(0.5, centres[1] - centres[0])
+                        elif b == n_bars-1: gap = max(0.5, centres[-1] - centres[-2])
+                        else:          gap = max(0.5, (centres[b+1] - centres[b-1]) * 0.5)
+                        sigmas.append(max(1.5, gap * 1.5))
+                    for b in range(n_bars):
+                        centre = centres[b]
+                        sigma  = sigmas[b]
+                        lo = max(0, int(centre - 3.0 * sigma))
+                        hi = min(n_bins - 1, int(centre + 3.0 * sigma) + 1)
+                        tw2, tv2 = 0.0, 0.0
+                        for bi in range(lo, hi + 1):
+                            w = _m.exp(-0.5 * ((bi - centre) / sigma) ** 2)
+                            tw2 += w; tv2 += w * float(fft_flat[bi])
+                        h_frac = tv2 / tw2 if tw2 > 0 else float(fft_flat[max(0, min(n_bins-1, int(centre)))])
+                        h_frac = max(0.02, min(0.9, h_frac))
+                        bar_h_eq = h_frac * curve_h
+                        bx_eq    = curve_x + b * bar_w_eq
+                        t_eq     = b / n_bars
+                        if   t_eq < 0.3: ec = (0.08, 0.22, 0.08, 0.65)
+                        elif t_eq < 0.6: ec = (0.08, 0.28, 0.10, 0.65)
+                        elif t_eq < 0.8: ec = (0.22, 0.22, 0.06, 0.55)
+                        else:            ec = (0.20, 0.12, 0.04, 0.45)
+                        _draw_rect(bx_eq, curve_y,
+                                   max(bar_w_eq - scale, 0.5), bar_h_eq, ec)
+        except Exception:
+            pass
+
+    # --- Frequency response curve (combined across all bands) ---
+    N_PTS = 256
+    try:
+        combined_db = []
+        for pi in range(N_PTS):
+            t       = pi / (N_PTS - 1)
+            f_test  = _eq_freq_from_norm(t)
+            total   = 0.0
+            for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
+                gdb, fhz, q, _, _ = _eq_get_band(rack, band_idx)
+                total += _eq_biquad_response(fhz, gdb, bftype, q, f_test)
+            combined_db.append(total)
+
+        # Draw filled area under/over 0dB (subtle)
+        for pi in range(N_PTS - 1):
+            t0, t1 = pi / (N_PTS - 1), (pi + 1) / (N_PTS - 1)
+            x0 = curve_x + t0 * curve_w
+            x1 = curve_x + t1 * curve_w
+            db0 = max(-db_range, min(db_range, combined_db[pi]))
+            db1 = max(-db_range, min(db_range, combined_db[pi + 1]))
+            y0  = zero_db_y + db0 * px_per_db
+            y1  = zero_db_y + db1 * px_per_db
+            # Clamp to display area
+            y0 = max(curve_y, min(curve_y + curve_h, y0))
+            y1 = max(curve_y, min(curve_y + curve_h, y1))
+            # Fill quad between curve and 0dB line
+            y_zero = max(curve_y, min(curve_y + curve_h, zero_db_y))
+            fill_col = (0.1, 0.55, 0.8, 0.12)
+            if abs(x1 - x0) > 0.1:
+                vf = [(x0, y_zero), (x1, y_zero), (x1, y1), (x0, y0)]
+                bf = batch_for_shader(shader, "TRI_FAN", {"pos": vf})
+                shader.bind(); shader.uniform_float("color", fill_col); bf.draw(shader)
+
+        # Draw the curve line itself
+        curve_pts = []
+        for pi in range(N_PTS):
+            t   = pi / (N_PTS - 1)
+            db  = max(-db_range, min(db_range, combined_db[pi]))
+            px2 = curve_x + t * curve_w
+            py2 = zero_db_y + db * px_per_db
+            py2 = max(curve_y + 1, min(curve_y + curve_h - 1, py2))
+            curve_pts.append((px2, py2))
+
+        # Draw as polyline segments (GPU LINE_STRIP)
+        if len(curve_pts) >= 2:
+            bc = batch_for_shader(shader, "LINE_STRIP", {"pos": curve_pts})
+            gpu.state.line_width_set(max(2.0, scale * 2.0))
+            shader.bind(); shader.uniform_float("color", (0.15, 0.7, 1.0, 0.95))
+            bc.draw(shader)
+            gpu.state.line_width_set(1.0)
+
+        # Per-band individual curves (dim, coloured)
+        for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
+            gdb, fhz, q, _, _ = _eq_get_band(rack, band_idx)
+            if abs(gdb) < 0.3:
+                continue
+            band_pts = []
+            for pi in range(N_PTS):
+                t    = pi / (N_PTS - 1)
+                f_t  = _eq_freq_from_norm(t)
+                db   = _eq_biquad_response(fhz, gdb, bftype, q, f_t)
+                db   = max(-db_range, min(db_range, db))
+                px2  = curve_x + t * curve_w
+                py2  = zero_db_y + db * px_per_db
+                py2  = max(curve_y + 1, min(curve_y + curve_h - 1, py2))
+                band_pts.append((px2, py2))
+            if len(band_pts) >= 2:
+                bb2 = batch_for_shader(shader, "LINE_STRIP", {"pos": band_pts})
+                gpu.state.line_width_set(max(1.0, scale * 1.0))
+                shader.bind()
+                shader.uniform_float("color", (*bcol, 0.4))
+                bb2.draw(shader)
+                gpu.state.line_width_set(1.0)
+
+        # Band handle dots — circle at (freq, total_gain) for each band
+        for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
+            gdb, fhz, q, freq_norm, _ = _eq_get_band(rack, band_idx)
+            dot_x = curve_x + freq_norm * curve_w
+            dot_y = zero_db_y + max(-db_range, min(db_range, gdb)) * px_per_db
+            dot_y = max(curve_y + 4*scale, min(curve_y + curve_h - 4*scale, dot_y))
+            dot_r = max(5*scale, 6*scale)
+            _draw_circle(dot_x, dot_y, dot_r, (*bcol, 0.9))
+            _draw_circle(dot_x, dot_y, dot_r, (1.0, 1.0, 1.0, 0.35), filled=False)
+            # Band name above dot
+            fs_dot = max(1, int(7 * scale))
+            tw_dot = _text_width(bname, fs_dot)
+            _draw_text(bname, dot_x - tw_dot / 2,
+                       dot_y + dot_r + 2 * scale, fs_dot, (*bcol, 1.0))
+
+    except Exception as _e:
+        import traceback; traceback.print_exc()
+
+    # -----------------------------------------------------------------------
+    # KNOB ROW — 5 equal columns, each: Gain (large), Freq (small), Q (small)
+    # -----------------------------------------------------------------------
+    col_w  = cw / 5
+    knob_r_gain = max(16 * scale, col_w * 0.18)
+    knob_r_sm   = max(11 * scale, col_w * 0.12)
+
+    for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
+        gdb, fhz, q, freq_norm, q_norm = _eq_get_band(rack, band_idx)
+        gain_norm = getattr(rack, f'p{band_idx}', 0.5)
+        col_cx    = cx + (band_idx + 0.5) * col_w
+
+        # Vertical layout within knob zone:
+        # gain knob centred at ~60% from top of zone, freq+Q below
+        kz_mid    = knob_zone_y + knob_zone_h * 0.42
+        gain_ky   = kz_mid
+        freq_ky   = knob_zone_y + knob_zone_h * 0.82
+        q_ky      = freq_ky
+
+        # Gain knob (large, centred in column)
+        gain_str = f"{gdb:+.1f}dB"
+        _draw_knob(col_cx, gain_ky, knob_r_gain, gain_norm, bcol,
+                   bname, gain_str, scale)
+
+        # Freq and Q knobs side-by-side below the gain knob
+        freq_cx = col_cx - col_w * 0.22
+        q_cx    = col_cx + col_w * 0.22
+
+        # Format freq label
+        if fhz >= 1000:
+            freq_str = f"{fhz/1000:.1f}k"
+        else:
+            freq_str = f"{fhz:.0f}Hz"
+
+        q_str = f"Q{q:.1f}"
+
+        _draw_knob(freq_cx, freq_ky, knob_r_sm, freq_norm, bcol,
+                   "Freq", freq_str, scale)
+
+        # Q knob — only for peak filters (shelves don't have meaningful Q)
+        if bftype == "peak":
+            _draw_knob(q_cx, q_ky, knob_r_sm, q_norm, bcol,
+                       "Q", q_str, scale)
+        else:
+            # Shelf: draw a tiny disabled Q indicator
+            _draw_circle(q_cx, q_ky, knob_r_sm,
+                         (0.1, 0.1, 0.1, 1.0))
+            _draw_circle(q_cx, q_ky, knob_r_sm,
+                         (0.2, 0.2, 0.2, 1.0), filled=False)
+            fs_q = max(1, int(6 * scale))
+            _draw_text("—", q_cx - _text_width("—", fs_q)/2,
+                       q_ky - fs_q/2, fs_q, (0.25, 0.25, 0.25, 1.0))
+
+        # Vertical divider between bands
+        if band_idx < 4:
+            div_x2 = cx + (band_idx + 1) * col_w
+            _draw_rect(div_x2 - max(0.5, scale*0.5),
+                       knob_zone_y, max(0.5, scale*0.5), knob_zone_h,
+                       (0.2, 0.2, 0.2, 1.0))
 
 
 def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
@@ -1327,6 +1778,8 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
 
     if etype == "COMP_MULTI":
         _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "EQ":
+        _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
         # Row 1: Threshold | Ratio | Knee
@@ -1820,23 +2273,54 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                 if math.dist((rx,ry),(kx2,ky1)) < kr:
                     return (i, band+16)     # gain (also reachable via fader)
         else:
-            # Single band 2x3 knob grid — must mirror draw geometry exactly
-            # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
-            body_top  = rack_y
-            body_bot  = rack_y + rh - RACK_RAIL_H*ui_scale
-            mid_y     = (body_top + body_bot) * 0.5
-            ky0       = mid_y + knob_r + 14*ui_scale   # top row
-            ky1       = mid_y - knob_r - 14*ui_scale   # bottom row
-            kxs       = [rack_x + (KNOB_START_X + c*KNOB_SPACING)*ui_scale
-                         for c in range(3)]
-            param_order = [0, 1, 5,  2, 3, 4]
-            for idx, pi in enumerate(param_order):
-                col_i = idx % 3
-                row_i = idx // 3
-                kx    = kxs[col_i]
-                ky    = ky0 if row_i == 0 else ky1
-                if math.dist((rx, ry), (kx, ky)) < knob_r + 4*ui_scale:
-                    return (i, pi)
+            # EQ: 5 columns of (Gain, Freq, Q) knobs
+            if rack.effect_type == "EQ":
+                body_h_eq   = rh - RACK_RAIL_H * ui_scale
+                ch_btn_w_eq = 108 * ui_scale
+                margin_eq   = 24 * ui_scale
+                cx_eq       = rack_x + margin_eq
+                cw_eq       = rw - ch_btn_w_eq - margin_eq * 2
+                knob_zone_y = rack_y + body_h_eq * 0.58 + 4 * ui_scale
+                knob_zone_h = body_h_eq * 0.42 - 8 * ui_scale
+                col_w_eq    = cw_eq / 5
+                kr_gain     = max(16 * ui_scale, col_w_eq * 0.18)
+                kr_sm       = max(11 * ui_scale, col_w_eq * 0.12)
+                kz_mid      = knob_zone_y + knob_zone_h * 0.42
+                freq_ky     = knob_zone_y + knob_zone_h * 0.82
+                tol         = 6 * ui_scale
+                for band_idx in range(5):
+                    col_cx   = cx_eq + (band_idx + 0.5) * col_w_eq
+                    freq_cx  = col_cx - col_w_eq * 0.22
+                    q_cx     = col_cx + col_w_eq * 0.22
+                    # Gain knob (p0-p4)
+                    if math.dist((rx, ry), (col_cx, kz_mid)) < kr_gain + tol:
+                        return (i, band_idx)
+                    # Freq knob (p5-p9)
+                    if math.dist((rx, ry), (freq_cx, freq_ky)) < kr_sm + tol:
+                        return (i, band_idx + 5)
+                    # Q knob (p10-p14) — only peak bands
+                    _, _, bftype, _, _ = EQ_BANDS[band_idx]
+                    if bftype == "peak":
+                        if math.dist((rx, ry), (q_cx, freq_ky)) < kr_sm + tol:
+                            return (i, band_idx + 10)
+            else:
+                # Single band 2x3 knob grid — must mirror draw geometry exactly
+                # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
+                body_top  = rack_y
+                body_bot  = rack_y + rh - RACK_RAIL_H*ui_scale
+                mid_y     = (body_top + body_bot) * 0.5
+                ky0       = mid_y + knob_r + 14*ui_scale   # top row
+                ky1       = mid_y - knob_r - 14*ui_scale   # bottom row
+                kxs       = [rack_x + (KNOB_START_X + c*KNOB_SPACING)*ui_scale
+                             for c in range(3)]
+                param_order = [0, 1, 5,  2, 3, 4]
+                for idx, pi in enumerate(param_order):
+                    col_i = idx % 3
+                    row_i = idx // 3
+                    kx    = kxs[col_i]
+                    ky    = ky0 if row_i == 0 else ky1
+                    if math.dist((rx, ry), (kx, ky)) < knob_r + 4*ui_scale:
+                        return (i, pi)
 
         cur_y -= rh + RACK_GAP * ui_scale
 
