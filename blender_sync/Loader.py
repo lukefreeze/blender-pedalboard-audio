@@ -293,6 +293,7 @@ _pb_full_wav_cache  = {}        # channel_idx -> full-track wav from frame_start
 # }
 _fft_timeline      = {}   # trimmed — from position_seconds to end
 _fft_timeline_full = {}   # full track — always from seq frame_start
+_fft_timeline_eq_input = {}  # pre-EQ signal per channel — for EQ spectrum display
 _gr_timeline       = {}   # trimmed — from position_seconds to end
 _gr_timeline_full  = {}   # full track — always from seq frame_start
 
@@ -363,8 +364,154 @@ def _biquad_peak(gain_db, freq, sample_rate, Q=1.0):
     return ([b0/a0, b1/a0, b2/a0], [1.0, a1/a0, a2/a0])
 
 
-# ---------------------------------------------------------------------------
-# Build the EQ-filtered sound for a channel
+def _apply_effect_chain(samples, channel_idx, sr):
+    """Apply all racks assigned to channel_idx IN UI ORDER via the C++ engine.
+
+    Builds the engine's effect_chain slot table from scene.pb_racks in list
+    order, then makes a single process_buffer() call. The C++ engine runs
+    every enabled slot in slot order, so rack order is exactly respected.
+
+    Also captures the signal at the EQ input position (pre-EQ, post-compressor)
+    and stores it as _fft_timeline_eq_input[channel_idx] so the EQ spectrum
+    display reflects what is actually arriving at the EQ rack.
+
+    Returns (processed_np, pre_comp_np).
+    """
+    import numpy as _np
+
+    engine = get_engine()
+    scene  = bpy.context.scene
+    if not scene or not engine:
+        return samples, samples
+
+    try:
+        from Racks import get_rack_channels as _grc
+    except Exception:
+        return samples, samples
+
+    racks = getattr(scene, "pb_racks", [])
+    state = engine.get_state()
+
+    # Clear all effect slots for this channel
+    for slot in range(8):
+        try:
+            fx = state.get_effect_slot(channel_idx, slot)
+            fx.enabled = False
+            fx.type    = 0   # FX_NONE
+        except Exception:
+            pass
+
+    slot_idx      = 0
+    chain_log     = []
+    pre_comp      = samples.copy()
+    hit_comp      = False
+    eq_slot_start = None   # slot index where EQ first appears
+
+    for rack in racks:
+        if not rack.enabled:
+            continue
+        if channel_idx not in _grc(rack):
+            continue
+        if slot_idx >= 8:
+            break
+
+        etype = rack.effect_type
+
+        try:
+            fx = state.get_effect_slot(channel_idx, slot_idx)
+
+            if etype == "COMP_SINGLE":
+                if not hit_comp:
+                    hit_comp = True
+                fx.type    = engine.FX_COMP_SINGLE
+                fx.enabled = True
+                fx.params  = [rack.p0, rack.p1, rack.p2, rack.p3,
+                              rack.p4, rack.p5,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                chain_log.append("COMP_SINGLE")
+                slot_idx += 1
+
+            elif etype == "COMP_MULTI":
+                if not hit_comp:
+                    hit_comp = True
+                fx.type    = engine.FX_COMP_MULTI
+                fx.enabled = True
+                fx.params  = [rack.p0,  rack.p1,  rack.p2,  rack.p3,
+                              rack.p4,  rack.p5,  rack.p6,  rack.p7,
+                              rack.p8,  rack.p9,  rack.p10, rack.p11,
+                              rack.p12, rack.p13, rack.p14, rack.p15,
+                              rack.p16, rack.p17, rack.p18, rack.p19,
+                              rack.p20, rack.p21, rack.p22, rack.p23]
+                chain_log.append("COMP_MULTI")
+                slot_idx += 1
+
+            elif etype == "EQ":
+                if eq_slot_start is None:
+                    eq_slot_start = slot_idx   # remember where EQ starts
+                fx.type    = engine.FX_EQ_PARAM
+                fx.enabled = True
+                fx.params  = ([getattr(rack, f'p{i}', 0.5 if i < 7 else 0.0)
+                               for i in range(21)] + [0.0, 0.0, 0.0])
+                chain_log.append("EQ7")
+                slot_idx += 1
+
+        except Exception as _se:
+            print(f"[CHAIN] ch{channel_idx+1} slot{slot_idx} error: {_se}")
+
+    if not chain_log:
+        print(f"[CHAIN] ch{channel_idx+1} no active racks — audio unchanged")
+        return samples, samples
+
+    # --- Capture the signal at the EQ input ---
+    # If there are effects before the EQ, run just those slots first to get
+    # the intermediate signal, store it for the EQ spectrum display.
+    if eq_slot_start is not None and eq_slot_start > 0:
+        try:
+            # Temporarily disable all slots at and after the EQ
+            for s in range(eq_slot_start, 8):
+                try:
+                    state.get_effect_slot(channel_idx, s).enabled = False
+                except Exception:
+                    pass
+            # Run just the pre-EQ slots to get the EQ input signal
+            pre_eq_buf = _np.ascontiguousarray(samples, dtype=_np.float32)
+            pre_eq_sig = _np.asarray(
+                engine.process_buffer(channel_idx, pre_eq_buf, sr),
+                dtype=_np.float32)
+            # Store for the EQ spectrum display
+            _fft_timeline_eq_input[channel_idx] = pre_eq_sig
+            # Re-enable the EQ slots
+            for s in range(eq_slot_start, slot_idx):
+                try:
+                    state.get_effect_slot(channel_idx, s).enabled = True
+                except Exception:
+                    pass
+        except Exception as _ee:
+            # Non-fatal — EQ display falls back to full timeline
+            _fft_timeline_eq_input.pop(channel_idx, None)
+    else:
+        # No effects before EQ — EQ input IS the raw signal
+        _fft_timeline_eq_input[channel_idx] = samples
+
+    # --- Single process_buffer call — C++ runs all slots in order ---
+    try:
+        buf       = _np.ascontiguousarray(samples, dtype=_np.float32)
+        processed = _np.asarray(
+            engine.process_buffer(channel_idx, buf, sr),
+            dtype=_np.float32)
+        print(f"[CHAIN] ch{channel_idx+1}: {' → '.join(chain_log)}")
+        return processed, pre_comp
+    except Exception as _pe:
+        print(f"[CHAIN] ch{channel_idx+1} process_buffer error: {_pe}")
+        return samples, samples
+
+
+
+
+
+
 # Reads strip volumes from VSE strips (user's values, not modified by us).
 # Joins multiple strips on same channel with silence for gaps.
 # ---------------------------------------------------------------------------
@@ -632,13 +779,28 @@ def _pb_wire_rack_to_engine(channel_idx):
             except Exception as e:
                 print(f"[WIRE] COMP_MULTI failed: {e}")
 
+        elif etype == "EQ":
+            # EQ now runs in C++ via FX_EQ_PARAM.
+            # Wire params into the slot so the GR metering chunk-loop
+            # also applies EQ correctly when it re-runs process_buffer.
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_EQ_PARAM
+                fx.enabled = True
+                fx.params  = ([getattr(rack, f'p{i}', 0.5 if i < 7 else 0.0)
+                               for i in range(21)] + [0.0, 0.0, 0.0])
+                slot_idx  += 1
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} EQ7 — C++ biquad")
+            except Exception as e:
+                print(f"[WIRE] EQ wiring failed: {e}")
+
         if slot_idx >= 8:
             break
 
     if slot_idx > 0:
-        print(f"[WIRE] ch{channel_idx+1} wired {slot_idx} effects — compression ACTIVE")
+        print(f"[WIRE] ch{channel_idx+1} wired {slot_idx} effects — DSP ACTIVE")
     else:
-        print(f"[WIRE] ch{channel_idx+1} no matching rack assigned — no compression")
+        print(f"[WIRE] ch{channel_idx+1} no rack assigned")
 
 
 def _pb_reprocess_channel(channel_idx):
@@ -851,10 +1013,11 @@ def _pb_start_channel(channel_idx, position_seconds):
 
                 print(f"[ENGINE] ch{channel_idx+1} processing "
                       f"{samples.shape[0]} frames × {samples.shape[1]}ch "
-                      f"@ {sr}Hz through C++ DSP")
+                      f"@ {sr}Hz — effect chain")
 
-                # Run full C++ effect chain
-                processed = engine.process_buffer(channel_idx, samples, sr)
+                # Run effect chain in UI rack order (EQ + compressors, order-aware)
+                processed, raw_for_gr = _apply_effect_chain(
+                    samples, channel_idx, sr)
 
                 # Build FFT timeline from processed audio
                 # Compute FFT every ~100ms = one snapshot per 100ms of audio
@@ -928,16 +1091,65 @@ def _pb_start_channel(channel_idx, position_seconds):
                     }
                     print(f"[ENGINE] ch{channel_idx+1} FFT timeline: "
                           f"{len(fft_snaps)} snapshots")
+
+                    # Build a separate FFT timeline for the EQ input signal.
+                    # _fft_timeline_eq_input[ch] is set by _apply_effect_chain
+                    # to the pre-EQ audio (post any upstream compressors).
+                    # If no EQ rack is assigned, it won't be set and the EQ
+                    # display just uses the main _fft_timeline (same result).
+                    eq_input_sig = _fft_timeline_eq_input.get(channel_idx)
+                    if eq_input_sig is not None:
+                        try:
+                            eq_mono = (eq_input_sig[:, 0]
+                                       if eq_input_sig.ndim == 2
+                                       else eq_input_sig.flatten())
+                            eq_snaps = []
+                            for snap_i in range(n_snaps):
+                                start_eq = snap_i * snap_frames
+                                chunk_eq = eq_mono[start_eq:start_eq + snap_frames]
+                                if len(chunk_eq) < 128:
+                                    break
+                                win_eq = np.hanning(len(chunk_eq)).astype(np.float32)
+                                fft_eq = np.abs(np.fft.rfft(chunk_eq * win_eq))
+                                fft_eq = fft_eq / (len(chunk_eq) * 0.5 + 1e-9)
+                                freq_res_eq = sr / len(chunk_eq)
+                                n_bins_eq   = len(fft_eq)
+                                band_list_eq = []
+                                for b in range(4):
+                                    f_lo = CROSSOVERS[b]
+                                    f_hi = CROSSOVERS[b + 1]
+                                    freqs_eq = np.logspace(
+                                        np.log10(max(f_lo, 1)),
+                                        np.log10(f_hi), BINS_PER_BAND)
+                                    idxs_eq = np.clip(
+                                        (freqs_eq / freq_res_eq).astype(int),
+                                        0, n_bins_eq - 1)
+                                    band_vals_eq = fft_eq[idxs_eq]
+                                    band_db_eq   = np.clip(
+                                        (20*np.log10(band_vals_eq+1e-9)+80)/80,
+                                        0.0, 1.0).astype(np.float32)
+                                    band_list_eq.append(band_db_eq)
+                                eq_snaps.append(np.stack(band_list_eq))
+                            if eq_snaps:
+                                _fft_timeline[channel_idx] = {
+                                    'snapshots'  : np.stack(eq_snaps),
+                                    'snap_frames': snap_frames,
+                                    'start_frame': position_seconds * scene_fps,
+                                    'sr'         : sr,
+                                    'fps'        : scene_fps,
+                                }
+                        except Exception as _eqfe:
+                            pass   # non-fatal — falls back to main timeline
                 except Exception as fe:
                     print(f"[ENGINE] FFT timeline failed: {fe}")
 
                 # Build GR timeline by calling process_buffer on each 80ms chunk
                 # and reading the exact GR values from the C++ engine.
-                # This is the only accurate way — FFT energy doesn't map to
-                # compressor dB thresholds correctly.
+                # raw_for_gr = the signal as it arrived at the compressor,
+                # which may differ from samples if an EQ rack is placed before it.
                 try:
                     snap_frames_gr = int(sr * 0.08)  # 80ms snapshots
-                    inp_gr = np.asarray(samples, dtype=np.float32)
+                    inp_gr = np.asarray(raw_for_gr, dtype=np.float32)
                     n_snaps_gr = max(1, inp_gr.shape[0] // snap_frames_gr)
                     gr_snaps = []
 
@@ -1024,8 +1236,8 @@ def _pb_start_channel(channel_idx, position_seconds):
                                         samp_ft = samp_ft.reshape(-1, 1)
                                     samp_ft = np.ascontiguousarray(
                                         samp_ft, dtype=np.float32)
-                                    proc_ft = engine.process_buffer(
-                                        channel_idx, samp_ft, sr)
+                                    proc_ft, _ = _apply_effect_chain(
+                                        samp_ft, channel_idx, sr)
                                     ft_path = os.path.join(
                                         tempfile.gettempdir(),
                                         f"pb_full_ch{channel_idx}.wav")
@@ -2333,7 +2545,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                             set_rack_param(rack, param_idx, new_v)
                     else:
                         if rack.effect_type == "EQ":
-                            # EQ knobs: p0-p4=gain, p5-p9=freq, p10-p14=Q
+                            # EQ knobs: p0-p6=gain, p7-p13=freq, p14-p20=Q (7 bands)
                             # All stored 0-1 normalised, just clamp and set
                             old_v = getattr(rack, f'p{param_idx}', 0.0)
                             new_v = max(0.0, min(1.0, old_v + delta))

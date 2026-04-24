@@ -51,6 +51,7 @@ _reorder_y        = 0.0
 RACK_WIDTH          = 1200         # matches 9-fader section width exactly
 RACK_EXPANDED_H     = 260
 RACK_EXPANDED_H_MB  = 400   # taller for multiband 3x2 knob grid
+RACK_EXPANDED_H_EQ  = 580   # tall studio rack — display + spacious 7-band knob row
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
@@ -164,11 +165,22 @@ EFFECT_PARAMS = {
 # COMP_SINGLE: [thr, ratio, atk, rel, makeup, knee]  (p0-p5)
 # COMP_MULTI:  [thr*4, ratio*4, atk*4, rel*4, gain*4, knee*4] (p0-p23)
 PRESET_DATA = {'COMP_SINGLE': [('Vocal Compress', [0.55, 0.10526315789473684, 0.0990990990990991, 0.0707070707070707, 0.16666666666666666, 0.14893617021276595]), ('Gentle Glue', [0.4, 0.02631578947368421, 0.29929929929929927, 0.1919191919191919, 0.08333333333333333, 0.3191489361702128]), ('Drum Bus', [0.7, 0.2631578947368421, 0.009009009009009009, 0.09090909090909091, 0.125, 0.06382978723404255]), ('Heavy Squash', [0.25, 0.47368421052631576, 0.04904904904904905, 0.04040404040404041, 0.3333333333333333, 0.02127659574468085]), ('Transparent', [0.5, 0.05263157894736842, 0.49949949949949946, 0.494949494949495, 0.041666666666666664, 0.40425531914893614]), ('Broadcast Voice', [0.65, 0.15789473684210525, 0.04904904904904905, 0.050505050505050504, 0.25, 0.06382978723404255]), ('Intimate Whisper', [0.45, 0.07894736842105263, 0.39939939939939934, 0.29292929292929293, 0.125, 0.3191489361702128]), ('Telephone', [0.8, 1.0, 0.0, 0.010101010101010102, 0.4166666666666667, 0.0]), ('Radio Ready', [0.75, 0.3684210526315789, 0.019019019019019017, 0.030303030303030304, 0.3333333333333333, 0.0425531914893617]), ('Vintage Tape', [0.55, 0.10526315789473684, 0.19919919919919918, 0.1919191919191919, 0.125, 0.23404255319148937]), ('Dark Presence', [0.75, 0.5789473684210527, 0.009009009009009009, 0.020202020202020204, 0.4166666666666667, 0.02127659574468085]), ('Robot Voice', [0.85, 1.0, 0.0, 0.0, 0.5, 0.0]), ('Underwater', [0.5, 0.15789473684210525, 0.7997997997997998, 0.898989898989899, 0.16666666666666666, 0.48936170212765956]), ('Announcer', [0.6, 0.13157894736842105, 0.07907907907907907, 0.09090909090909091, 0.20833333333333334, 0.10638297872340426]), ('Whisper to Shout', [0.25, 0.7368421052631579, 0.04904904904904905, 0.1414141414141414, 0.3333333333333333, 0.14893617021276595])], 'COMP_MULTI': [('Voice Over Clean', [0.45, 0.5, 0.55, 0.6, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.19919919919919918, 0.14914914914914915, 0.0990990990990991, 0.07907907907907907, 0.1919191919191919, 0.1414141414141414, 0.09090909090909091, 0.0707070707070707, 0.5, 0.5, 0.5, 0.5, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595]), ('Voice Over Warm', [0.5, 0.55, 0.6, 0.65, 0.07894736842105263, 0.10526315789473684, 0.10526315789473684, 0.05263157894736842, 0.14914914914914915, 0.0990990990990991, 0.07907907907907907, 0.04904904904904905, 0.1414141414141414, 0.09090909090909091, 0.0707070707070707, 0.050505050505050504, 0.5833333333333334, 0.4583333333333333, 0.4166666666666667, 0.5, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426]), ('Voice Over Bright', [0.45, 0.5, 0.55, 0.65, 0.05263157894736842, 0.07894736842105263, 0.10526315789473684, 0.10526315789473684, 0.19919919919919918, 0.11911911911911911, 0.07907907907907907, 0.04904904904904905, 0.1717171717171717, 0.1111111111111111, 0.0707070707070707, 0.050505050505050504, 0.4583333333333333, 0.5, 0.5416666666666666, 0.5833333333333334, 0.2765957446808511, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426]), ('Male Voice', [0.55, 0.65, 0.5, 0.45, 0.10526315789473684, 0.15789473684210525, 0.07894736842105263, 0.05263157894736842, 0.0990990990990991, 0.07907907907907907, 0.14914914914914915, 0.19919919919919918, 0.09090909090909091, 0.0707070707070707, 0.1414141414141414, 0.1919191919191919, 0.5416666666666666, 0.5, 0.4583333333333333, 0.4166666666666667, 0.14893617021276595, 0.10638297872340426, 0.23404255319148937, 0.3191489361702128]), ('Female Voice', [0.45, 0.55, 0.65, 0.6, 0.05263157894736842, 0.10526315789473684, 0.15789473684210525, 0.10526315789473684, 0.19919919919919918, 0.11911911911911911, 0.05905905905905906, 0.07907907907907907, 0.1717171717171717, 0.09090909090909091, 0.050505050505050504, 0.0707070707070707, 0.4583333333333333, 0.5, 0.5416666666666666, 0.5, 0.3191489361702128, 0.19148936170212766, 0.10638297872340426, 0.14893617021276595]), ('Narration', [0.4, 0.45, 0.5, 0.55, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.29929929929929927, 0.2492492492492492, 0.19919919919919918, 0.14914914914914915, 0.29292929292929293, 0.24242424242424243, 0.1919191919191919, 0.1414141414141414, 0.5, 0.5, 0.5, 0.5, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766]), ('Podcast Ready', [0.55, 0.6, 0.65, 0.65, 0.10526315789473684, 0.10526315789473684, 0.15789473684210525, 0.10526315789473684, 0.0990990990990991, 0.07907907907907907, 0.05905905905905906, 0.04904904904904905, 0.09090909090909091, 0.0707070707070707, 0.050505050505050504, 0.050505050505050504, 0.5416666666666666, 0.5416666666666666, 0.5416666666666666, 0.5, 0.19148936170212766, 0.14893617021276595, 0.10638297872340426, 0.10638297872340426]), ('Broadcast', [0.7, 0.75, 0.7, 0.65, 0.2631578947368421, 0.3684210526315789, 0.2631578947368421, 0.21052631578947367, 0.039039039039039033, 0.029029029029029027, 0.039039039039039033, 0.04904904904904905, 0.04040404040404041, 0.030303030303030304, 0.04040404040404041, 0.050505050505050504, 0.625, 0.5833333333333334, 0.5833333333333334, 0.5416666666666666, 0.06382978723404255, 0.06382978723404255, 0.06382978723404255, 0.10638297872340426]), ('Dark Presence', [0.8, 0.6, 0.45, 0.4, 0.47368421052631576, 0.15789473684210525, 0.05263157894736842, 0.05263157894736842, 0.019019019019019017, 0.0990990990990991, 0.19919919919919918, 0.29929929929929927, 0.030303030303030304, 0.09090909090909091, 0.1919191919191919, 0.29292929292929293, 0.6666666666666666, 0.5416666666666666, 0.4583333333333333, 0.4166666666666667, 0.02127659574468085, 0.10638297872340426, 0.23404255319148937, 0.3191489361702128]), ('Whisper Voice', [0.3, 0.35, 0.4, 0.45, 0.02631578947368421, 0.02631578947368421, 0.05263157894736842, 0.05263157894736842, 0.39939939939939934, 0.3493493493493493, 0.2492492492492492, 0.19919919919919918, 0.3434343434343434, 0.29292929292929293, 0.24242424242424243, 0.1919191919191919, 0.5, 0.5, 0.5, 0.5, 0.48936170212765956, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937]), ('Telephone MB', [0.85, 0.9, 0.9, 0.75, 1.0, 0.7368421052631579, 0.7368421052631579, 0.47368421052631576, 0.0, 0.0, 0.0, 0.009009009009009009, 0.0, 0.0, 0.0, 0.04040404040404041, 0.0, 0.6666666666666666, 0.6666666666666666, 0.0, 0.0, 0.0, 0.0, 0.0]), ('Loud & Proud', [0.8, 0.75, 0.75, 0.7, 0.47368421052631576, 0.3684210526315789, 0.3684210526315789, 0.2631578947368421, 0.009009009009009009, 0.019019019019019017, 0.019019019019019017, 0.029029029029029027, 0.020202020202020204, 0.030303030303030304, 0.030303030303030304, 0.04040404040404041, 0.7083333333333334, 0.625, 0.625, 0.5833333333333334, 0.02127659574468085, 0.02127659574468085, 0.06382978723404255, 0.06382978723404255]), ('Gentle Master', [0.3, 0.35, 0.4, 0.45, 0.02631578947368421, 0.02631578947368421, 0.02631578947368421, 0.02631578947368421, 0.49949949949949946, 0.39939939939939934, 0.3493493493493493, 0.29929929929929927, 0.3939393939393939, 0.3434343434343434, 0.29292929292929293, 0.24242424242424243, 0.5, 0.5, 0.5, 0.5, 0.48936170212765956, 0.40425531914893614, 0.3191489361702128, 0.23404255319148937]), ('Drum Glue', [0.65, 0.6, 0.5, 0.4, 0.21052631578947367, 0.15789473684210525, 0.07894736842105263, 0.05263157894736842, 0.019019019019019017, 0.04904904904904905, 0.14914914914914915, 0.2492492492492492, 0.050505050505050504, 0.0707070707070707, 0.1414141414141414, 0.1919191919191919, 0.5833333333333334, 0.5416666666666666, 0.5, 0.4583333333333333, 0.06382978723404255, 0.10638297872340426, 0.19148936170212766, 0.2765957446808511]), ('Master Bus', [0.45, 0.5, 0.55, 0.6, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.05263157894736842, 0.2492492492492492, 0.19919919919919918, 0.14914914914914915, 0.0990990990990991, 0.24242424242424243, 0.1919191919191919, 0.1414141414141414, 0.09090909090909091, 0.5, 0.5, 0.5, 0.5, 0.3191489361702128, 0.23404255319148937, 0.19148936170212766, 0.14893617021276595]), ('EXTREME Crush', [0.85, 0.85, 0.85, 0.85, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8333333333333334, 0.8333333333333334, 0.8333333333333334, 0.8333333333333334, 0.0, 0.0, 0.0, 0.0]), ('Robot Voice MB', [0.8, 0.85, 0.85, 0.7, 0.8947368421052632, 1.0, 1.0, 0.3684210526315789, 0.0, 0.0, 0.0, 0.0, 0.005050505050505051, 0.0, 0.0, 0.020202020202020204, 0.25, 0.75, 0.8333333333333334, 0.16666666666666666, 0.0, 0.0, 0.0, 0.0]), ('Underwater MB', [0.5, 0.4, 0.75, 0.85, 0.10526315789473684, 0.05263157894736842, 0.3684210526315789, 0.7368421052631579, 0.49949949949949946, 0.39939939939939934, 0.04904904904904905, 0.0, 0.494949494949495, 0.3939393939393939, 0.04040404040404041, 0.0, 0.9166666666666666, 0.5833333333333334, 0.3333333333333333, 0.08333333333333333, 0.48936170212765956, 0.3191489361702128, 0.06382978723404255, 0.0])]}
+# EQ presets — 21 params: p0-p6=gain(norm 0-1, 0.5=0dB ±24dB),
+#                          p7-p13=freq(log-norm 0-1, 20Hz-20kHz),
+#                          p14-p20=Q(log-norm 0-1, 0.1-10.0)
+PRESET_DATA['EQ'] = [
+    ('Presence Boost', [0.5, 0.5, 0.5, 0.5625, 0.604167, 0.5625, 0.5, 0.200687, 0.365637, 0.514689, 0.725364, 0.825707, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.539591, 0.5, 0.5, 0.422549]),
+    ('Low Cut',        [0.125, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.23299, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
+    ('Air',            [0.5, 0.5, 0.458333, 0.5, 0.5, 0.583333, 0.625, 0.200687, 0.39203, 0.514689, 0.666667, 0.799313, 0.92605, 0.967697, 0.422549, 0.539591, 0.5, 0.5, 0.5, 0.5, 0.422549]),
+    ('Mud Remove',     [0.5, 0.416667, 0.4375, 0.541667, 0.541667, 0.5, 0.5, 0.200687, 0.333333, 0.433677, 0.725364, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
+    ('Telephone',      [0.125, 0.5625, 0.583333, 0.5625, 0.375, 0.25, 0.125, 0.23299, 0.39203, 0.53402, 0.69897, 0.799313, 0.899657, 0.967697, 0.422549, 0.650515, 0.588046, 0.588046, 0.588046, 0.588046, 0.422549]),
+]
+
 # Legacy name lists for rack preset display
 PRESETS = {
     "COMP_SINGLE": [p[0] for p in PRESET_DATA["COMP_SINGLE"]],
     "COMP_MULTI":  [p[0] for p in PRESET_DATA["COMP_MULTI"]],
-    "EQ":         ["Presence Boost", "Low Cut", "Air", "Mud Remove", "Telephone"],
+    "EQ":          [p[0] for p in PRESET_DATA["EQ"]],
     "REVERB":     ["Small Room", "Large Hall", "Plate", "Spring", "Ambience"],
     "NOISE_GATE": ["Tight Gate", "Soft Gate", "Drum Gate", "Vocal Gate", "Natural"],
     "DELAY":      ["Slapback", "Quarter Note", "Dotted 8th", "Ping Pong", "Tape Echo"],
@@ -360,12 +372,21 @@ def _load_preset(rack, preset_idx):
             if hasattr(rack, attr):
                 setattr(rack, attr, float(max(0.0, min(1.0, val))))
         return
-    # EQ: initialise gain to unity (0.5=0dB) and freq/Q from EQ_BANDS defaults
+    # EQ: 7 bands — gain p0-p6, freq p7-p13, Q p14-p20
     if etype == "EQ":
-        for band_idx, (_, _, _, def_freq, def_q) in enumerate(EQ_BANDS):
-            setattr(rack, f'p{band_idx}',      0.5)  # 0 dB gain
-            setattr(rack, f'p{band_idx + 5}',  _eq_freq_to_norm(def_freq))
-            setattr(rack, f'p{band_idx + 10}', _eq_q_to_norm(def_q))
+        EQ7_DEFAULTS = [
+            ("low_shelf",   80.0, 0.7),
+            ("peak",       250.0, 1.0),
+            ("peak",       700.0, 1.0),
+            ("peak",      2000.0, 1.0),
+            ("peak",      5000.0, 1.0),
+            ("peak",     10000.0, 1.0),
+            ("high_shelf",16000.0, 0.7),
+        ]
+        for bi, (_, df, dq) in enumerate(EQ7_DEFAULTS):
+            setattr(rack, f'p{bi}',      0.5)
+            setattr(rack, f'p{bi + 7}',  _eq_freq_to_norm(df))
+            setattr(rack, f'p{bi + 14}', _eq_q_to_norm(dq))
         return
     # Fallback to EFFECT_PARAMS defaults for other types
     params = EFFECT_PARAMS.get(etype, [])
@@ -1333,300 +1354,398 @@ def _eq_biquad_response(freq_hz, gain_db, band_filter_type, q, f_test):
 
 def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     """
-    Draw the parametric EQ rack body.
+    Parametric EQ rack body — Adobe Premiere Pro style.
 
-    Layout (left→right across full rack width minus channel buttons):
-      • Full-width frequency response display (top ~60% of body)
-        - Dark background with dB grid and frequency labels
-        - Live FFT bars from the assigned channel (same as COMP_SINGLE)
-        - Coloured frequency response curve computed from current knob values
-        - Draggable band handle dots on the curve
-      • 5-knob row (bottom ~40% of body): one column per band
-        Each column: Gain knob (large) + Freq knob + Q knob
-      • Channel buttons — right edge (same as all racks)
+    Layout:
+      Top 62% : frequency display
+                - Audio waveform silhouette (mirrored, from RMS envelope)
+                - dB grid +/-18dB, octave frequency grid
+                - Per-band dim coloured response curves
+                - Combined cyan response curve + filled teal area
+                - 7 draggable band handle dots
+      Bottom 38%: 7-column knob strip  L | 1 | 2 | 3 | 4 | 5 | H
+                  Each column: band label, Gain knob, Freq knob, Q knob
+
+    Parameter storage (7-band layout):
+      p0-p6  : gain (0.5 = 0dB, range -24..+24dB)
+      p7-p13 : freq (log-normalised 0-1)
+      p14-p20: Q    (log-normalised 0-1)
     """
     import math as _m
 
+    EQ7_BANDS = [
+        ("L",  (0.30, 0.60, 1.00), "low_shelf",   80.0,  0.7),
+        ("1",  (0.25, 0.90, 0.55), "peak",        250.0,  1.0),
+        ("2",  (0.50, 0.90, 0.20), "peak",        700.0,  1.0),
+        ("3",  (0.95, 0.85, 0.10), "peak",       2000.0,  1.0),
+        ("4",  (1.00, 0.55, 0.10), "peak",       5000.0,  1.0),
+        ("5",  (0.95, 0.30, 0.55), "peak",      10000.0,  1.0),
+        ("H",  (0.80, 0.30, 1.00), "high_shelf", 16000.0, 0.7),
+    ]
+    N_BANDS = 7
+
+    def _get_b(bi):
+        gn  = getattr(rack, f"p{bi}",      0.5)
+        fn  = getattr(rack, f"p{bi + 7}", -1.0)
+        qn  = getattr(rack, f"p{bi + 14}",-1.0)
+        gdb = (gn - 0.5) * 48.0
+        _, _, bft, df, dq = EQ7_BANDS[bi]
+        if fn < 0.0: fn = _eq_freq_to_norm(df)
+        if qn < 0.0: qn = _eq_q_to_norm(dq)
+        return gdb, _eq_freq_from_norm(fn), _eq_q_from_norm(qn), gn, fn, qn
+
+    # -----------------------------------------------------------------------
+    # Geometry
+    # -----------------------------------------------------------------------
     rail_h   = RACK_RAIL_H * scale
     body_h   = rh - rail_h
-    ch_btn_w = 108 * scale          # reserved for channel buttons on right
-    margin   = 24 * scale
+    ch_btn_w = 108 * scale
+    margin_l = 42 * scale
+    margin_r = ch_btn_w + 8 * scale
 
-    # Content area
-    cx  = rx + margin
-    cw  = rw - ch_btn_w - margin * 2
-    cy  = ry
-    ch  = body_h
+    disp_x = rx + margin_l
+    disp_w = rw - margin_l - margin_r
+    # 54% display / 44% knobs — more knob room for larger controls + visible labels
+    disp_h = body_h * 0.54
+    disp_y = ry + body_h - disp_h - 2 * scale   # top of body (display at top)
 
-    # Split body vertically
-    curve_frac  = 0.58
-    curve_h     = ch * curve_frac - 4 * scale
-    knob_zone_y = cy + ch * curve_frac + 4 * scale
-    knob_zone_h = ch * (1.0 - curve_frac) - 8 * scale
+    knob_h = body_h * 0.44 - 6 * scale
+    knob_y = ry + 2 * scale                      # knob strip at bottom of body
 
-    curve_x = cx
-    curve_y = cy + ch - curve_h - 4 * scale
-    curve_w = cw
+    db_range  = 18.0
+    zero_db_y = disp_y + disp_h * 0.5
+    px_per_db = (disp_h * 0.5) / db_range
 
-    # -----------------------------------------------------------------------
-    # FREQUENCY RESPONSE DISPLAY
-    # -----------------------------------------------------------------------
-    # Background
-    _draw_rect(curve_x, curve_y, curve_w, curve_h, (0.04, 0.04, 0.04, 1.0))
-
-    # dB grid lines: +18, +12, +6, 0, -6, -12, -18, -24
-    db_range  = 24.0   # display ±24 dB
-    zero_db_y = curve_y + curve_h * 0.5
-    px_per_db = (curve_h * 0.5) / db_range
-
-    for db_val in (18, 12, 6, 0, -6, -12, -18, -24):
-        gy     = zero_db_y + db_val * px_per_db
-        bright = 0.18 if db_val == 0 else 0.09
-        alpha  = 0.9  if db_val == 0 else 0.5
-        if curve_y <= gy <= curve_y + curve_h:
-            _draw_rect(curve_x, gy, curve_w, max(0.5, scale * 0.5),
-                       (bright, bright, bright, alpha))
-            label = f"{db_val:+d}" if db_val != 0 else "0"
-            fs_db = max(1, int(7 * scale))
-            tw_db = _text_width(label, fs_db)
-            _draw_text(label, curve_x - tw_db - 3 * scale,
-                       gy - fs_db / 2, fs_db, (0.35, 0.35, 0.35, 1.0))
-
-    # Frequency grid lines (1 octave steps: 32, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k)
-    freq_grid = [32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-    for fg in freq_grid:
-        t  = (_m.log10(fg) - EQ_FREQ_MIN_LOG) / (EQ_FREQ_MAX_LOG - EQ_FREQ_MIN_LOG)
-        gx = curve_x + t * curve_w
-        _draw_rect(gx, curve_y, max(0.5, scale * 0.5), curve_h,
-                   (0.11, 0.11, 0.11, 1.0))
-        lbl = "1k" if fg == 1000 else ("2k" if fg == 2000 else
-              "4k" if fg == 4000 else "8k" if fg == 8000 else
-              "16k" if fg == 16000 else str(fg))
-        fs_f = max(1, int(7 * scale))
-        _draw_text(lbl, gx + 2 * scale, curve_y - 11 * scale,
-                   fs_f, (0.28, 0.28, 0.28, 1.0))
-
-    # Border
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    bv = [(curve_x, curve_y), (curve_x + curve_w, curve_y),
-          (curve_x + curve_w, curve_y + curve_h),
-          (curve_x, curve_y + curve_h), (curve_x, curve_y)]
-    bb = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
-    shader.bind(); shader.uniform_float("color", (0.18, 0.18, 0.18, 1.0))
-    bb.draw(shader)
 
-    # --- Live FFT bars (background, same source as COMP_SINGLE) ---
+    # -----------------------------------------------------------------------
+    # DISPLAY BACKGROUND + GRID
+    # -----------------------------------------------------------------------
+    _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.035, 0.040, 1.0))
+
+    for db_val in (18, 12, 6, 0, -6, -12, -18):
+        gy = zero_db_y + db_val * px_per_db
+        if not (disp_y <= gy <= disp_y + disp_h):
+            continue
+        bright = 0.22 if db_val == 0 else 0.09
+        lw     = max(1.0, scale) if db_val == 0 else max(0.5, scale * 0.5)
+        _draw_rect(disp_x, gy, disp_w, lw, (bright, bright, bright, 0.9))
+        lbl   = "0dB" if db_val == 0 else f"{db_val:+d}"
+        fs_db = max(1, int(7 * scale))
+        tw_db = _text_width(lbl, fs_db)
+        _draw_text(lbl, disp_x - tw_db - 4 * scale,
+                   gy - fs_db * 0.5, fs_db, (0.30, 0.30, 0.30, 1.0))
+
+    freq_marks = [
+        (20, "20"), (50, "50"), (100, "100"), (200, "200"), (500, "500"),
+        (1000, "1k"), (2000, "2k"), (5000, "5k"), (10000, "10k"), (20000, "20k"),
+    ]
+    for fhz_m, lbl_m in freq_marks:
+        t_m  = (_m.log10(fhz_m) - EQ_FREQ_MIN_LOG) / (EQ_FREQ_MAX_LOG - EQ_FREQ_MIN_LOG)
+        gx_m = disp_x + t_m * disp_w
+        if not (disp_x <= gx_m <= disp_x + disp_w):
+            continue
+        _draw_rect(gx_m, disp_y, max(0.5, scale * 0.5), disp_h,
+                   (0.11, 0.11, 0.11, 1.0))
+        fs_f = max(1, int(7 * scale))
+        tw_f = _text_width(lbl_m, fs_f)
+        _draw_text(lbl_m, gx_m - tw_f * 0.5,
+                   disp_y - 11 * scale, fs_f, (0.28, 0.28, 0.28, 1.0))
+
+    # -----------------------------------------------------------------------
+    # SPECTRUM ANALYSER — FabFilter Pro-Q style
+    # Reads _fft_timeline built by Loader.py during batch processing.
+    # Shape: (n_snaps, 4, 32) — 4 bands × 32 log-spaced bins = 128 points.
+    # Bands: 0=20-120Hz  1=120-800Hz  2=800-5000Hz  3=5000-20000Hz
+    #
+    # Two filled silhouette layers, bottom-to-top (NOT bars):
+    #   Layer 1 — pre-EQ:  dark grey filled polygon from floor up
+    #   Layer 2 — post-EQ: same data with current EQ gain curve applied
+    # Jagged/spiky look comes naturally from 128 narrow adjacent bins.
+    # Silent / dark until audio has been processed at least once.
+    # Hidden when the rack is bypassed (rack.enabled = False).
+    # -----------------------------------------------------------------------
     if rack.enabled:
-        try:
-            from Loader import _fft_timeline
-            scene_eq  = bpy.context.scene
-            assigned_eq = get_rack_channels(rack)
-            if assigned_eq and scene_eq:
-                ch_eq  = list(assigned_eq)[0]
-                tl_eq  = _fft_timeline.get(ch_eq)
-                if tl_eq and len(tl_eq['snapshots']) > 0:
-                    cur_f  = scene_eq.frame_current
-                    sec_eq = tl_eq['snap_frames'] / tl_eq['sr']
-                    elap   = (cur_f - tl_eq['start_frame']) / tl_eq['fps']
-                    si     = max(0, min(len(tl_eq['snapshots']) - 1,
-                                       int(elap / sec_eq)))
-                    import numpy as _np_eq
-                    fdata  = tl_eq['snapshots'][si]
-                    frac_e = elap / sec_eq - si
-                    if frac_e > 0.0 and si + 1 < len(tl_eq['snapshots']):
-                        fdata = fdata * (1.0 - frac_e) + tl_eq['snapshots'][si + 1] * frac_e
-                    fft_flat = _np_eq.concatenate([fdata[b] for b in range(4)])
-                    n_bins   = len(fft_flat)
-                    n_bars   = SPEC_BANDS
-                    bar_w_eq = curve_w / n_bars
-                    centres  = [_m.pow(n_bins, b / n_bars) - 1.0
-                                 for b in range(n_bars)]
-                    sigmas   = []
-                    for b in range(n_bars):
-                        if b == 0:     gap = max(0.5, centres[1] - centres[0])
-                        elif b == n_bars-1: gap = max(0.5, centres[-1] - centres[-2])
-                        else:          gap = max(0.5, (centres[b+1] - centres[b-1]) * 0.5)
-                        sigmas.append(max(1.5, gap * 1.5))
-                    for b in range(n_bars):
-                        centre = centres[b]
-                        sigma  = sigmas[b]
-                        lo = max(0, int(centre - 3.0 * sigma))
-                        hi = min(n_bins - 1, int(centre + 3.0 * sigma) + 1)
-                        tw2, tv2 = 0.0, 0.0
-                        for bi in range(lo, hi + 1):
-                            w = _m.exp(-0.5 * ((bi - centre) / sigma) ** 2)
-                            tw2 += w; tv2 += w * float(fft_flat[bi])
-                        h_frac = tv2 / tw2 if tw2 > 0 else float(fft_flat[max(0, min(n_bins-1, int(centre)))])
-                        h_frac = max(0.02, min(0.9, h_frac))
-                        bar_h_eq = h_frac * curve_h
-                        bx_eq    = curve_x + b * bar_w_eq
-                        t_eq     = b / n_bars
-                        if   t_eq < 0.3: ec = (0.08, 0.22, 0.08, 0.65)
-                        elif t_eq < 0.6: ec = (0.08, 0.28, 0.10, 0.65)
-                        elif t_eq < 0.8: ec = (0.22, 0.22, 0.06, 0.55)
-                        else:            ec = (0.20, 0.12, 0.04, 0.45)
-                        _draw_rect(bx_eq, curve_y,
-                                   max(bar_w_eq - scale, 0.5), bar_h_eq, ec)
-        except Exception:
-            pass
+     try:
+        from Loader import _fft_timeline
+        import math as _ms
 
-    # --- Frequency response curve (combined across all bands) ---
-    N_PTS = 256
+        assigned_sp = get_rack_channels(rack)
+        if assigned_sp:
+            ch_sp = list(assigned_sp)[0]
+            tl_sp = _fft_timeline.get(ch_sp)
+            if tl_sp is not None and len(tl_sp['snapshots']) > 0:
+                scene_sp    = bpy.context.scene
+                cur_frame   = scene_sp.frame_current if scene_sp else 0
+                start_frame = tl_sp['start_frame']
+                fps_sp      = tl_sp['fps']
+                snap_sec    = tl_sp['snap_frames'] / tl_sp['sr']
+                elapsed_sec = max(0.0, (cur_frame - start_frame) / fps_sp)
+                snap_f      = elapsed_sec / snap_sec
+                snap_idx    = max(0, min(len(tl_sp['snapshots']) - 1, int(snap_f)))
+                frac        = snap_f - int(snap_f)
+
+                import numpy as _nps
+                frame_data = tl_sp['snapshots'][snap_idx].astype(float)
+                if frac > 0.0 and snap_idx + 1 < len(tl_sp['snapshots']):
+                    frame_data = (frame_data * (1.0 - frac) +
+                                  tl_sp['snapshots'][snap_idx + 1].astype(float) * frac)
+
+                # Build (x_norm 0-1, amplitude 0-1) pairs for all 128 bins
+                CROSSOVERS = [20, 120, 800, 5000, 20000]
+                BINS_PER   = 32
+                LOG_MIN    = _ms.log10(20.0)
+                LOG_RANGE  = _ms.log10(20000.0) - LOG_MIN
+
+                freq_amp = []   # (t_x, amp) sorted by frequency
+                import numpy as _nps2
+                for band in range(4):
+                    f_lo = CROSSOVERS[band]
+                    f_hi = CROSSOVERS[band + 1]
+                    bins = frame_data[band]
+                    freqs = _nps2.logspace(_ms.log10(max(f_lo, 1.0)),
+                                           _ms.log10(f_hi), BINS_PER)
+                    for bi in range(BINS_PER):
+                        t_x = (_ms.log10(max(float(freqs[bi]), 20.0)) - LOG_MIN) / LOG_RANGE
+                        freq_amp.append((t_x, max(0.0, min(1.0, float(bins[bi])))))
+
+                freq_amp.sort(key=lambda p: p[0])
+
+                def _spectrum_fill(pairs, color, h_scale=0.90):
+                    """Draw filled silhouette from floor up as a single polygon."""
+                    if len(pairs) < 2:
+                        return
+                    verts = []
+                    for t_x, amp in pairs:
+                        bx = disp_x + t_x * disp_w
+                        verts.append((bx, disp_y))
+                        verts.append((bx, disp_y + amp * disp_h * h_scale))
+                    if len(verts) >= 4:
+                        bf = batch_for_shader(shader, "TRI_STRIP", {"pos": verts})
+                        shader.bind()
+                        shader.uniform_float("color", color)
+                        bf.draw(shader)
+
+                def _spectrum_edge(pairs, color, h_scale=0.90):
+                    """Draw the top edge of the spectrum as a LINE_STRIP."""
+                    if len(pairs) < 2:
+                        return
+                    verts = [(disp_x + t_x * disp_w,
+                              disp_y + amp * disp_h * h_scale)
+                             for t_x, amp in pairs]
+                    bt = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
+                    gpu.state.line_width_set(max(1.0, scale * 0.7))
+                    shader.bind()
+                    shader.uniform_float("color", color)
+                    bt.draw(shader)
+                    gpu.state.line_width_set(1.0)
+
+                # --- Layer 1: pre-EQ spectrum (dark grey) ---
+                _spectrum_fill(freq_amp, (0.17, 0.17, 0.19, 0.82))
+                _spectrum_edge(freq_amp, (0.32, 0.32, 0.36, 0.55))
+
+                # --- Layer 2: post-EQ spectrum (EQ curve applied) ---
+                # Multiply each bin's amplitude by the linear gain the current
+                # EQ settings produce at that frequency — shows shaping live.
+                try:
+                    band_params_sp = [_get_b(bi) for bi in range(N_BANDS)]
+                    post_pairs = []
+                    for t_x, amp in freq_amp:
+                        freq_hz = 20.0 * (10.0 ** (t_x * LOG_RANGE))
+                        eq_db = 0.0
+                        for bi in range(N_BANDS):
+                            gdb_s, fhz_s, q_s, _, _, _ = band_params_sp[bi]
+                            eq_db += _eq_biquad_response(
+                                fhz_s, gdb_s, EQ7_BANDS[bi][2], q_s, freq_hz)
+                        lin = 10.0 ** (eq_db / 20.0)
+                        post_pairs.append((t_x, max(0.0, min(1.0, amp * lin))))
+
+                    _spectrum_fill(post_pairs, (0.28, 0.30, 0.35, 0.72))
+                    _spectrum_edge(post_pairs, (0.52, 0.58, 0.68, 0.90))
+                except Exception:
+                    pass  # post-EQ layer is bonus — never block pre-EQ draw
+
+     except Exception:
+         pass  # spectrum is decorative — never crash the draw callback
+
+    # -----------------------------------------------------------------------
+    # EQ CURVES
+    # -----------------------------------------------------------------------
+    N_PTS = 300
     try:
+        band_params = [_get_b(bi) for bi in range(N_BANDS)]
+
+        # Combined response
         combined_db = []
         for pi in range(N_PTS):
-            t       = pi / (N_PTS - 1)
-            f_test  = _eq_freq_from_norm(t)
-            total   = 0.0
-            for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
-                gdb, fhz, q, _, _ = _eq_get_band(rack, band_idx)
-                total += _eq_biquad_response(fhz, gdb, bftype, q, f_test)
+            t      = pi / (N_PTS - 1)
+            f_test = _eq_freq_from_norm(t)
+            total  = 0.0
+            for bi in range(N_BANDS):
+                gdb_b, fhz_b, q_b, _, _, _ = band_params[bi]
+                total += _eq_biquad_response(fhz_b, gdb_b, EQ7_BANDS[bi][2], q_b, f_test)
             combined_db.append(total)
 
-        # Draw filled area under/over 0dB (subtle)
-        for pi in range(N_PTS - 1):
-            t0, t1 = pi / (N_PTS - 1), (pi + 1) / (N_PTS - 1)
-            x0 = curve_x + t0 * curve_w
-            x1 = curve_x + t1 * curve_w
-            db0 = max(-db_range, min(db_range, combined_db[pi]))
-            db1 = max(-db_range, min(db_range, combined_db[pi + 1]))
-            y0  = zero_db_y + db0 * px_per_db
-            y1  = zero_db_y + db1 * px_per_db
-            # Clamp to display area
-            y0 = max(curve_y, min(curve_y + curve_h, y0))
-            y1 = max(curve_y, min(curve_y + curve_h, y1))
-            # Fill quad between curve and 0dB line
-            y_zero = max(curve_y, min(curve_y + curve_h, zero_db_y))
-            fill_col = (0.1, 0.55, 0.8, 0.12)
-            if abs(x1 - x0) > 0.1:
-                vf = [(x0, y_zero), (x1, y_zero), (x1, y1), (x0, y0)]
-                bf = batch_for_shader(shader, "TRI_FAN", {"pos": vf})
-                shader.bind(); shader.uniform_float("color", fill_col); bf.draw(shader)
-
-        # Draw the curve line itself
+        # Curve points (clamped)
         curve_pts = []
         for pi in range(N_PTS):
             t   = pi / (N_PTS - 1)
-            db  = max(-db_range, min(db_range, combined_db[pi]))
-            px2 = curve_x + t * curve_w
-            py2 = zero_db_y + db * px_per_db
-            py2 = max(curve_y + 1, min(curve_y + curve_h - 1, py2))
-            curve_pts.append((px2, py2))
+            db  = max(-db_range * 1.1, min(db_range * 1.1, combined_db[pi]))
+            cpx = disp_x + t * disp_w
+            cpy = zero_db_y + db * px_per_db
+            cpy = max(disp_y + 1, min(disp_y + disp_h - 1, cpy))
+            curve_pts.append((cpx, cpy))
 
-        # Draw as polyline segments (GPU LINE_STRIP)
+        # Filled teal area between curve and 0dB
+        y_zero  = max(disp_y, min(disp_y + disp_h, zero_db_y))
+        fill_v2 = []
+        for i in range(N_PTS):
+            fill_v2.append(curve_pts[i])
+            fill_v2.append((curve_pts[i][0], y_zero))
+        if len(fill_v2) >= 4:
+            bfill = batch_for_shader(shader, "TRI_STRIP", {"pos": fill_v2})
+            shader.bind()
+            shader.uniform_float("color", (0.05, 0.35, 0.52, 0.18))
+            bfill.draw(shader)
+
+        # Per-band dim curves
+        for bi in range(N_BANDS):
+            gdb_b, fhz_b, q_b, _, _, _ = band_params[bi]
+            if abs(gdb_b) < 0.5:
+                continue
+            bcol_b = EQ7_BANDS[bi][1]
+            bftype_b = EQ7_BANDS[bi][2]
+            bpts = []
+            for pi in range(N_PTS):
+                t   = pi / (N_PTS - 1)
+                db  = _eq_biquad_response(fhz_b, gdb_b, bftype_b, q_b,
+                                          _eq_freq_from_norm(t))
+                db  = max(-db_range * 1.1, min(db_range * 1.1, db))
+                bpx  = disp_x + t * disp_w
+                bpyv = zero_db_y + db * px_per_db
+                bpyv = max(disp_y + 1, min(disp_y + disp_h - 1, bpyv))
+                bpts.append((bpx, bpyv))
+            if len(bpts) >= 2:
+                bb_b = batch_for_shader(shader, "LINE_STRIP", {"pos": bpts})
+                gpu.state.line_width_set(max(1.0, scale))
+                shader.bind()
+                shader.uniform_float("color", (*bcol_b, 0.35))
+                bb_b.draw(shader)
+                gpu.state.line_width_set(1.0)
+
+        # Combined curve (bright cyan)
         if len(curve_pts) >= 2:
             bc = batch_for_shader(shader, "LINE_STRIP", {"pos": curve_pts})
             gpu.state.line_width_set(max(2.0, scale * 2.0))
-            shader.bind(); shader.uniform_float("color", (0.15, 0.7, 1.0, 0.95))
+            shader.bind()
+            shader.uniform_float("color", (0.15, 0.75, 1.00, 0.95))
             bc.draw(shader)
             gpu.state.line_width_set(1.0)
 
-        # Per-band individual curves (dim, coloured)
-        for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
-            gdb, fhz, q, _, _ = _eq_get_band(rack, band_idx)
-            if abs(gdb) < 0.3:
-                continue
-            band_pts = []
-            for pi in range(N_PTS):
-                t    = pi / (N_PTS - 1)
-                f_t  = _eq_freq_from_norm(t)
-                db   = _eq_biquad_response(fhz, gdb, bftype, q, f_t)
-                db   = max(-db_range, min(db_range, db))
-                px2  = curve_x + t * curve_w
-                py2  = zero_db_y + db * px_per_db
-                py2  = max(curve_y + 1, min(curve_y + curve_h - 1, py2))
-                band_pts.append((px2, py2))
-            if len(band_pts) >= 2:
-                bb2 = batch_for_shader(shader, "LINE_STRIP", {"pos": band_pts})
-                gpu.state.line_width_set(max(1.0, scale * 1.0))
-                shader.bind()
-                shader.uniform_float("color", (*bcol, 0.4))
-                bb2.draw(shader)
-                gpu.state.line_width_set(1.0)
+        # Band handle dots — positioned on the combined curve at each band freq
+        for bi in range(N_BANDS):
+            gdb_b, fhz_b, q_b, gn_b, fn_b, qn_b = band_params[bi]
+            bname_b, bcol_b = EQ7_BANDS[bi][0], EQ7_BANDS[bi][1]
+            dot_x = disp_x + fn_b * disp_w
+            f_here = _eq_freq_from_norm(fn_b)
+            dot_db = sum(
+                _eq_biquad_response(band_params[b][1], band_params[b][0],
+                                    EQ7_BANDS[b][2], band_params[b][2], f_here)
+                for b in range(N_BANDS)
+            )
+            dot_db = max(-db_range, min(db_range, dot_db))
+            dot_y  = zero_db_y + dot_db * px_per_db
+            dot_y  = max(disp_y + 5*scale, min(disp_y + disp_h - 5*scale, dot_y))
+            dot_r  = max(6*scale, 7*scale)
+            _draw_circle(dot_x, dot_y, dot_r + 2*scale, (*bcol_b, 0.20))
+            _draw_circle(dot_x, dot_y, dot_r,           (*bcol_b, 1.00))
+            _draw_circle(dot_x, dot_y, dot_r * 0.35,    (1.0, 1.0, 1.0, 0.80))
+            fs_dot = max(1, int(8 * scale))
+            tw_dot = _text_width(bname_b, fs_dot)
+            _draw_text(bname_b, dot_x - tw_dot * 0.5,
+                       dot_y - dot_r - 11 * scale, fs_dot, (*bcol_b, 0.9))
 
-        # Band handle dots — circle at (freq, total_gain) for each band
-        for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
-            gdb, fhz, q, freq_norm, _ = _eq_get_band(rack, band_idx)
-            dot_x = curve_x + freq_norm * curve_w
-            dot_y = zero_db_y + max(-db_range, min(db_range, gdb)) * px_per_db
-            dot_y = max(curve_y + 4*scale, min(curve_y + curve_h - 4*scale, dot_y))
-            dot_r = max(5*scale, 6*scale)
-            _draw_circle(dot_x, dot_y, dot_r, (*bcol, 0.9))
-            _draw_circle(dot_x, dot_y, dot_r, (1.0, 1.0, 1.0, 0.35), filled=False)
-            # Band name above dot
-            fs_dot = max(1, int(7 * scale))
-            tw_dot = _text_width(bname, fs_dot)
-            _draw_text(bname, dot_x - tw_dot / 2,
-                       dot_y + dot_r + 2 * scale, fs_dot, (*bcol, 1.0))
-
-    except Exception as _e:
+    except Exception:
         import traceback; traceback.print_exc()
 
+    # Display border
+    bv3 = [(disp_x, disp_y), (disp_x + disp_w, disp_y),
+           (disp_x + disp_w, disp_y + disp_h),
+           (disp_x, disp_y + disp_h), (disp_x, disp_y)]
+    bb3 = batch_for_shader(shader, "LINE_STRIP", {"pos": bv3})
+    shader.bind(); shader.uniform_float("color", (0.20, 0.20, 0.20, 1.0))
+    bb3.draw(shader)
+
     # -----------------------------------------------------------------------
-    # KNOB ROW — 5 equal columns, each: Gain (large), Freq (small), Q (small)
+    # KNOB STRIP  — 7 equal columns: L | 1 | 2 | 3 | 4 | 5 | H
+    # Each column (top to bottom): label, Gain knob, Freq knob, Q knob
     # -----------------------------------------------------------------------
-    col_w  = cw / 5
-    knob_r_gain = max(16 * scale, col_w * 0.18)
-    knob_r_sm   = max(11 * scale, col_w * 0.12)
+    col_w    = disp_w / N_BANDS
+    kr_gain  = min(max(16 * scale, col_w * 0.18), 26 * scale)
+    kr_small = min(max(11 * scale, col_w * 0.13), 18 * scale)
 
-    for band_idx, (bname, bcol, bftype, _, _) in enumerate(EQ_BANDS):
-        gdb, fhz, q, freq_norm, q_norm = _eq_get_band(rack, band_idx)
-        gain_norm = getattr(rack, f'p{band_idx}', 0.5)
-        col_cx    = cx + (band_idx + 0.5) * col_w
+    # Row layout: place rows evenly within knob_h, top-to-bottom:
+    # label → gain knob → freq knob → Q knob
+    # Divide available height across 4 rows with equal spacing.
+    row_slot = knob_h / 4.0
+    row_lbl  = knob_y + knob_h - row_slot * 0.28
+    row_gain = knob_y + knob_h - row_slot * 1.2
+    row_freq = knob_y + knob_h - row_slot * 2.3
+    row_q    = knob_y + knob_h - row_slot * 3.35
+    # Clamp knob radii so they fit within a slot
+    kr_gain  = min(kr_gain,  row_slot * 0.42)
+    kr_small = min(kr_small, row_slot * 0.32)
 
-        # Vertical layout within knob zone:
-        # gain knob centred at ~60% from top of zone, freq+Q below
-        kz_mid    = knob_zone_y + knob_zone_h * 0.42
-        gain_ky   = kz_mid
-        freq_ky   = knob_zone_y + knob_zone_h * 0.82
-        q_ky      = freq_ky
+    fs_lbl = max(1, int(11 * scale))
 
-        # Gain knob (large, centred in column)
-        gain_str = f"{gdb:+.1f}dB"
-        _draw_knob(col_cx, gain_ky, knob_r_gain, gain_norm, bcol,
-                   bname, gain_str, scale)
+    for bi in range(N_BANDS):
+        gdb_b, fhz_b, q_b, gn_b, fn_b, qn_b = band_params[bi]
+        bname_b, bcol_b, bftype_b = EQ7_BANDS[bi][0], EQ7_BANDS[bi][1], EQ7_BANDS[bi][2]
+        col_cx = disp_x + (bi + 0.5) * col_w
 
-        # Freq and Q knobs side-by-side below the gain knob
-        freq_cx = col_cx - col_w * 0.22
-        q_cx    = col_cx + col_w * 0.22
+        # Band label
+        tw_l = _text_width(bname_b, fs_lbl)
+        _draw_text(bname_b, col_cx - tw_l * 0.5,
+                   row_lbl - fs_lbl, fs_lbl, (*bcol_b, 1.0))
 
-        # Format freq label
-        if fhz >= 1000:
-            freq_str = f"{fhz/1000:.1f}k"
-        else:
-            freq_str = f"{fhz:.0f}Hz"
+        # Gain knob
+        gain_str = f"{gdb_b:+.1f}dB"
+        _draw_knob(col_cx, row_gain, kr_gain, gn_b, bcol_b,
+                   "Gain", gain_str, scale)
 
-        q_str = f"Q{q:.1f}"
-
-        _draw_knob(freq_cx, freq_ky, knob_r_sm, freq_norm, bcol,
+        # Freq knob
+        freq_str = (f"{fhz_b/1000:.2f}k" if fhz_b >= 1000
+                    else f"{fhz_b:.0f}Hz")
+        _draw_knob(col_cx, row_freq, kr_small, fn_b, bcol_b,
                    "Freq", freq_str, scale)
 
-        # Q knob — only for peak filters (shelves don't have meaningful Q)
-        if bftype == "peak":
-            _draw_knob(q_cx, q_ky, knob_r_sm, q_norm, bcol,
+        # Q knob (peaks only)
+        if bftype_b == "peak":
+            q_str = f"{q_b:.2f}"
+            _draw_knob(col_cx, row_q, kr_small, qn_b, bcol_b,
                        "Q", q_str, scale)
         else:
-            # Shelf: draw a tiny disabled Q indicator
-            _draw_circle(q_cx, q_ky, knob_r_sm,
-                         (0.1, 0.1, 0.1, 1.0))
-            _draw_circle(q_cx, q_ky, knob_r_sm,
-                         (0.2, 0.2, 0.2, 1.0), filled=False)
-            fs_q = max(1, int(6 * scale))
-            _draw_text("—", q_cx - _text_width("—", fs_q)/2,
-                       q_ky - fs_q/2, fs_q, (0.25, 0.25, 0.25, 1.0))
+            _draw_circle(col_cx, row_q, kr_small, (0.09, 0.09, 0.09, 1.0))
+            _draw_circle(col_cx, row_q, kr_small, (0.18, 0.18, 0.18, 1.0),
+                         filled=False)
+            fs_sh = max(1, int(8 * scale))
+            lbl_sh = "shelf"
+            tw_sh  = _text_width(lbl_sh, fs_sh)
+            _draw_text(lbl_sh, col_cx - tw_sh * 0.5,
+                       row_q - fs_sh * 0.5, fs_sh, (0.22, 0.22, 0.22, 1.0))
 
-        # Vertical divider between bands
-        if band_idx < 4:
-            div_x2 = cx + (band_idx + 1) * col_w
-            _draw_rect(div_x2 - max(0.5, scale*0.5),
-                       knob_zone_y, max(0.5, scale*0.5), knob_zone_h,
-                       (0.2, 0.2, 0.2, 1.0))
-
+        # Column divider
+        if bi < N_BANDS - 1:
+            div_xd = disp_x + (bi + 1) * col_w
+            _draw_rect(div_xd - max(0.5, scale * 0.5),
+                       knob_y, max(0.5, scale * 0.5), knob_h,
+                       (0.16, 0.16, 0.16, 1.0))
 
 def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     """Draw a fully expanded rack unit."""
     rw  = (rack_width if rack_width is not None else RACK_WIDTH) * scale
-    rh  = (RACK_EXPANDED_H_MB if rack.effect_type == "COMP_MULTI"
+    rh  = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
+           else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -2087,6 +2206,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_COLLAPSED_H * ui_scale
         elif rack.effect_type == "COMP_MULTI":
             rh = RACK_EXPANDED_H_MB * ui_scale
+        elif rack.effect_type == "EQ":
+            rh = RACK_EXPANDED_H_EQ * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -2213,7 +2334,8 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
 
 
 
-        rh = (RACK_EXPANDED_H_MB if rack.effect_type == "COMP_MULTI"
+        rh = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
+              else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
               else RACK_EXPANDED_H) * ui_scale
         rack_y = cur_y - rh
 
@@ -2275,34 +2397,42 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         else:
             # EQ: 5 columns of (Gain, Freq, Q) knobs
             if rack.effect_type == "EQ":
-                body_h_eq   = rh - RACK_RAIL_H * ui_scale
-                ch_btn_w_eq = 108 * ui_scale
-                margin_eq   = 24 * ui_scale
-                cx_eq       = rack_x + margin_eq
-                cw_eq       = rw - ch_btn_w_eq - margin_eq * 2
-                knob_zone_y = rack_y + body_h_eq * 0.58 + 4 * ui_scale
-                knob_zone_h = body_h_eq * 0.42 - 8 * ui_scale
-                col_w_eq    = cw_eq / 5
-                kr_gain     = max(16 * ui_scale, col_w_eq * 0.18)
-                kr_sm       = max(11 * ui_scale, col_w_eq * 0.12)
-                kz_mid      = knob_zone_y + knob_zone_h * 0.42
-                freq_ky     = knob_zone_y + knob_zone_h * 0.82
-                tol         = 6 * ui_scale
-                for band_idx in range(5):
-                    col_cx   = cx_eq + (band_idx + 0.5) * col_w_eq
-                    freq_cx  = col_cx - col_w_eq * 0.22
-                    q_cx     = col_cx + col_w_eq * 0.22
-                    # Gain knob (p0-p4)
-                    if math.dist((rx, ry), (col_cx, kz_mid)) < kr_gain + tol:
-                        return (i, band_idx)
-                    # Freq knob (p5-p9)
-                    if math.dist((rx, ry), (freq_cx, freq_ky)) < kr_sm + tol:
-                        return (i, band_idx + 5)
-                    # Q knob (p10-p14) — only peak bands
-                    _, _, bftype, _, _ = EQ_BANDS[band_idx]
-                    if bftype == "peak":
-                        if math.dist((rx, ry), (q_cx, freq_ky)) < kr_sm + tol:
-                            return (i, band_idx + 10)
+                # 7-band layout: p0-p6=gain, p7-p13=freq, p14-p20=Q
+                # Geometry mirrors _draw_eq_body exactly
+                EQ7_BANDS_HT = [
+                    ("L","low_shelf",80.0,0.7), ("1","peak",250.0,1.0),
+                    ("2","peak",700.0,1.0),     ("3","peak",2000.0,1.0),
+                    ("4","peak",5000.0,1.0),    ("5","peak",10000.0,1.0),
+                    ("H","high_shelf",16000.0,0.7),
+                ]
+                N_BANDS_HT   = 7
+                body_h_eq    = rh - RACK_RAIL_H * ui_scale
+                ch_btn_w_eq  = 108 * ui_scale
+                margin_l_eq  = 42 * ui_scale
+                margin_r_eq  = ch_btn_w_eq + 8 * ui_scale
+                disp_x_eq    = rack_x + margin_l_eq
+                disp_w_eq    = rw - margin_l_eq - margin_r_eq
+                knob_y_eq    = rack_y + 4 * ui_scale
+                knob_h_eq    = body_h_eq * 0.38 - 8 * ui_scale
+                col_w_eq     = disp_w_eq / N_BANDS_HT
+                kr_gain_eq   = min(max(13*ui_scale, col_w_eq*0.16), 20*ui_scale)
+                kr_small_eq  = min(max( 9*ui_scale, col_w_eq*0.11), 14*ui_scale)
+                kz_top_eq    = knob_y_eq + knob_h_eq
+                row_lbl_eq   = kz_top_eq  -  8 * ui_scale
+                row_gain_eq  = row_lbl_eq  - 16 * ui_scale - kr_gain_eq
+                row_freq_eq  = row_gain_eq - kr_gain_eq - 10 * ui_scale - kr_small_eq
+                row_q_eq     = row_freq_eq - kr_small_eq - 8  * ui_scale - kr_small_eq
+                tol_eq       = 6 * ui_scale
+                for bi in range(N_BANDS_HT):
+                    col_cx_eq = disp_x_eq + (bi + 0.5) * col_w_eq
+                    if math.dist((rx, ry), (col_cx_eq, row_gain_eq)) < kr_gain_eq  + tol_eq:
+                        return (i, bi)           # gain p0-p6
+                    if math.dist((rx, ry), (col_cx_eq, row_freq_eq)) < kr_small_eq + tol_eq:
+                        return (i, bi + 7)       # freq p7-p13
+                    _, bftype_ht, _, _ = EQ7_BANDS_HT[bi]
+                    if bftype_ht == "peak":
+                        if math.dist((rx, ry), (col_cx_eq, row_q_eq)) < kr_small_eq + tol_eq:
+                            return (i, bi + 14)  # Q p14-p20
             else:
                 # Single band 2x3 knob grid — must mirror draw geometry exactly
                 # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
@@ -2404,6 +2534,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_COLLAPSED_H * ui_scale
         elif rack.effect_type == "COMP_MULTI":
             rh = RACK_EXPANDED_H_MB * ui_scale
+        elif rack.effect_type == "EQ":
+            rh = RACK_EXPANDED_H_EQ * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 

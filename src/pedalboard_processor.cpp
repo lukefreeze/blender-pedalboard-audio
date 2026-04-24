@@ -160,6 +160,154 @@ static void lr_filter(float* buf, int n, const BiquadCoeffs& co, float* state)
 }
 
 // ===========================================================================
+// Parametric EQ biquad coefficient builders
+// All use the Audio EQ Cookbook formulas (Robert Bristow-Johnson).
+// Inputs: gain_db, freq_hz, Q, sample_rate
+// ===========================================================================
+static BiquadCoeffs eq_low_shelf(float gain_db, float freq, float Q, float sr)
+{
+    float A  = std::sqrt(db2lin(gain_db));           // linear amplitude
+    float w0 = 2.0f * PI * freq / sr;
+    float cw = std::cos(w0), sw = std::sin(w0);
+    float alpha = sw / (2.0f * Q);
+    float sqA   = std::sqrt(A);
+
+    float b0 =  A * ((A+1) - (A-1)*cw + 2*sqA*alpha);
+    float b1 =  2*A * ((A-1) - (A+1)*cw);
+    float b2 =  A * ((A+1) - (A-1)*cw - 2*sqA*alpha);
+    float a0 =      (A+1) + (A-1)*cw + 2*sqA*alpha;
+    float a1 = -2 * ((A-1) + (A+1)*cw);
+    float a2 =      (A+1) + (A-1)*cw - 2*sqA*alpha;
+
+    BiquadCoeffs c;
+    c.b0 = b0/a0;  c.b1 = b1/a0;  c.b2 = b2/a0;
+    c.a1 = a1/a0;  c.a2 = a2/a0;
+    return c;
+}
+
+static BiquadCoeffs eq_high_shelf(float gain_db, float freq, float Q, float sr)
+{
+    float A  = std::sqrt(db2lin(gain_db));
+    float w0 = 2.0f * PI * freq / sr;
+    float cw = std::cos(w0), sw = std::sin(w0);
+    float alpha = sw / (2.0f * Q);
+    float sqA   = std::sqrt(A);
+
+    float b0 =  A * ((A+1) + (A-1)*cw + 2*sqA*alpha);
+    float b1 = -2*A * ((A-1) + (A+1)*cw);
+    float b2 =  A * ((A+1) + (A-1)*cw - 2*sqA*alpha);
+    float a0 =      (A+1) - (A-1)*cw + 2*sqA*alpha;
+    float a1 =  2 * ((A-1) - (A+1)*cw);
+    float a2 =      (A+1) - (A-1)*cw - 2*sqA*alpha;
+
+    BiquadCoeffs c;
+    c.b0 = b0/a0;  c.b1 = b1/a0;  c.b2 = b2/a0;
+    c.a1 = a1/a0;  c.a2 = a2/a0;
+    return c;
+}
+
+static BiquadCoeffs eq_peak(float gain_db, float freq, float Q, float sr)
+{
+    float A  = db2lin(gain_db / 2.0f);               // note: half gain for peak
+    float w0 = 2.0f * PI * freq / sr;
+    float cw = std::cos(w0), sw = std::sin(w0);
+    float alpha = sw / (2.0f * Q);
+
+    float b0 =  1 + alpha * A;
+    float b1 = -2 * cw;
+    float b2 =  1 - alpha * A;
+    float a0 =  1 + alpha / A;
+    float a1 = -2 * cw;
+    float a2 =  1 - alpha / A;
+
+    BiquadCoeffs c;
+    c.b0 = b0/a0;  c.b1 = b1/a0;  c.b2 = b2/a0;
+    c.a1 = a1/a0;  c.a2 = a2/a0;
+    return c;
+}
+
+// ===========================================================================
+// 7-band parametric EQ
+// Params (24 floats, 3 unused):
+//   p[0..6]  gain  norm 0-1  (0.5=0dB, ±24dB range)
+//   p[7..13] freq  log-norm  (20Hz–20kHz)
+//   p[14..20] Q    log-norm  (0.1–10.0)
+// Band 0 = low shelf, bands 1-5 = peak, band 6 = high shelf
+// ===========================================================================
+// Default centre frequencies matching Racks.py EQ7_BANDS
+static const float EQ_DEF_FREQ[7]= {80.f,250.f,700.f,2000.f,5000.f,10000.f,16000.f};
+static const float EQ_DEF_Q[7]   = {0.7f,1.0f,1.0f,1.0f,1.0f,1.0f,0.7f};
+
+static inline float eq_freq_from_norm(float n) {
+    // log-scale 20Hz–20kHz, matching Racks.py EQ_FREQ_MIN_LOG/MAX_LOG
+    const float LOG_MIN = 1.30103f;   // log10(20)
+    const float LOG_RNG = 2.69897f;   // log10(20000) - log10(20)
+    return std::pow(10.0f, LOG_MIN + n * LOG_RNG);
+}
+
+static inline float eq_q_from_norm(float n) {
+    // log-scale 0.1–10.0, matching Racks.py EQ_Q_MIN_LOG/MAX_LOG
+    const float LOG_MIN = -1.0f;      // log10(0.1)
+    const float LOG_RNG =  2.0f;      // log10(10.0) - log10(0.1)
+    return std::pow(10.0f, LOG_MIN + n * LOG_RNG);
+}
+
+static void apply_eq_param(int ch, aud::sample_t* buf,
+                            int frames, int n_ch,
+                            const EffectSlot& fx,
+                            float sr)
+{
+    // Denormalise params and build biquad coefficients for each band
+    BiquadCoeffs coeffs[7];
+    bool         active[7] = {};
+
+    for (int bi = 0; bi < 7; ++bi) {
+        float gn  = fx.params[bi];          // gain norm
+        float fn  = fx.params[bi + 7];      // freq norm
+        float qn  = fx.params[bi + 14];     // Q norm
+        float gdb = (gn - 0.5f) * 48.0f;   // ±24dB range
+
+        if (std::abs(gdb) < 0.5f) {
+            active[bi] = false;
+            continue;                        // skip flat bands — saves CPU
+        }
+        active[bi] = true;
+
+        float freq = (fn > 0.0f) ? eq_freq_from_norm(fn) : EQ_DEF_FREQ[bi];
+        float q    = (qn > 0.0f) ? eq_q_from_norm(qn)    : EQ_DEF_Q[bi];
+        // Clamp to safe ranges
+        freq = std::max(20.0f, std::min(freq, sr * 0.49f));
+        q    = std::max(0.1f,  std::min(q,    10.0f));
+
+        if (bi == 0)
+            coeffs[bi] = eq_low_shelf (gdb, freq, q, sr);
+        else if (bi == 6)
+            coeffs[bi] = eq_high_shelf(gdb, freq, q, sr);
+        else
+            coeffs[bi] = eq_peak      (gdb, freq, q, sr);
+    }
+
+    // Apply biquad chain per audio channel, maintaining persistent state
+    EqChannelState& eq = g_state.eq_state[ch];
+    int n_audio_ch = std::min(n_ch, 2);     // max stereo
+
+    for (int f = 0; f < frames; ++f) {
+        for (int c = 0; c < n_audio_ch; ++c) {
+            float s = buf[f * n_ch + c];
+            for (int bi = 0; bi < 7; ++bi) {
+                if (!active[bi]) continue;
+                s = biquad_step(s, coeffs[bi],
+                                eq.bands[bi].z1[c],
+                                eq.bands[bi].z2[c]);
+            }
+            // Soft clip — prevents overs from heavy boost settings
+            s = s / (1.0f + std::abs(s));
+            buf[f * n_ch + c] = s;
+        }
+    }
+}
+
+// ===========================================================================
 // FFT (DFT for PB_FFT_BINS bins with Hann window)
 // ===========================================================================
 static void update_fft(int ch, int band, const float* mono_buf, int frames)
@@ -364,6 +512,8 @@ void apply_effect_chain_batch(int ch, aud::sample_t* buf,
             apply_comp_single(ch, buf, frames, n_ch, fx, sr); break;
         case EffectType::COMP_MULTI:
             apply_comp_multi (ch, buf, frames, n_ch, fx, sr); break;
+        case EffectType::EQ_PARAM:
+            apply_eq_param   (ch, buf, frames, n_ch, fx, sr); break;
         case EffectType::REVERB: break;
         default: break;
         }
@@ -451,6 +601,7 @@ void* create_channel(void* sound_ptr, int ch, int strip_ch)
     if (g_state.volumes[ch] == 0.0f) g_state.volumes[ch] = 1.0f;
     g_state.meter_levels[ch] = 0.0f;
     g_state.comp_state[ch]   = CompressorChannelState{};
+    g_state.eq_state[ch]     = EqChannelState{};
     for (int b = 0; b < PB_MB_BANDS; ++b)
         g_state.fft_state[ch][b] = FFTBandState{};
     printf("[ENGINE] ch=%d strip=%d started\n", ch, strip_ch);

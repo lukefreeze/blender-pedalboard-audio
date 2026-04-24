@@ -46,6 +46,7 @@ py::array_t<float> process_buffer(int channel_idx,
 
     // Reset compressor state for a fresh batch pass
     g_state.comp_state[channel_idx] = CompressorChannelState{};
+    g_state.eq_state[channel_idx]   = EqChannelState{};
     for (int b = 0; b < PB_MB_BANDS; ++b)
         g_state.fft_state[channel_idx][b] = FFTBandState{};
 
@@ -90,6 +91,7 @@ PYBIND11_MODULE(pedalboard_engine, m)
     m.attr("FX_NONE")        = (int)EffectType::NONE;
     m.attr("FX_GAIN")        = (int)EffectType::GAIN;
     m.attr("FX_EQ_3BAND")    = (int)EffectType::EQ_3BAND;
+    m.attr("FX_EQ_PARAM")    = (int)EffectType::EQ_PARAM;
     m.attr("FX_COMP_SINGLE") = (int)EffectType::COMP_SINGLE;
     m.attr("FX_COMP_MULTI")  = (int)EffectType::COMP_MULTI;
     m.attr("FX_REVERB")      = (int)EffectType::REVERB;
