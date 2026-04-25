@@ -52,6 +52,7 @@ RACK_WIDTH          = 1200         # matches 9-fader section width exactly
 RACK_EXPANDED_H     = 260
 RACK_EXPANDED_H_MB  = 400   # taller for multiband 3x2 knob grid
 RACK_EXPANDED_H_EQ  = 580   # tall studio rack — display + spacious 7-band knob row
+RACK_EXPANDED_H_RV  = 340   # reverb — display + 5-knob row
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
@@ -169,37 +170,50 @@ PRESET_DATA = {'COMP_SINGLE': [('Vocal Compress', [0.55, 0.10526315789473684, 0.
 #                          p7-p13=freq(log-norm 0-1, 20Hz-20kHz),
 #                          p14-p20=Q(log-norm 0-1, 0.1-10.0)
 PRESET_DATA['EQ'] = [
-    # ── Instrument curves ────────────────────────────────────────────────────
-    ('Vocal Presence',       [0.5, 0.458333, 0.5, 0.5625, 0.583333, 0.541667, 0.5, 0.200687, 0.39203, 0.514689, 0.725364, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.5, 0.539591, 0.5, 0.5, 0.422549]),
-    ('Vocal Air',            [0.4375, 0.5, 0.479167, 0.5, 0.541667, 0.583333, 0.604167, 0.23299, 0.365637, 0.514689, 0.666667, 0.799313, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Vocal Warmth',         [0.5625, 0.583333, 0.458333, 0.5, 0.5, 0.5, 0.5, 0.200687, 0.333333, 0.46598, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.539591, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
-    ('Acoustic Guitar',      [0.5, 0.4375, 0.5, 0.541667, 0.5625, 0.541667, 0.520833, 0.200687, 0.333333, 0.514689, 0.69897, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Electric Guitar',      [0.375, 0.5, 0.541667, 0.5625, 0.583333, 0.5, 0.4375, 0.200687, 0.365637, 0.53402, 0.666667, 0.76701, 0.899657, 0.967697, 0.422549, 0.5, 0.539591, 0.588046, 0.539591, 0.5, 0.422549]),
-    ('Bass Guitar',          [0.604167, 0.5625, 0.458333, 0.5, 0.5, 0.4375, 0.375, 0.200687, 0.333333, 0.46598, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.539591, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
-    ('Kick Drum',            [0.583333, 0.5, 0.416667, 0.541667, 0.604167, 0.5, 0.4375, 0.15904, 0.333333, 0.433677, 0.62502, 0.76701, 0.899657, 0.967697, 0.422549, 0.5, 0.650515, 0.588046, 0.650515, 0.5, 0.422549]),
-    ('Snare Crack',          [0.4375, 0.5, 0.541667, 0.583333, 0.625, 0.541667, 0.5, 0.200687, 0.365637, 0.514689, 0.666667, 0.76701, 0.867353, 0.967697, 0.422549, 0.5, 0.588046, 0.588046, 0.650515, 0.5, 0.422549]),
-    ('Hi-Hat & Cymbals',     [0.375, 0.375, 0.5, 0.5, 0.541667, 0.583333, 0.604167, 0.200687, 0.333333, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Piano Clarity',        [0.5, 0.458333, 0.5, 0.541667, 0.5625, 0.5625, 0.5, 0.200687, 0.39203, 0.514689, 0.666667, 0.76701, 0.867353, 0.967697, 0.422549, 0.539591, 0.5, 0.5, 0.539591, 0.5, 0.422549]),
-    # ── Corrective / mixing tools ────────────────────────────────────────────
-    ('Presence Boost',       [0.5, 0.5, 0.5, 0.5625, 0.604167, 0.5625, 0.5, 0.200687, 0.365637, 0.514689, 0.725364, 0.825707, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.539591, 0.5, 0.5, 0.422549]),
-    ('Low Cut',              [0.125, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.23299, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('High Cut',             [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.125, 0.200687, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.948366, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Air',                  [0.5, 0.5, 0.458333, 0.5, 0.5, 0.583333, 0.625, 0.200687, 0.39203, 0.514689, 0.666667, 0.799313, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Mud Remove',           [0.5, 0.416667, 0.4375, 0.541667, 0.541667, 0.5, 0.5, 0.200687, 0.333333, 0.433677, 0.725364, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
-    ('Harshness Cut',        [0.5, 0.5, 0.5, 0.416667, 0.395833, 0.458333, 0.5, 0.200687, 0.365637, 0.514689, 0.69897, 0.76701, 0.867353, 0.967697, 0.422549, 0.5, 0.5, 0.588046, 0.650515, 0.588046, 0.422549]),
-    ('Boxiness Cut',         [0.5, 0.5, 0.395833, 0.4375, 0.5, 0.5, 0.5, 0.200687, 0.365637, 0.433677, 0.53402, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.650515, 0.650515, 0.5, 0.5, 0.422549]),
-    ('Sub Boost',            [0.625, 0.5625, 0.5, 0.5, 0.5, 0.5, 0.5, 0.100343, 0.23299, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.539591, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('High Freq Restore',    [0.5, 0.5, 0.5, 0.5, 0.541667, 0.583333, 0.604167, 0.200687, 0.365637, 0.514689, 0.666667, 0.825707, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    # ── Genre & character curves ─────────────────────────────────────────────
-    ('Telephone',            [0.125, 0.5625, 0.583333, 0.5625, 0.375, 0.25, 0.125, 0.23299, 0.39203, 0.53402, 0.69897, 0.799313, 0.899657, 0.967697, 0.422549, 0.650515, 0.588046, 0.588046, 0.588046, 0.588046, 0.422549]),
-    ('Broadcast',            [0.5, 0.458333, 0.5, 0.541667, 0.5625, 0.541667, 0.5, 0.200687, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.539591, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Vintage Warmth',       [0.583333, 0.5625, 0.520833, 0.5, 0.479167, 0.458333, 0.416667, 0.200687, 0.333333, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Modern Bright',        [0.458333, 0.458333, 0.5, 0.5, 0.541667, 0.583333, 0.604167, 0.200687, 0.333333, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
-    ('Scooped Mids',         [0.5625, 0.5, 0.416667, 0.395833, 0.458333, 0.5, 0.541667, 0.200687, 0.365637, 0.46598, 0.62502, 0.76701, 0.899657, 0.967697, 0.422549, 0.5, 0.588046, 0.588046, 0.588046, 0.5, 0.422549]),
-    ('Dance / EDM',          [0.625, 0.541667, 0.4375, 0.5, 0.541667, 0.5625, 0.583333, 0.15904, 0.291687, 0.46598, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
-    ('Classical / Orchestral',[0.5, 0.5, 0.5, 0.520833, 0.541667, 0.541667, 0.520833, 0.200687, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.539591, 0.5, 0.422549]),
-    ('Podcast / Speech',     [0.375, 0.4375, 0.5, 0.5625, 0.583333, 0.541667, 0.5, 0.200687, 0.333333, 0.514689, 0.69897, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.5, 0.539591, 0.5, 0.5, 0.422549]),
-    ('Flat / Neutral',       [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.200687, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
+    ('Presence Boost', [0.5, 0.5, 0.5, 0.5625, 0.604167, 0.5625, 0.5, 0.200687, 0.365637, 0.514689, 0.725364, 0.825707, 0.92605, 0.967697, 0.422549, 0.5, 0.5, 0.539591, 0.5, 0.5, 0.422549]),
+    ('Low Cut',        [0.125, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.23299, 0.365637, 0.514689, 0.666667, 0.799313, 0.899657, 0.967697, 0.422549, 0.5, 0.5, 0.5, 0.5, 0.5, 0.422549]),
+    ('Air',            [0.5, 0.5, 0.458333, 0.5, 0.5, 0.583333, 0.625, 0.200687, 0.39203, 0.514689, 0.666667, 0.799313, 0.92605, 0.967697, 0.422549, 0.539591, 0.5, 0.5, 0.5, 0.5, 0.422549]),
+    ('Mud Remove',     [0.5, 0.416667, 0.4375, 0.541667, 0.541667, 0.5, 0.5, 0.200687, 0.333333, 0.433677, 0.725364, 0.799313, 0.899657, 0.967697, 0.422549, 0.588046, 0.588046, 0.5, 0.5, 0.5, 0.422549]),
+    ('Telephone',      [0.125, 0.5625, 0.583333, 0.5625, 0.375, 0.25, 0.125, 0.23299, 0.39203, 0.53402, 0.69897, 0.799313, 0.899657, 0.967697, 0.422549, 0.650515, 0.588046, 0.588046, 0.588046, 0.588046, 0.422549]),
+]
+
+# REVERB presets — 5 params: [room_size, damping, wet, pre_delay, width]
+PRESET_DATA['REVERB'] = [
+    # ── Rooms ────────────────────────────────────────────────────────────────
+    ('Bathroom Tiles',       [0.2,  0.1,  0.3,  0.0,  0.6 ]),
+    ('Small Room',           [0.3,  0.25, 0.28, 0.01, 0.7 ]),
+    ('Medium Room',          [0.45, 0.35, 0.3,  0.02, 0.8 ]),
+    ('Large Room',           [0.6,  0.4,  0.32, 0.03, 0.85]),
+    ('Drum Room',            [0.4,  0.2,  0.35, 0.01, 0.9 ]),
+    ('Studio Live Room',     [0.35, 0.45, 0.25, 0.01, 0.75]),
+    ('Garage',               [0.5,  0.15, 0.38, 0.02, 0.8 ]),
+    # ── Halls ────────────────────────────────────────────────────────────────
+    ('Small Hall',           [0.65, 0.5,  0.35, 0.04, 0.85]),
+    ('Concert Hall',         [0.78, 0.55, 0.38, 0.06, 0.9 ]),
+    ('Cathedral',            [0.9,  0.3,  0.45, 0.1,  0.95]),
+    ('Church',               [0.75, 0.4,  0.4,  0.07, 0.9 ]),
+    ('Stadium',              [0.95, 0.2,  0.4,  0.12, 1.0 ]),
+    ('Outdoor Amphitheatre', [0.7,  0.6,  0.32, 0.08, 0.85]),
+    # ── Plates ───────────────────────────────────────────────────────────────
+    ('Bright Plate',         [0.55, 0.05, 0.35, 0.0,  0.8 ]),
+    ('Dark Plate',           [0.55, 0.7,  0.35, 0.0,  0.8 ]),
+    ('Vintage Plate',        [0.6,  0.45, 0.38, 0.01, 0.75]),
+    ('Vocal Plate',          [0.5,  0.35, 0.3,  0.01, 0.7 ]),
+    # ── Springs ──────────────────────────────────────────────────────────────
+    ('Guitar Spring',        [0.38, 0.55, 0.32, 0.0,  0.4 ]),
+    ('Vintage Spring',       [0.42, 0.6,  0.35, 0.0,  0.35]),
+    # ── Chambers ─────────────────────────────────────────────────────────────
+    ('Echo Chamber',         [0.65, 0.5,  0.42, 0.05, 0.85]),
+    ('Vocal Chamber',        [0.48, 0.55, 0.28, 0.02, 0.7 ]),
+    # ── Special ──────────────────────────────────────────────────────────────
+    ('Slap Room',            [0.25, 0.3,  0.28, 0.03, 0.75]),
+    ('Tunnel',               [0.8,  0.1,  0.45, 0.06, 0.5 ]),
+    ('Cave',                 [0.85, 0.25, 0.48, 0.08, 0.6 ]),
+    ('Parking Garage',       [0.55, 0.1,  0.4,  0.05, 0.7 ]),
+    ('Arena',                [0.88, 0.35, 0.42, 0.1,  0.95]),
+    ('Club',                 [0.52, 0.3,  0.35, 0.03, 0.85]),
+    ('Long Ambient',         [0.92, 0.65, 0.5,  0.12, 1.0 ]),
+    ('Dry Ambience',         [0.15, 0.7,  0.15, 0.0,  0.5 ]),
 ]
 
 # Legacy name lists for rack preset display
@@ -207,9 +221,9 @@ PRESETS = {
     "COMP_SINGLE": [p[0] for p in PRESET_DATA["COMP_SINGLE"]],
     "COMP_MULTI":  [p[0] for p in PRESET_DATA["COMP_MULTI"]],
     "EQ":          [p[0] for p in PRESET_DATA["EQ"]],
-    "REVERB":     ["Small Room", "Large Hall", "Plate", "Spring", "Ambience"],
-    "NOISE_GATE": ["Tight Gate", "Soft Gate", "Drum Gate", "Vocal Gate", "Natural"],
-    "DELAY":      ["Slapback", "Quarter Note", "Dotted 8th", "Ping Pong", "Tape Echo"],
+    "REVERB":      [p[0] for p in PRESET_DATA["REVERB"]],
+    "NOISE_GATE":  ["Tight Gate", "Soft Gate", "Drum Gate", "Vocal Gate", "Natural"],
+    "DELAY":       ["Slapback", "Quarter Note", "Dotted 8th", "Ping Pong", "Tape Echo"],
 }
 
 # ---------------------------------------------------------------------------
@@ -384,7 +398,10 @@ def normalise_param(rack, param_idx, actual_value):
 def init_rack_defaults(rack):
     """Set parameter values to defaults for the effect type — loads preset 0."""
     rack.preset_idx = 0
-    _load_preset(rack, 0)
+    # Reverb: default to Medium Room (index 2) — more useful starting point
+    if rack.effect_type == "REVERB":
+        rack.preset_idx = 2
+    _load_preset(rack, rack.preset_idx)
 
 
 def _load_preset(rack, preset_idx):
@@ -1765,16 +1782,265 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
                        knob_y, max(0.5, scale * 0.5), knob_h,
                        (0.16, 0.16, 0.16, 1.0))
 
+def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
+    """Draw the reverb rack body — Option C style.
+
+    Display area (upper 60% of body):
+      Left zone  — dry waveform from _fft_timeline (same as EQ pre-EQ layer)
+      Divider    — dashed vertical line at the pre-delay position
+      Right zone — computed reverb tail silhouette, exponentially decaying,
+                   shape driven entirely by room_size and damping knobs
+
+    Knob strip (lower 40%):
+      Room | Damp | Wet | Pre-dly | Width
+    """
+    import math as _mr
+    ui_scale    = scale
+    rail_h      = RACK_RAIL_H * ui_scale
+    body_h      = rh - rail_h
+
+    # --- Display geometry: display at TOP of body, knobs at BOTTOM ---
+    margin_l    = 42 * ui_scale
+    ch_btn_w    = 108 * ui_scale
+    margin_r    = ch_btn_w + 8 * ui_scale
+    disp_x      = rx + margin_l
+    disp_w      = rw - margin_l - margin_r
+    disp_prop   = 0.56          # display takes 56% of body height
+    disp_h      = body_h * disp_prop - 4 * ui_scale
+    disp_y      = ry + body_h - disp_h - 2 * ui_scale  # top of body
+
+    # Knob strip sits at the bottom of the body
+    knob_h      = body_h * 0.42 - 4 * ui_scale
+    knob_y      = ry + 2 * ui_scale                     # bottom of body
+
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+
+    # Display background
+    _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.07, 0.07, 0.09, 1.0))
+
+    # Grid lines
+    for db_frac in [0.25, 0.5, 0.75]:
+        ly = disp_y + db_frac * disp_h
+        gl = batch_for_shader(shader, "LINES",
+                               {"pos": [(disp_x, ly), (disp_x + disp_w, ly)]})
+        shader.bind()
+        shader.uniform_float("color", (0.18, 0.18, 0.20, 1.0))
+        gl.draw(shader)
+
+    # --- Read knob params ---
+    room_sz  = getattr(rack, 'p0', 0.5)
+    damping  = getattr(rack, 'p1', 0.5)
+    wet      = getattr(rack, 'p2', 0.3)
+    pre_d    = getattr(rack, 'p3', 0.0)
+    width    = getattr(rack, 'p4', 1.0)
+
+    # Pre-delay position as fraction of display width (0–20% of display)
+    pre_frac = pre_d * 0.20
+    div_x    = disp_x + pre_frac * disp_w
+
+    # --- LEFT ZONE: dry waveform from FFT timeline ---
+    if rack.enabled:
+     try:
+        from Loader import _fft_timeline
+        assigned_rv = get_rack_channels(rack)
+        if assigned_rv:
+            ch_rv = list(assigned_rv)[0]
+            tl_rv = _fft_timeline.get(ch_rv)
+            if tl_rv is not None and len(tl_rv['snapshots']) > 0:
+                import bpy as _bpy_rv
+                scene_rv    = _bpy_rv.context.scene
+                cur_frame   = scene_rv.frame_current if scene_rv else 0
+                start_frame = tl_rv['start_frame']
+                fps_rv      = tl_rv['fps']
+                snap_sec    = tl_rv['snap_frames'] / tl_rv['sr']
+                elapsed     = max(0.0, (cur_frame - start_frame) / fps_rv)
+                snap_f      = elapsed / snap_sec
+                snap_idx    = max(0, min(len(tl_rv['snapshots'])-1, int(snap_f)))
+                frac_rv     = snap_f - int(snap_f)
+
+                import numpy as _np_rv
+                frame_data = tl_rv['snapshots'][snap_idx].astype(float)
+                if frac_rv > 0.0 and snap_idx+1 < len(tl_rv['snapshots']):
+                    frame_data = (frame_data*(1.0-frac_rv) +
+                                  tl_rv['snapshots'][snap_idx+1].astype(float)*frac_rv)
+
+                # Flatten 4 bands × 32 bins into 128 amplitude points
+                CROSSOVERS = [20, 120, 800, 5000, 20000]
+                BINS_PER   = 32
+                LOG_MIN    = _mr.log10(20.0)
+                LOG_RNG    = _mr.log10(20000.0) - LOG_MIN
+                import numpy as _np_rv2
+                wf_pairs = []
+                for band in range(4):
+                    f_lo = CROSSOVERS[band]; f_hi = CROSSOVERS[band+1]
+                    freqs = _np_rv2.logspace(_mr.log10(max(f_lo,1.0)),
+                                              _mr.log10(f_hi), BINS_PER)
+                    for bi in range(BINS_PER):
+                        t_x = (_mr.log10(max(float(freqs[bi]),20.0)) - LOG_MIN) / LOG_RNG
+                        # Clamp to left zone (pre-delay divider)
+                        bx  = disp_x + t_x * pre_frac * disp_w
+                        amp = max(0.0, min(1.0, float(frame_data[band][bi])))
+                        wf_pairs.append((bx, amp))
+
+                wf_pairs.sort(key=lambda p: p[0])
+
+                # Draw dry waveform silhouette — same style as EQ pre-EQ layer
+                if len(wf_pairs) >= 2:
+                    verts = []
+                    for bx, amp in wf_pairs:
+                        verts.append((bx, disp_y))
+                        verts.append((bx, disp_y + amp * disp_h * 0.88))
+                    if len(verts) >= 4:
+                        bf = batch_for_shader(shader, "TRI_STRIP", {"pos": verts})
+                        shader.bind()
+                        shader.uniform_float("color", (0.17, 0.17, 0.19, 0.82))
+                        bf.draw(shader)
+                    edge = [(bx, disp_y + amp * disp_h * 0.88)
+                            for bx, amp in wf_pairs]
+                    if len(edge) >= 2:
+                        be = batch_for_shader(shader, "LINE_STRIP", {"pos": edge})
+                        gpu.state.line_width_set(max(1.0, ui_scale*0.7))
+                        shader.bind()
+                        shader.uniform_float("color", (0.32, 0.32, 0.36, 0.55))
+                        be.draw(shader)
+                        gpu.state.line_width_set(1.0)
+     except Exception:
+        pass  # waveform is decorative — never crash
+
+    # --- Pre-delay divider ---
+    if pre_frac > 0.005:
+        div_verts = [(div_x, disp_y), (div_x, disp_y + disp_h)]
+        div_batch = batch_for_shader(shader, "LINES", {"pos": div_verts})
+        shader.bind()
+        shader.uniform_float("color", (0.55, 0.55, 0.60, 0.50))
+        div_batch.draw(shader)
+        # Label
+        fs_pd = max(1, int(8*ui_scale))
+        _draw_text(f"{int(pre_d*100)}ms", div_x + 2*ui_scale,
+                   disp_y + disp_h - fs_pd - 2*ui_scale, fs_pd, (0.55, 0.55, 0.60, 0.80))
+
+    # --- RIGHT ZONE: reverb tail silhouette ---
+    # Exponential decay: y(t) = exp(-t * decay_rate)
+    # decay_rate is derived from room_size and damping
+    # RT60 (60dB decay time) = -60 / (20*log10(e) * decay_rate)
+    # We map room_size → feedback (0.28-0.98), damping → HF rolloff
+    feedback     = 0.28 + room_sz * 0.70
+    # Approximate RT60 in display-space: larger room = longer tail
+    if feedback < 0.9999:
+        rt60_frac = -0.05 / _mr.log10(max(feedback, 1e-9))  # in display width units
+    else:
+        rt60_frac = 2.0
+    rt60_frac = min(rt60_frac, 2.0)
+
+    # HF curve decays faster by damping factor
+    hf_rt60_frac = rt60_frac * (1.0 - damping * 0.7)
+
+    tail_start_x = div_x
+    tail_w       = disp_x + disp_w - tail_start_x
+    N_TAIL       = 128
+    centre_y     = disp_y + disp_h * 0.5
+    peak_h       = disp_h * 0.45 * wet  # taller tail = more wet
+
+    # Full-band tail (grey)
+    tail_verts = []
+    for i in range(N_TAIL + 1):
+        t = i / N_TAIL
+        x = tail_start_x + t * tail_w
+        if rt60_frac > 0:
+            amp = _mr.exp(-t * 3.0 / max(rt60_frac, 0.01))
+        else:
+            amp = 0.0
+        h = amp * peak_h
+        tail_verts.append((x, centre_y))
+        tail_verts.append((x, centre_y + h))
+
+    if len(tail_verts) >= 4:
+        bt = batch_for_shader(shader, "TRI_STRIP", {"pos": tail_verts})
+        shader.bind()
+        shader.uniform_float("color", (0.28, 0.32, 0.38, 0.65))
+        bt.draw(shader)
+
+    # Mirror lower half
+    tail_lower = []
+    for i in range(N_TAIL + 1):
+        t = i / N_TAIL
+        x = tail_start_x + t * tail_w
+        amp = _mr.exp(-t * 3.0 / max(rt60_frac, 0.01)) if rt60_frac > 0 else 0.0
+        h = amp * peak_h
+        tail_lower.append((x, centre_y))
+        tail_lower.append((x, centre_y - h))
+
+    if len(tail_lower) >= 4:
+        bl = batch_for_shader(shader, "TRI_STRIP", {"pos": tail_lower})
+        shader.bind()
+        shader.uniform_float("color", (0.28, 0.32, 0.38, 0.65))
+        bl.draw(shader)
+
+    # HF tail overlay (lighter, decays faster — shows damping effect)
+    hf_verts_top = []; hf_verts_bot = []
+    for i in range(N_TAIL + 1):
+        t = i / N_TAIL
+        x = tail_start_x + t * tail_w
+        amp = _mr.exp(-t * 3.0 / max(hf_rt60_frac, 0.01)) if hf_rt60_frac > 0 else 0.0
+        h = amp * peak_h * 0.65
+        hf_verts_top.append((x, centre_y + h))
+        hf_verts_bot.append((x, centre_y - h))
+
+    for hf_verts in [hf_verts_top, hf_verts_bot]:
+        if len(hf_verts) >= 2:
+            bh = batch_for_shader(shader, "LINE_STRIP", {"pos": hf_verts})
+            gpu.state.line_width_set(max(1.0, ui_scale * 0.7))
+            shader.bind()
+            shader.uniform_float("color", (0.50, 0.60, 0.72, 0.70))
+            bh.draw(shader)
+            gpu.state.line_width_set(1.0)
+
+    # RT60 label
+    if rt60_frac > 0:
+        rt60_ms = rt60_frac * 1000
+        rt60_str = f"{rt60_ms:.0f}ms" if rt60_ms < 1000 else f"{rt60_ms/1000:.1f}s"
+        fs_rt = max(1, int(9*ui_scale))
+        _draw_text(f"RT60 {rt60_str}", disp_x + disp_w - 60*ui_scale,
+                   disp_y + 6*ui_scale, fs_rt, (0.50, 0.60, 0.72, 0.85))
+
+    # Labels
+    fs_lbl = max(1, int(8*ui_scale))
+    _draw_text("dry", disp_x + 3*ui_scale, disp_y + 5*ui_scale,
+               fs_lbl, (0.45, 0.45, 0.48, 0.80))
+    _draw_text("tail", tail_start_x + 4*ui_scale, disp_y + 5*ui_scale,
+               fs_lbl, (0.50, 0.60, 0.72, 0.80))
+
+    # --- KNOB STRIP (5 knobs: Room, Damp, Wet, Pre-dly, Width) ---
+    N_KNOBS  = 5
+    col_w    = disp_w / N_KNOBS
+    row_slot = knob_h / 3.0
+    row_knob = knob_y + knob_h - row_slot * 1.3
+    kr       = min(max(13*ui_scale, col_w*0.16), 20*ui_scale)
+    kr       = min(kr, row_slot * 0.42)
+
+    RV_KNOB_PARAMS = ["Room", "Damp", "Wet", "Pre-dly", "Width"]
+    rv_vals = [room_sz, damping, wet, pre_d, width]
+    rv_col  = (0.35, 0.65, 0.90)
+
+    for ki in range(N_KNOBS):
+        cx = disp_x + (ki + 0.5) * col_w
+        val = rv_vals[ki]
+        pct_str = f"{int(val*100)}%"
+        _draw_knob(cx, row_knob, kr, val, rv_col,
+                   RV_KNOB_PARAMS[ki], pct_str, ui_scale)
+
+
+
 def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     """Draw a fully expanded rack unit."""
     rw  = (rack_width if rack_width is not None else RACK_WIDTH) * scale
     rh  = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
            else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
+           else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    # Chassis border
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
@@ -1797,34 +2063,45 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_line(sx2-3*scale, sy2, sx2+3*scale, sy2, (0.3,0.3,0.3,0.8))
         _draw_line(sx2, sy2-3*scale, sx2, sy2+3*scale, (0.3,0.3,0.3,0.8))
 
-    # --- COLLAPSE ARROW (▼) ---
-    ax = rx + 26*scale
-    ay = ry + rh - 20*scale
-    arrow = [(ax-6*scale, ay+5*scale),
-             (ax+6*scale, ay+5*scale),
-             (ax, ay-5*scale)]
-    batch = batch_for_shader(shader,"TRIS",{"pos":arrow})
-    shader.uniform_float("color",(0.5,0.5,0.5,1.0)); batch.draw(shader)
+    # --- COLLAPSE ARROW — dedicated button, far left of rail ---
+    # Clear ▲ icon in its own 28px zone so it's always visible and clickable
+    col_btn_x = rx + 4*scale
+    col_btn_y = ry + rh - 28*scale
+    col_btn_w = 24*scale
+    col_btn_h = 20*scale
+    _draw_rect(col_btn_x, col_btn_y, col_btn_w, col_btn_h, (0.10, 0.10, 0.12, 1.0))
+    col_bverts = [(col_btn_x, col_btn_y), (col_btn_x+col_btn_w, col_btn_y),
+                  (col_btn_x+col_btn_w, col_btn_y+col_btn_h),
+                  (col_btn_x, col_btn_y+col_btn_h), (col_btn_x, col_btn_y)]
+    col_bb = batch_for_shader(shader, "LINE_STRIP", {"pos": col_bverts})
+    shader.bind(); shader.uniform_float("color", (0.35, 0.35, 0.40, 1.0))
+    col_bb.draw(shader)
+    # ▲ triangle pointing up — indicates click to collapse
+    ax = col_btn_x + col_btn_w * 0.5
+    ay = col_btn_y + col_btn_h * 0.5
+    arrow = [(ax - 5*scale, ay - 3*scale),
+             (ax + 5*scale, ay - 3*scale),
+             (ax,           ay + 5*scale)]
+    batch = batch_for_shader(shader, "TRIS", {"pos": arrow})
+    shader.uniform_float("color", (0.65, 0.65, 0.70, 1.0)); batch.draw(shader)
 
     # --- RACK NUMBER BADGE + EFFECT NAME ---
+    # Badge starts after the collapse button — no overlap
     etype  = rack.effect_type
     enames = dict(EFFECT_TYPES)
     ename  = enames.get(etype, etype)
     fs_name = max(1, int(11*scale))
 
-    # Rack number badge — clickable button to reorder racks
     badge_label = str(rack_idx + 1)
     badge_fs    = max(1, int(13*scale))
-    badge_x     = rx + 6*scale
+    badge_x     = col_btn_x + col_btn_w + 4*scale   # starts after collapse button
     badge_y     = ry + rh - 28*scale
     badge_w     = max(22*scale, _text_width(badge_label, badge_fs) + 12*scale)
     badge_h     = 20*scale
 
-    # Badge background — highlight if reorder dropdown is open for this rack
     badge_open  = _reorder_open and _reorder_rack_idx == rack_idx
     badge_bg    = (0.2, 0.45, 0.75, 1.0) if badge_open else (0.12, 0.25, 0.45, 1.0)
     _draw_rect(badge_x, badge_y, badge_w, badge_h, badge_bg)
-    # Border
     bverts = [(badge_x, badge_y), (badge_x+badge_w, badge_y),
               (badge_x+badge_w, badge_y+badge_h),
               (badge_x, badge_y+badge_h), (badge_x, badge_y)]
@@ -1832,18 +2109,15 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     shader.bind()
     shader.uniform_float("color", (0.35, 0.7, 1.0, 0.7))
     bb2.draw(shader)
-    # Number text centred in badge
     tw_b = _text_width(badge_label, badge_fs)
     _draw_text(badge_label, badge_x + badge_w/2 - tw_b/2,
                badge_y + badge_h/2 - badge_fs/2,
                badge_fs, (0.35, 0.7, 1.0, 1.0))
-    # Small dropdown arrow ▾
     arr_fs = max(1, int(8*scale))
     _draw_text("▾", badge_x + badge_w - 10*scale,
                badge_y + 2*scale, arr_fs, (0.35, 0.7, 1.0, 0.8))
-    badge_w = badge_w + 6*scale  # offset for effect name
+    badge_w = badge_w + 6*scale
 
-    # Effect name — shifted right to clear the badge
     _draw_text(ename.upper(),
                badge_x + badge_w,
                ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
@@ -1857,7 +2131,6 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     p_box_y   = ry + rh - 26*scale
     p_box_h   = 16*scale
 
-    # Left arrow
     lax = p_box_x - 14*scale
     lay = ry + rh - 18*scale
     la  = [(lax, lay), (lax+10*scale, lay+6*scale), (lax+10*scale, lay-6*scale)]
@@ -1870,14 +2143,13 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     _draw_text(p_name, p_box_x + p_box_w/2 - tw/2,
                p_box_y + p_box_h/2 - fs_p/2 + 1, fs_p, (0.7,0.7,0.7,1.0))
 
-    # Right arrow
     rax = p_box_x + p_box_w + 4*scale
     ray = ry + rh - 18*scale
     ra  = [(rax+10*scale, ray), (rax, ray+6*scale), (rax, ray-6*scale)]
     batch = batch_for_shader(shader,"TRIS",{"pos":ra})
     shader.uniform_float("color",(0.4,0.4,0.4,1.0)); batch.draw(shader)
 
-    # --- DELETE BUTTON (X) ---
+    # --- DELETE BUTTON ---
     del_x = rx + rw - 26*scale
     del_y = ry + rh - 27*scale
     del_w = 18*scale
@@ -1915,7 +2187,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     _draw_text(on_txt, on_x+on_w/2-tw/2, on_y+on_h/2-fs_on/2+1,
                fs_on, on_col)
 
-    # --- BODY CONTENT — branches by effect type ---
+    # --- BODY CONTENT — dispatch by effect type ---
     body_h = rh - RACK_RAIL_H * scale
     spec_h = min(SPEC_H * scale, body_h - 50*scale)
 
@@ -1923,24 +2195,21 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
     elif etype == "EQ":
         _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "REVERB":
+        _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
-        # Row 1: Threshold | Ratio | Knee
-        # Row 2: Attack    | Release | Makeup
         params  = EFFECT_PARAMS.get(etype, [])
         col     = (0.0, 0.65, 0.4)
         knob_r  = 18 * scale
-        # Knob grid origin
-        knob_area_w = KNOB_SECTION_W * scale
         knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
         body_top = ry
         body_bot = ry + rh - RACK_RAIL_H*scale
         mid_y    = (body_top + body_bot) * 0.5
-        ky0      = mid_y + knob_r + 14*scale   # top row
-        ky1      = mid_y - knob_r - 14*scale   # bottom row
+        ky0      = mid_y + knob_r + 14*scale
+        ky1      = mid_y - knob_r - 14*scale
 
-        # Draw all 6 knobs
-        param_order = [0,1,5, 2,3,4]  # Thr,Ratio,Knee / Atk,Rel,Makeup
+        param_order = [0,1,5, 2,3,4]
         for idx, pi in enumerate(param_order):
             col_i = idx % 3
             row_i = idx // 3
@@ -1961,14 +2230,13 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         spec_x = rx + SPEC_X * scale
         spec_y = ry + (body_h - spec_h) / 2 - 5*scale
         spec_w = SPEC_W * scale
-        # Pass rack to spectrum so it can draw soft-knee GR curve
         _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
 
         assigned = get_rack_channels(rack)
         gr_x     = spec_x + spec_w + 16*scale
         _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
 
-    # Channel buttons always on right regardless of effect type
+    # Channel buttons always on right
     ch_right_x = rx + rw - 100*scale
     ch_top_y   = ry + rh - RACK_RAIL_H*scale - 20*scale
     _draw_channel_buttons(ch_right_x, ch_top_y, rack, scale)
@@ -1978,13 +2246,11 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
 
 
 
-
 def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     """Draw a collapsed rack unit — single row."""
     rw = (rack_width if rack_width is not None else RACK_WIDTH) * scale
     rh = RACK_COLLAPSED_H * scale
 
-    # Chassis
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
@@ -1993,7 +2259,6 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     shader.uniform_float("color",(0.25,0.25,0.25,1.0))
     batch.draw(shader)
 
-    # Corner screws
     for sx2, sy2 in [(rx+12*scale, ry+rh/2),
                      (rx+rw-12*scale, ry+rh/2)]:
         _draw_circle(sx2, sy2, 3*scale, (0.07,0.07,0.07,1.0))
@@ -2001,7 +2266,6 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_line(sx2-2*scale, sy2, sx2+2*scale, sy2, (0.28,0.28,0.28,0.8))
         _draw_line(sx2, sy2-2*scale, sx2, sy2+2*scale, (0.28,0.28,0.28,0.8))
 
-    # Expand arrow (►)
     ax = rx + 26*scale
     ay = ry + rh/2
     arrow = [(ax-5*scale, ay+6*scale),
@@ -2010,13 +2274,11 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     batch = batch_for_shader(shader,"TRIS",{"pos":arrow})
     shader.uniform_float("color",(0.45,0.45,0.45,1.0)); batch.draw(shader)
 
-    # Effect name + rack number badge
     etype  = rack.effect_type
     enames = dict(EFFECT_TYPES)
     ename  = enames.get(etype, etype)
     fs     = max(1, int(11*scale))
 
-    # Rack number — glowing blue, no box
     badge_label = str(rack_idx + 1)
     badge_fs    = max(1, int(13*scale))
     badge_x     = rx + 40*scale
@@ -2025,12 +2287,10 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
                badge_fs, (0.35, 0.7, 1.0, 1.0))
     badge_w     = _text_width(badge_label, badge_fs) + 6*scale
 
-    # Effect name shifted right of number
     _draw_text(ename.upper(),
                rx + 40*scale + badge_w,
                ry + rh/2 - fs/2, fs, (0.6,0.6,0.6,1.0))
 
-    # Assigned channel buttons (small, only assigned ones)
     assigned = get_rack_channels(rack)
     btn_x    = rx + 250*scale
     btn_y    = ry + rh/2 - 8*scale
@@ -2050,18 +2310,12 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_text(str(ch_idx+1),
                    bx+btn_w/2-tw/2, btn_y+btn_h/2-fs_b/2+1,
                    fs_b, (0.0,0.8,0.5,1.0))
-
-        # Pulsing LED next to channel button
         led_x = bx + btn_w + 3*scale
         led_y = btn_y + btn_h/2
         is_lit = _led_states.get((rack_idx, ch_idx), False)
-        if is_lit:
-            led_col = (0.0, 1.0, 0.55, 1.0)
-        else:
-            led_col = (0.0, 0.25, 0.14, 1.0)
+        led_col = (0.0, 1.0, 0.55, 1.0) if is_lit else (0.0, 0.25, 0.14, 1.0)
         _draw_circle(led_x, led_y, 4*scale, led_col)
 
-    # Preset name (centre)
     presets = PRESETS.get(etype, ["Default"])
     p_idx   = rack.preset_idx % max(1, len(presets))
     p_name  = presets[p_idx]
@@ -2069,7 +2323,6 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     _draw_text(p_name, rx + rw/2 - _text_width(p_name, fs_p)/2,
                ry + rh/2 - fs_p/2, fs_p, (0.3,0.3,0.3,1.0))
 
-    # Delete button (collapsed)
     cdel_x = rx + rw - 28*scale
     cdel_y = ry + rh/2 - 7*scale
     cdel_w = 18*scale
@@ -2085,7 +2338,6 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     _draw_text("X", cdel_x+cdel_w/2-tw_d2/2, cdel_y+cdel_h/2-fs_d2/2+1,
                fs_d2, (0.7,0.1,0.1,1.0))
 
-    # ON/OFF indicator
     on_x  = rx + rw - 50*scale
     on_y  = ry + rh/2 - 7*scale
     on_w  = 28*scale
@@ -2232,6 +2484,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_MB * ui_scale
         elif rack.effect_type == "EQ":
             rh = RACK_EXPANDED_H_EQ * ui_scale
+        elif rack.effect_type == "REVERB":
+            rh = RACK_EXPANDED_H_RV * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -2360,6 +2614,7 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
 
         rh = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
               else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
+              else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
               else RACK_EXPANDED_H) * ui_scale
         rack_y = cur_y - rh
 
@@ -2457,6 +2712,28 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     if bftype_ht == "peak":
                         if math.dist((rx, ry), (col_cx_eq, row_q_eq)) < kr_small_eq + tol_eq:
                             return (i, bi + 14)  # Q p14-p20
+            elif rack.effect_type == "REVERB":
+                # 5 knobs: p0=Room, p1=Damp, p2=Wet, p3=Pre-dly, p4=Width
+                # Geometry mirrors _draw_reverb_body knob strip exactly
+                body_h_rv   = rh - RACK_RAIL_H * ui_scale
+                ch_btn_w_rv = 108 * ui_scale
+                margin_l_rv = 42 * ui_scale
+                margin_r_rv = ch_btn_w_rv + 8 * ui_scale
+                disp_x_rv   = rack_x + margin_l_rv
+                disp_w_rv   = rw - margin_l_rv - margin_r_rv
+                N_KNOBS_RV  = 5
+                col_w_rv    = disp_w_rv / N_KNOBS_RV
+                knob_h_rv   = body_h_rv * 0.42 - 4 * ui_scale
+                knob_y_rv   = rack_y + 2 * ui_scale
+                row_slot_rv = knob_h_rv / 3.0
+                row_knob_rv = knob_y_rv + knob_h_rv - row_slot_rv * 1.3
+                kr_rv       = min(max(13*ui_scale, col_w_rv*0.16), 20*ui_scale)
+                kr_rv       = min(kr_rv, row_slot_rv * 0.42)
+                tol_rv      = 8 * ui_scale
+                for ki in range(N_KNOBS_RV):
+                    cx_rv = disp_x_rv + (ki + 0.5) * col_w_rv
+                    if math.dist((rx, ry), (cx_rv, row_knob_rv)) < kr_rv + tol_rv:
+                        return (i, ki)           # p0-p4
             else:
                 # Single band 2x3 knob grid — must mirror draw geometry exactly
                 # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
@@ -2560,6 +2837,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_MB * ui_scale
         elif rack.effect_type == "EQ":
             rh = RACK_EXPANDED_H_EQ * ui_scale
+        elif rack.effect_type == "REVERB":
+            rh = RACK_EXPANDED_H_RV * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -2569,8 +2848,13 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             # Hit in this rack — determine zone
             rail_top = rack_y + rh - RACK_RAIL_H*ui_scale
 
-            # Collapse/expand arrow (top-left of rail)
-            if rail_top <= ry <= rack_y+rh and rx <= rack_x+38*ui_scale:
+            # Collapse button — dedicated 24px button at far left of rail
+            col_btn_x2 = rack_x + 4*ui_scale
+            col_btn_y2 = rack_y + rh - 28*ui_scale
+            col_btn_w2 = 24*ui_scale
+            col_btn_h2 = 20*ui_scale
+            if (col_btn_x2 <= rx <= col_btn_x2 + col_btn_w2 and
+                    col_btn_y2 <= ry <= col_btn_y2 + col_btn_h2):
                 return {'zone': 'collapse', 'rack_idx': i}
 
             # Delete button
@@ -2579,12 +2863,13 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             if del_x <= rx <= del_x+18*ui_scale and del_y <= ry <= del_y+16*ui_scale:
                 return {'zone': 'delete_rack', 'rack_idx': i}
 
-            # Rack number badge — reorder dropdown trigger
-            badge_x2 = rack_x + 6*ui_scale
+            # Rack number badge — starts after collapse button
+            badge_x2 = rack_x + 4*ui_scale + 24*ui_scale + 4*ui_scale
             badge_y2 = rack_y + rh - 28*ui_scale
-            badge_w2 = 38*ui_scale   # matches draw width
+            badge_w2 = 38*ui_scale
             badge_h2 = 20*ui_scale
-            if badge_x2 <= rx <= badge_x2+badge_w2 and                badge_y2 <= ry <= badge_y2+badge_h2:
+            if (badge_x2 <= rx <= badge_x2 + badge_w2 and
+                    badge_y2 <= ry <= badge_y2 + badge_h2):
                 return {'zone': 'rack_badge', 'rack_idx': i,
                         'bx': badge_x2, 'by': badge_y2+badge_h2}
 

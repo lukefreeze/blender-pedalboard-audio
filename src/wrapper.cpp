@@ -44,9 +44,10 @@ py::array_t<float> process_buffer(int channel_idx,
     int total = n_frames * n_channels;
     for (int i = 0; i < total; ++i) out_ptr[i] = in_ptr[i];
 
-    // Reset compressor state for a fresh batch pass
-    g_state.comp_state[channel_idx] = CompressorChannelState{};
-    g_state.eq_state[channel_idx]   = EqChannelState{};
+    // Reset DSP state for a fresh batch pass
+    g_state.comp_state[channel_idx]   = CompressorChannelState{};
+    g_state.eq_state[channel_idx]     = EqChannelState{};
+    g_state.reverb_state[channel_idx] = ReverbChannelState{};
     for (int b = 0; b < PB_MB_BANDS; ++b)
         g_state.fft_state[channel_idx][b] = FFTBandState{};
 
@@ -88,15 +89,16 @@ PYBIND11_MODULE(pedalboard_engine, m)
           "effect chain. Returns processed array. Updates fft_bins/gr_levels.");
 
     // Effect type constants
-    m.attr("FX_NONE")        = (int)EffectType::NONE;
-    m.attr("FX_GAIN")        = (int)EffectType::GAIN;
-    m.attr("FX_EQ_3BAND")    = (int)EffectType::EQ_3BAND;
-    m.attr("FX_EQ_PARAM")    = (int)EffectType::EQ_PARAM;
-    m.attr("FX_COMP_SINGLE") = (int)EffectType::COMP_SINGLE;
-    m.attr("FX_COMP_MULTI")  = (int)EffectType::COMP_MULTI;
-    m.attr("FX_REVERB")      = (int)EffectType::REVERB;
-    m.attr("MB_BANDS")       = PB_MB_BANDS;
-    m.attr("FFT_BINS")       = PB_FFT_BINS;
+    m.attr("FX_NONE")         = (int)EffectType::NONE;
+    m.attr("FX_GAIN")         = (int)EffectType::GAIN;
+    m.attr("FX_EQ_3BAND")     = (int)EffectType::EQ_3BAND;
+    m.attr("FX_EQ_PARAM")     = (int)EffectType::EQ_PARAM;
+    m.attr("FX_COMP_SINGLE")  = (int)EffectType::COMP_SINGLE;
+    m.attr("FX_COMP_MULTI")   = (int)EffectType::COMP_MULTI;
+    m.attr("FX_REVERB")       = (int)EffectType::REVERB;
+    m.attr("FX_REVERB_PARAM") = (int)EffectType::REVERB_PARAM;
+    m.attr("MB_BANDS")        = PB_MB_BANDS;
+    m.attr("FFT_BINS")        = PB_FFT_BINS;
 
     py::class_<EffectSlot>(m, "EffectSlot")
         .def_readwrite("enabled", &EffectSlot::enabled)

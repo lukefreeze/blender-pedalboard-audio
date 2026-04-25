@@ -457,6 +457,15 @@ def _apply_effect_chain(samples, channel_idx, sr):
                 chain_log.append("EQ7")
                 slot_idx += 1
 
+            elif etype == "REVERB":
+                fx.type    = engine.FX_REVERB_PARAM
+                fx.enabled = True
+                # p0=room, p1=damp, p2=wet, p3=pre_delay, p4=width
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                chain_log.append("REVERB")
+                slot_idx += 1
+
         except Exception as _se:
             print(f"[CHAIN] ch{channel_idx+1} slot{slot_idx} error: {_se}")
 
@@ -793,6 +802,19 @@ def _pb_wire_rack_to_engine(channel_idx):
                 print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} EQ7 — C++ biquad")
             except Exception as e:
                 print(f"[WIRE] EQ wiring failed: {e}")
+
+        elif etype == "REVERB":
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_REVERB_PARAM
+                fx.enabled = True
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                slot_idx  += 1
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} REVERB "
+                      f"room={rack.p0:.2f} damp={rack.p1:.2f} wet={rack.p2:.2f}")
+            except Exception as e:
+                print(f"[WIRE] REVERB wiring failed: {e}")
 
         if slot_idx >= 8:
             break
