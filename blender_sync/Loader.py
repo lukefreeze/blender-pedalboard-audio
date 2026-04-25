@@ -146,7 +146,7 @@ EFFECT_ABBREV = {
 }
 GAIN_DEFAULT = 1.0  # unity
 
-FADER_TRACK_BOTTOM = 530
+FADER_TRACK_BOTTOM = 580
 FADER_HEIGHT       = 180
 FADER_HANDLE_H     = 20
 FADER_HANDLE_W     = 40
@@ -511,6 +511,24 @@ def _apply_effect_chain(samples, channel_idx, sr):
             engine.process_buffer(channel_idx, buf, sr),
             dtype=_np.float32)
         print(f"[CHAIN] ch{channel_idx+1}: {' → '.join(chain_log)}")
+
+        # Apply stereo pan post-effects (constant power law)
+        # pan=0.5 → centre, pan=0 → hard left, pan=1 → hard right
+        try:
+            import math as _mpan
+            tracks_pan = getattr(scene, 'pb_sync_tracks', [])
+            if channel_idx < len(tracks_pan):
+                pan = getattr(tracks_pan[channel_idx], 'pan', 0.5)
+                if abs(pan - 0.5) > 0.01 and processed.ndim == 2 and processed.shape[1] >= 2:
+                    angle   = pan * (_mpan.pi / 2.0)
+                    gain_l  = _mpan.cos(angle)
+                    gain_r  = _mpan.sin(angle)
+                    processed = processed.copy()
+                    processed[:, 0] *= gain_l
+                    processed[:, 1] *= gain_r
+        except Exception:
+            pass  # pan is non-critical — never block audio
+
         return processed, pre_comp
     except Exception as _pe:
         print(f"[CHAIN] ch{channel_idx+1} process_buffer error: {_pe}")
@@ -1327,8 +1345,44 @@ def _pb_start_channel(channel_idx, position_seconds):
                       f"playing unprocessed")
                 import traceback; traceback.print_exc()
         else:
+            # No rack assigned — but pan still applies.
+            # If pan is not centre, extract samples, apply pan, write wav.
             print(f"[ENGINE] ch{channel_idx+1} no rack assigned — "
                   f"playing unprocessed")
+            try:
+                import math as _mp
+                scene_p = bpy.context.scene
+                tracks_p = getattr(scene_p, 'pb_sync_tracks', [])
+                pan = getattr(tracks_p[channel_idx], 'pan', 0.5) \
+                      if channel_idx < len(tracks_p) else 0.5
+                if abs(pan - 0.5) > 0.01:
+                    import tempfile, os, aud as _aud, numpy as _npan, wave
+                    try:
+                        sr_p  = int(sound.specs[0])
+                        nch_p = int(sound.specs[1])
+                    except Exception:
+                        sr_p, nch_p = 44100, 2
+                    samp_p = sound.data()
+                    if samp_p is not None and samp_p.size > 0 and nch_p >= 2:
+                        angle   = pan * (_mp.pi / 2.0)
+                        gain_l  = _mp.cos(angle)
+                        gain_r  = _mp.sin(angle)
+                        samp_p  = samp_p.astype(_npan.float32)
+                        samp_p[:, 0] *= gain_l
+                        samp_p[:, 1] *= gain_r
+                        pan_path = os.path.join(tempfile.gettempdir(),
+                                                f"pb_pan_ch{channel_idx}.wav")
+                        i16 = (_npan.clip(samp_p, -1.0, 1.0) * 32767).astype(_npan.int16)
+                        with wave.open(pan_path, 'wb') as wf:
+                            wf.setnchannels(nch_p)
+                            wf.setsampwidth(2)
+                            wf.setframerate(sr_p)
+                            wf.writeframes(i16.tobytes())
+                        pb_sound = _aud.Sound.file(pan_path)
+                        print(f"[PAN] ch{channel_idx+1} no-rack pan={pan:.2f} "
+                              f"L={gain_l:.2f} R={gain_r:.2f}")
+            except Exception as _pe:
+                pass  # pan is non-critical — fall back to raw sound
 
     # Stop old handle now — new sound plays immediately after (minimal gap)
     if existing:
@@ -2283,7 +2337,7 @@ def draw_callback_px(self, context):
             # Strip background — tall enough for numbox + send buttons
             n_racks_bg = len(getattr(bpy.context.scene, "pb_racks", []))
             send_h_bg  = _send_section_height(n_racks_bg, UI_SCALE)
-            strip_h    = 600*UI_SCALE + send_h_bg
+            strip_h    = 650*UI_SCALE + send_h_bg
             draw_rect(sx, base_y-strip_h,
                       120*UI_SCALE, strip_h, (0.07,0.07,0.07,1.0))
 
@@ -2335,6 +2389,16 @@ def draw_callback_px(self, context):
             # Push fader down by send section height so it clears the buttons
             n_racks_f = len(getattr(bpy.context.scene, "pb_racks", []))
             f_y   = base_y - (FADER_TRACK_BOTTOM * UI_SCALE) - _send_section_height(n_racks_f, UI_SCALE)
+
+            # --- PAN KNOB — sits between EQ LOW and fader top ---
+            # 42px clearance above fader top gives breathing room on both sides
+            pan_ky = f_y + f_h + 42 * UI_SCALE
+            pan_val = getattr(track, 'pan', 0.5)
+            if   pan_val < 0.45: pan_lbl = f"L{int((0.5 - pan_val) * 200)}"
+            elif pan_val > 0.55: pan_lbl = f"R{int((pan_val - 0.5) * 200)}"
+            else:                pan_lbl = "C"
+            draw_circle_knob(kx, pan_ky, 14*UI_SCALE,
+                             pan_val, (0.65, 0.45, 0.10), f"PAN:{pan_lbl}")
             f_hw  = FADER_HANDLE_W * UI_SCALE
             f_hh  = FADER_HANDLE_H * UI_SCALE
             f_hx  = sx + (FADER_HANDLE_X_OFF * UI_SCALE)
@@ -2530,6 +2594,9 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     track.gain = new_gain
                     _meter_timer._last_frame = None
                     _meter_timer()
+                elif active_knob_type == "PAN":
+                    track.pan = max(0.0, min(1.0, track.pan + delta))
+                    if _pb_engine_active: _pb_reprocess_channel(active_knob_track)
                 elif active_knob_type == "HIGH":
                     track.eq_high = max(-24.0, min(24.0, track.eq_high+delta*100))
                     if _pb_engine_active: _pb_rebuild_eq(active_knob_track)
@@ -2638,6 +2705,20 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         active_knob_track,active_knob_type=i,"MID";  return {"RUNNING_MODAL"}
                     if math.dist((rx,ry),(kx,base_y-(eq_start_k+100*UI_SCALE)))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"LOW";  return {"RUNNING_MODAL"}
+                    # Pan knob — between EQ LOW and fader top, matches draw position
+                    pan_ky_k = f_y + f_h + 42*UI_SCALE
+                    if math.dist((rx,ry),(kx, pan_ky_k)) < 18*UI_SCALE:
+                        # Double-click snaps pan to centre
+                        if (now - _last_click_time < DOUBLE_CLICK_TIME
+                                and _last_click_track == i):
+                            context.scene.pb_sync_tracks[i].pan = 0.5
+                            _last_click_time  = 0.0
+                            _last_click_track = -1
+                            context.area.tag_redraw()
+                            return {"RUNNING_MODAL"}
+                        _last_click_time  = now
+                        _last_click_track = i
+                        active_knob_track,active_knob_type=i,"PAN"; return {"RUNNING_MODAL"}
 
                     # Fader track — checked BEFORE numbox so handle at
                     # bottom position is always reachable
@@ -2796,6 +2877,9 @@ class PB_TrackSettings(bpy.types.PropertyGroup):
         default=1.0, min=FADER_MIN, max=FADER_MAX,
         description="Channel fader (proportional multiplier on strip volumes)")
     gain:    bpy.props.FloatProperty(default=GAIN_DEFAULT, min=GAIN_MIN, max=GAIN_MAX)
+    pan:     bpy.props.FloatProperty(
+        default=0.5, min=0.0, max=1.0,
+        description="Stereo pan (0=full L, 0.5=centre, 1=full R)")
     eq_high: bpy.props.FloatProperty(default=0.0, min=-24.0, max=24.0)
     eq_mid:  bpy.props.FloatProperty(default=0.0, min=-24.0, max=24.0)
     eq_low:  bpy.props.FloatProperty(default=0.0, min=-24.0, max=24.0)
