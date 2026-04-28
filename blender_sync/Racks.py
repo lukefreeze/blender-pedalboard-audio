@@ -50,9 +50,10 @@ _reorder_y        = 0.0
 # rack starts at 30px → rack width = 1230 - 30 = 1200px
 RACK_WIDTH          = 1200         # matches 9-fader section width exactly
 RACK_EXPANDED_H     = 260
-RACK_EXPANDED_H_MB  = 400   # taller for multiband 3x2 knob grid
-RACK_EXPANDED_H_EQ  = 580   # tall studio rack — display + spacious 7-band knob row
-RACK_EXPANDED_H_RV  = 340   # reverb — display + 5-knob row
+RACK_EXPANDED_H_MB  = 400
+RACK_EXPANDED_H_EQ  = 580
+RACK_EXPANDED_H_RV  = 340
+RACK_EXPANDED_H_NG  = 320   # noise gate — display + 5-knob row
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
@@ -216,13 +217,40 @@ PRESET_DATA['REVERB'] = [
     ('Dry Ambience',         [0.15, 0.7,  0.15, 0.0,  0.5 ]),
 ]
 
+PRESET_DATA['NOISE_GATE'] = [
+    # ── Dialogue / vocals ──────────────────────────────────────────────────
+    ('Dialogue Clean',   [0.50, 0.05, 0.12, 0.09, 0.0 ]),
+    ('Dialogue Natural', [0.44, 0.08, 0.20, 0.15, 0.0 ]),
+    ('Vocal Gate',       [0.50, 0.05, 0.16, 0.18, 0.0 ]),
+    ('Breathy Vocal',    [0.38, 0.10, 0.24, 0.25, 0.0 ]),
+    ('Hard Vocal Cut',   [0.60, 0.03, 0.08, 0.08, 0.0 ]),
+    # ── Drums ──────────────────────────────────────────────────────────────
+    ('Drum Room',        [0.56, 0.02, 0.10, 0.06, 0.0 ]),
+    ('Snare Gate',       [0.63, 0.01, 0.06, 0.05, 0.0 ]),
+    ('Kick Gate',        [0.56, 0.02, 0.14, 0.07, 0.0 ]),
+    ('Overhead Gate',    [0.44, 0.05, 0.20, 0.12, 0.0 ]),
+    ('Drum Bleed',       [0.50, 0.03, 0.08, 0.05, 0.0 ]),
+    # ── Instruments ────────────────────────────────────────────────────────
+    ('Guitar Amp',       [0.44, 0.05, 0.16, 0.12, 0.0 ]),
+    ('Bass Gate',        [0.44, 0.03, 0.18, 0.10, 0.0 ]),
+    ('Piano Room',       [0.38, 0.08, 0.30, 0.20, 0.0 ]),
+    # ── Special / utility ──────────────────────────────────────────────────
+    ('Tight Gate',       [0.56, 0.02, 0.06, 0.04, 0.0 ]),
+    ('Soft Gate',        [0.38, 0.15, 0.30, 0.30, 0.0 ]),
+    ('Room Noise Kill',  [0.56, 0.04, 0.10, 0.08, 0.0 ]),
+    ('Expander Light',   [0.44, 0.12, 0.24, 0.25, 0.44]),
+    ('Expander Hard',    [0.50, 0.05, 0.10, 0.10, 0.0 ]),
+    ('De-breath',        [0.44, 0.05, 0.12, 0.10, 0.0 ]),
+    ('Natural',          [0.44, 0.10, 0.20, 0.20, 0.0 ]),
+]
+
 # Legacy name lists for rack preset display
 PRESETS = {
     "COMP_SINGLE": [p[0] for p in PRESET_DATA["COMP_SINGLE"]],
     "COMP_MULTI":  [p[0] for p in PRESET_DATA["COMP_MULTI"]],
     "EQ":          [p[0] for p in PRESET_DATA["EQ"]],
     "REVERB":      [p[0] for p in PRESET_DATA["REVERB"]],
-    "NOISE_GATE":  ["Tight Gate", "Soft Gate", "Drum Gate", "Vocal Gate", "Natural"],
+    "NOISE_GATE":  [p[0] for p in PRESET_DATA["NOISE_GATE"]],
     "DELAY":       ["Slapback", "Quarter Note", "Dotted 8th", "Ping Pong", "Tape Echo"],
 }
 
@@ -398,9 +426,10 @@ def normalise_param(rack, param_idx, actual_value):
 def init_rack_defaults(rack):
     """Set parameter values to defaults for the effect type — loads preset 0."""
     rack.preset_idx = 0
-    # Reverb: default to Medium Room (index 2) — more useful starting point
     if rack.effect_type == "REVERB":
-        rack.preset_idx = 2
+        rack.preset_idx = 2   # Medium Room
+    elif rack.effect_type == "NOISE_GATE":
+        rack.preset_idx = 0   # Dialogue Clean
     _load_preset(rack, rack.preset_idx)
 
 
@@ -2031,12 +2060,315 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
 
 
 
+def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
+    """Noise gate display.
+
+    Draws exactly the mockup design:
+    - Grey waveform from _fft_timeline_full (real audio, mirrored top+bottom)
+    - Green gate envelope line drawn from knob values (attack slope, hold flat,
+      release slope) — triggered wherever waveform crosses threshold
+    - Amber dashed threshold line
+    - Colour-coded atk/hold/rel bracket annotations over first event
+    - Gate open/closed readout top-right
+    - Knob strip with colour-coded arcs matching bracket colours
+    """
+    import math as _mg
+    ui     = scale
+    rail_h = RACK_RAIL_H * ui
+    body_h = rh - rail_h
+
+    # Display area (left of channel buttons)
+    disp_x = rx + 42 * ui
+    disp_w = rw - 42 * ui - 108 * ui - 8 * ui
+    disp_h = body_h * 0.56 - 4 * ui
+    disp_y = ry + body_h - disp_h - 2 * ui
+
+    # Knob area (above display)
+    knob_h = body_h * 0.42 - 4 * ui
+    knob_y = ry + 2 * ui
+
+    # Gate state Y positions
+    open_y   = disp_y + disp_h * 0.92   # gate open = high signal = near bottom of display
+    closed_y = disp_y + disp_h * 0.10   # gate closed = muted = near top of display
+    centre_y = disp_y + disp_h * 0.50   # waveform centre
+
+    # Knob values
+    thr_norm  = getattr(rack, 'p0', 0.50)
+    atk_norm  = getattr(rack, 'p1', 0.05)
+    hold_norm = getattr(rack, 'p2', 0.16)
+    rel_norm  = getattr(rack, 'p3', 0.14)
+    rng_norm  = getattr(rack, 'p4', 0.00)
+    thr_db    = -60.0 + thr_norm * 60.0
+    atk_ms    = 0.1   + atk_norm  * 99.9
+    hold_ms   = hold_norm * 500.0
+    rel_ms    = 10.0  + rel_norm  * 990.0
+    rng_db    = -90.0 + rng_norm  * 90.0
+
+    # Threshold in linear amplitude (for RMS comparison)
+    thr_lin = 10.0 ** (thr_db / 20.0)
+
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+
+    # ── Display background ────────────────────────────────────────────────────
+    _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.042, 0.050, 1.0))
+
+    # ── Grey waveform from real audio ─────────────────────────────────────────
+    rms_vals = None
+    gate_events = []   # list of (close_x, attack_x, hold_x, release_x) in pixels
+    gate_open_now = True
+    gr_db_cur = 0.0
+
+    try:
+        import bpy as _bpy, numpy as _np
+        from Loader import _fft_timeline_full, _fft_timeline
+        assigned = get_rack_channels(rack)
+        if not assigned:
+            raise ValueError("no ch")
+        ch = list(assigned)[0]
+        tl = _fft_timeline_full.get(ch) or _fft_timeline.get(ch)
+        if tl is None or not len(tl["snapshots"]):
+            raise ValueError("no data")
+
+        # Always prefer the full-track timeline — it has consistent start_frame=1
+        # and covers the whole track, so cur_snap is always comparable.
+        tl_full = _fft_timeline_full.get(ch)
+        if tl_full and len(tl_full["snapshots"]):
+            tl = tl_full
+
+        n_tl     = len(tl["snapshots"])
+        scene    = _bpy.context.scene
+        cur_f    = scene.frame_current if scene else 0
+        snap_sec = tl["snap_frames"] / float(tl["sr"])
+        elapsed  = max(0.0, (cur_f - tl["start_frame"]) / float(tl["fps"]))
+        cur_snap = max(0, min(n_tl - 1, int(elapsed / snap_sec)))
+
+        # Always show exactly N_WIN slots so pixel-per-slot is constant.
+        # Slots before the audio starts are left-padded with 0.0 (silence).
+        N_WIN  = 80
+        we     = cur_snap + 1           # exclusive right edge (1-based count)
+        n_real = min(we, n_tl)          # how many real snapshots to show
+        n_real = min(n_real, N_WIN)     # cap at window size
+        n_pad  = N_WIN - n_real         # silence slots on the left
+
+        ws = we - n_real                # first real snapshot index
+        raw_vals = [float(_np.mean(tl["snapshots"][ws + i])) for i in range(n_real)]
+        rms_vals = [0.0] * n_pad + raw_vals  # fixed-length N_WIN list
+
+        # Current gate state from RMS vs threshold
+        rms_cur = rms_vals[-1] if rms_vals else 0.0
+        gate_open_now = rms_cur >= thr_lin
+
+        # Pixel widths for attack / hold / release — based on fixed N_WIN spacing
+        ms_per_snap = snap_sec * 1000.0
+        px_per_snap = disp_w / max(N_WIN - 1, 1)
+        atk_px  = max(2.0, (atk_ms  / ms_per_snap) * px_per_snap)
+        hold_px = max(2.0, (hold_ms / ms_per_snap) * px_per_snap)
+        rel_px  = max(2.0, (rel_ms  / ms_per_snap) * px_per_snap)
+
+    except Exception:
+        rms_vals = None
+        atk_px  = max(2.0, disp_w * 0.025)
+        hold_px = max(2.0, disp_w * 0.15)
+        rel_px  = max(2.0, disp_w * 0.055)
+
+    # Draw waveform if we have data
+    if rms_vals:
+        max_rms = max(rms_vals + [0.01])
+        half_h  = disp_h * 0.34
+        wf_top  = []
+        wf_bot  = []
+        _N = 79  # N_WIN - 1, constant so x-spacing never changes
+        for i, rms in enumerate(rms_vals):
+            bx  = disp_x + (i / _N) * disp_w
+            amp = (rms / max_rms) * half_h
+            wf_top.append((bx, centre_y - amp))
+            wf_bot.append((bx, centre_y + amp))
+
+        # Fill between top and bottom
+        fill_verts = []
+        for (bx, ty), (_, by) in zip(wf_top, wf_bot):
+            fill_verts += [(bx, ty), (bx, by)]
+        if len(fill_verts) >= 4:
+            bf = batch_for_shader(shader, "TRI_STRIP", {"pos": fill_verts})
+            shader.bind(); shader.uniform_float("color", (0.15, 0.16, 0.20, 0.85))
+            bf.draw(shader)
+        for pts in [wf_top, wf_bot]:
+            if len(pts) >= 2:
+                bl = batch_for_shader(shader, "LINE_STRIP", {"pos": pts})
+                gpu.state.line_width_set(max(1.0, ui * 0.8))
+                shader.bind(); shader.uniform_float("color", (0.24, 0.26, 0.32, 0.70))
+                bl.draw(shader)
+        gpu.state.line_width_set(1.0)
+
+    # ── Gate envelope line ────────────────────────────────────────────────────
+    # Built from knob values: find where waveform crosses threshold → draw
+    # attack slope up, hold flat, release slope down, then closed again.
+    # Range floor: where the line sits when closed
+    rng_y = closed_y - rng_norm * (closed_y - open_y)
+
+    gate_pts = []
+    first_event = None   # (close_x, atk_x, hold_x, rel_x) for annotations
+
+    if rms_vals:
+        count    = len(rms_vals)
+        px_per_i = disp_w / 79  # always N_WIN-1 = 79 so spacing is constant
+        in_gate = False
+        hold_remaining = 0.0
+
+        i = 0
+        while i < count:
+            bx  = disp_x + i * px_per_i
+            rms = rms_vals[i]
+            is_above = rms >= thr_lin
+
+            if not in_gate and is_above:
+                # Transition: closed → open (attack)
+                close_x = bx
+                atk_end = min(bx + atk_px, disp_x + disp_w)
+                if gate_pts and gate_pts[-1][1] != rng_y:
+                    gate_pts.append((bx, rng_y))
+                else:
+                    gate_pts.append((bx, rng_y))
+                gate_pts.append((atk_end, open_y))
+                in_gate = True
+                hold_remaining = hold_px
+                if first_event is None:
+                    first_event = (close_x, atk_end, None, None)
+            elif in_gate and is_above:
+                # Still open — flat at open_y, consume hold
+                gate_pts.append((bx, open_y))
+                hold_remaining -= px_per_i
+                if first_event and first_event[2] is None:
+                    first_event = (first_event[0], first_event[1], bx, None)
+            elif in_gate and not is_above:
+                # Below threshold — hold then release
+                if hold_remaining > 0:
+                    gate_pts.append((bx, open_y))
+                    hold_remaining -= px_per_i
+                    if first_event and first_event[2] is None:
+                        first_event = (first_event[0], first_event[1], bx, None)
+                else:
+                    # Release slope
+                    rel_end = min(bx + rel_px, disp_x + disp_w)
+                    gate_pts.append((bx, open_y))
+                    gate_pts.append((rel_end, rng_y))
+                    in_gate = False
+                    if first_event and first_event[3] is None:
+                        if first_event[2] is None:
+                            first_event = (first_event[0], first_event[1], bx, rel_end)
+                        else:
+                            first_event = (first_event[0], first_event[1], first_event[2], rel_end)
+            else:
+                # Closed — flat at range floor
+                gate_pts.append((bx, rng_y))
+            i += 1
+    else:
+        # No data — draw flat at open
+        gate_pts = [(disp_x, open_y), (disp_x + disp_w, open_y)]
+
+    # Fill under gate line
+    if len(gate_pts) >= 2:
+        fv2 = []
+        for gx, gy in gate_pts:
+            fv2 += [(gx, disp_y + disp_h - 2), (gx, gy)]
+        if len(fv2) >= 4:
+            bf2 = batch_for_shader(shader, "TRI_STRIP", {"pos": fv2})
+            shader.bind(); shader.uniform_float("color", (0.04, 0.18, 0.07, 0.45))
+            bf2.draw(shader)
+        bg = batch_for_shader(shader, "LINE_STRIP", {"pos": gate_pts})
+        gpu.state.line_width_set(max(2.0, ui * 1.5))
+        shader.bind(); shader.uniform_float("color", (0.20, 0.88, 0.38, 1.0))
+        bg.draw(shader); gpu.state.line_width_set(1.0)
+
+    # ── Amber dashed threshold line ───────────────────────────────────────────
+    thr_y = rng_y - thr_norm * (rng_y - open_y)
+    dash = 7*ui; gap = 4*ui; x = disp_x; tog = True; segs = []
+    while x < disp_x + disp_w:
+        xe = min(x + (dash if tog else gap), disp_x + disp_w)
+        if tog: segs += [(x, thr_y), (xe, thr_y)]
+        x = xe; tog = not tog
+    if segs:
+        bd = batch_for_shader(shader, "LINES", {"pos": segs})
+        gpu.state.line_width_set(max(1.8, ui * 1.2))
+        shader.bind(); shader.uniform_float("color", (0.96, 0.62, 0.08, 1.0))
+        bd.draw(shader); gpu.state.line_width_set(1.0)
+    _draw_text(f"thr {thr_db:.0f}dB", disp_x + 4*ui, thr_y - 2*ui - 9*ui,
+               max(1, int(8*ui)), (0.96, 0.62, 0.08, 1.0))
+
+    # ── open/closed labels ────────────────────────────────────────────────────
+    fs7 = max(1, int(7*ui))
+    _draw_text("open",   disp_x + 4*ui, open_y + 2*ui,       fs7, (0.28, 0.55, 0.28, 0.70))
+    _draw_text("closed", disp_x + 4*ui, closed_y - fs7 - 2*ui, fs7, (0.55, 0.28, 0.28, 0.70))
+
+    # ── Bracket annotations (atk/hold/rel) on first gate event ───────────────
+    ann_y = disp_y + 8*ui
+    fs8   = max(1, int(8*ui))
+    if first_event:
+        cx, ax, hx, rx = first_event
+        hx = hx or ax
+        rx = rx or min(hx + rel_px, disp_x + disp_w)
+        # attack bracket (blue)
+        if ax > cx + 2:
+            _draw_rect(cx, ann_y - 1, ax - cx, 1, (0.42, 0.55, 1.0, 0.9))
+            _draw_rect(cx, ann_y - 3, 1, 5, (0.42, 0.55, 1.0, 0.9))
+            _draw_rect(ax, ann_y - 3, 1, 5, (0.42, 0.55, 1.0, 0.9))
+            _draw_text("atk", cx + 2, ann_y - fs8 - 3, fs8, (0.42, 0.55, 1.0, 1.0))
+        # hold bracket (purple)
+        if hx > ax + 2:
+            _draw_rect(ax, ann_y - 1, hx - ax, 1, (0.65, 0.55, 0.98, 0.9))
+            _draw_rect(ax, ann_y - 3, 1, 5, (0.65, 0.55, 0.98, 0.9))
+            _draw_rect(hx, ann_y - 3, 1, 5, (0.65, 0.55, 0.98, 0.9))
+            mid = ax + (hx - ax) / 2
+            _draw_text("hold", mid - 12*ui, ann_y - fs8 - 3, fs8, (0.65, 0.55, 0.98, 1.0))
+        # release bracket (orange)
+        if rx > hx + 2:
+            _draw_rect(hx, ann_y - 1, rx - hx, 1, (0.98, 0.45, 0.08, 0.9))
+            _draw_rect(hx, ann_y - 3, 1, 5, (0.98, 0.45, 0.08, 0.9))
+            _draw_rect(rx, ann_y - 3, 1, 5, (0.98, 0.45, 0.08, 0.9))
+            _draw_text("rel", hx + 2, ann_y - fs8 - 3, fs8, (0.98, 0.45, 0.08, 1.0))
+
+    # ── Gate open/closed readout ──────────────────────────────────────────────
+    try:
+        col = (0.20, 0.88, 0.32, 1.0) if gate_open_now else (0.88, 0.18, 0.18, 1.0)
+        lbl = "gate open" if gate_open_now else "gate closed"
+        fs9 = max(1, int(9*ui)); fs8b = max(1, int(8*ui)); pad = 4*ui
+        tw  = _text_width(lbl, fs9)
+        bw  = tw + pad*2; bh = fs9 + fs8b + pad*2 + 2*ui
+        bx2 = disp_x + disp_w - bw - 4*ui
+        by2 = disp_y + 4*ui
+        bg_col = (0.05, 0.18, 0.07, 1.0) if gate_open_now else (0.18, 0.05, 0.05, 1.0)
+        _draw_rect(bx2, by2, bw, bh, bg_col)
+        _draw_text(lbl, bx2 + pad, by2 + bh - fs9 - pad, fs9, col)
+        _draw_text(f"GR  {gr_db_cur:.1f}dB", bx2 + pad, by2 + pad, fs8b, (0.55, 0.65, 0.55, 1.0))
+    except Exception:
+        pass
+
+    # ── Knob strip ────────────────────────────────────────────────────────────
+    N  = 5
+    cw = disp_w / N
+    rk = knob_y + knob_h * 0.68
+    kr = min(max(13*ui, cw * 0.16), 20*ui)
+    kr = min(kr, knob_h * 0.42 * 0.42)
+
+    knob_defs = [
+        ("Threshold", thr_norm, f"{thr_db:.0f}dB",  (0.88, 0.30, 0.30)),
+        ("Attack",    atk_norm, f"{atk_ms:.0f}ms",  (0.42, 0.55, 1.00)),
+        ("Hold",      hold_norm,f"{hold_ms:.0f}ms", (0.65, 0.55, 0.98)),
+        ("Release",   rel_norm, f"{rel_ms:.0f}ms",  (0.98, 0.45, 0.08)),
+        ("Range",     rng_norm, f"{rng_db:.0f}dB",  (0.50, 0.50, 0.55)),
+    ]
+    for ki, (label, val, vstr, col_k) in enumerate(knob_defs):
+        cx = disp_x + (ki + 0.5) * cw
+        _draw_knob(cx, rk, kr, val, col_k, label, vstr, ui)
+
+
 def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     """Draw a fully expanded rack unit."""
     rw  = (rack_width if rack_width is not None else RACK_WIDTH) * scale
     rh  = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
            else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
            else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
+           else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -2197,6 +2529,8 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
     elif etype == "REVERB":
         _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "NOISE_GATE":
+        _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
         params  = EFFECT_PARAMS.get(etype, [])
@@ -2486,6 +2820,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_EQ * ui_scale
         elif rack.effect_type == "REVERB":
             rh = RACK_EXPANDED_H_RV * ui_scale
+        elif rack.effect_type == "NOISE_GATE":
+            rh = RACK_EXPANDED_H_NG * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -2615,6 +2951,7 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         rh = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
               else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
               else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
+              else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
               else RACK_EXPANDED_H) * ui_scale
         rack_y = cur_y - rh
 
@@ -2734,6 +3071,25 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     cx_rv = disp_x_rv + (ki + 0.5) * col_w_rv
                     if math.dist((rx, ry), (cx_rv, row_knob_rv)) < kr_rv + tol_rv:
                         return (i, ki)           # p0-p4
+
+            elif rack.effect_type == "NOISE_GATE":
+                # 5 knobs: p0=Threshold, p1=Attack, p2=Hold, p3=Release, p4=Range
+                # Geometry mirrors _draw_noisegate_body knob strip exactly
+                body_h_ng   = rh - RACK_RAIL_H * ui_scale
+                disp_x_ng   = rack_x + 42 * ui_scale
+                disp_w_ng   = rw - 42*ui_scale - 108*ui_scale - 8*ui_scale
+                col_w_ng    = disp_w_ng / 5
+                knob_h_ng   = body_h_ng * 0.42 - 4 * ui_scale
+                knob_y_ng   = rack_y + 2 * ui_scale
+                row_slot_ng = knob_h_ng / 3.0
+                row_knob_ng = knob_y_ng + knob_h_ng - row_slot_ng * 1.3
+                kr_ng       = min(max(13*ui_scale, col_w_ng*0.16), 20*ui_scale)
+                kr_ng       = min(kr_ng, row_slot_ng * 0.42)
+                for ki in range(5):
+                    cx_ng = disp_x_ng + (ki + 0.5) * col_w_ng
+                    if math.dist((rx, ry), (cx_ng, row_knob_ng)) < kr_ng + 8*ui_scale:
+                        return (i, ki)
+
             else:
                 # Single band 2x3 knob grid — must mirror draw geometry exactly
                 # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
@@ -2839,6 +3195,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_EQ * ui_scale
         elif rack.effect_type == "REVERB":
             rh = RACK_EXPANDED_H_RV * ui_scale
+        elif rack.effect_type == "NOISE_GATE":
+            rh = RACK_EXPANDED_H_NG * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -2959,19 +3317,32 @@ def _trigger_reprocess(rack_idx, rack, context):
     """
     try:
         from Loader import (_pb_reprocess_channel, _pb_wire_rack_to_engine,
-                            _pb_channels)
-        # Reprocess currently assigned channels (new settings)
+                            _pb_channels, _pb_proc_wav_cache)
+        import os, tempfile
+
+        # Invalidate cached wavs for affected channels so stale pre-rack audio
+        # is never replayed — forces a fresh reprocess on next play
         assigned = get_rack_channels(rack)
+        all_affected = set(assigned) | set(_pb_channels.keys())
+        for ch in all_affected:
+            # Delete the cached processed wav so _pb_start_channel rewrites it
+            cached = _pb_proc_wav_cache.get(ch)
+            if cached:
+                try:
+                    if os.path.exists(cached):
+                        os.remove(cached)
+                except Exception:
+                    pass
+                _pb_proc_wav_cache.pop(ch, None)
+
+        # Reprocess currently assigned channels (new settings)
         for ch in assigned:
             _pb_wire_rack_to_engine(ch)
             _pb_reprocess_channel(ch)
 
         # Also reprocess any channels that are playing but not assigned
-        # (covers deselect case — they need to revert to unprocessed audio)
         for ch in list(_pb_channels.keys()):
             if ch not in assigned:
-                # This channel might have been deselected — rewire clears
-                # its effect slot, reprocess plays unprocessed audio
                 _pb_wire_rack_to_engine(ch)
                 _pb_reprocess_channel(ch)
     except Exception as e:
