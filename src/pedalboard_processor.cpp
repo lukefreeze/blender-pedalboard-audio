@@ -145,9 +145,6 @@ static inline float biquad_step(float x, const BiquadCoeffs& co,
     return y;
 }
 
-// ---------------------------------------------------------------------------
-// lr_filter: two cascaded biquads using a flat 4-float state array
-// ---------------------------------------------------------------------------
 static void lr_filter(float* buf, int n, const BiquadCoeffs& co, float* state)
 {
     for (int f = 0; f < n; ++f) {
@@ -208,15 +205,14 @@ static BiquadCoeffs eq_peak(float gain_db, float freq, float Q, float sr)
     return c;
 }
 
-// EQ7 default frequencies/Qs matching Racks.py EQ7_BANDS
 static const float EQ_DEF_FREQ[7] = {80.f,250.f,700.f,2000.f,5000.f,10000.f,16000.f};
 static const float EQ_DEF_Q[7]    = {0.7f,1.0f,1.0f,1.0f,1.0f,1.0f,0.7f};
 
 static inline float eq_freq_from_norm(float n) {
-    return std::pow(10.0f, 1.30103f + n * 2.69897f);  // 20Hz–20kHz
+    return std::pow(10.0f, 1.30103f + n * 2.69897f);
 }
 static inline float eq_q_from_norm(float n) {
-    return std::pow(10.0f, -1.0f + n * 2.0f);          // 0.1–10.0
+    return std::pow(10.0f, -1.0f + n * 2.0f);
 }
 
 static void apply_eq_param(int ch, aud::sample_t* buf, int frames, int n_ch,
@@ -245,15 +241,13 @@ static void apply_eq_param(int ch, aud::sample_t* buf, int frames, int n_ch,
                 if (!active[bi]) continue;
                 s = biquad_step(s, coeffs[bi], eq.bands[bi].z1[c], eq.bands[bi].z2[c]);
             }
-            buf[f*n_ch+c] = s / (1.0f + std::abs(s));  // soft clip
+            buf[f*n_ch+c] = s / (1.0f + std::abs(s));
         }
     }
 }
 
 // ===========================================================================
-// Freeverb — classic Schroeder/Moorer algorithmic reverb
-// Reference: "Freeverb" by Jezar at Dreampoint (public domain)
-// 8 parallel comb filters → 4 series allpass filters, per channel
+// Freeverb
 // ===========================================================================
 static inline float comb_step(CombState& st, float in,
                                 int len, float feedback, float damp)
@@ -277,29 +271,23 @@ static inline float allpass_step(AllpassState& st, float in, int len)
 static void apply_reverb_param(int ch, aud::sample_t* buf, int frames, int n_ch,
                                 const EffectSlot& fx, float sr)
 {
-    // Denormalise params
-    float room_sz   = 0.28f + fx.params[0] * 0.70f;  // feedback: 0.28-0.98
-    float damp      = fx.params[1] * 0.95f;            // 0–0.95
+    float room_sz   = 0.28f + fx.params[0] * 0.70f;
+    float damp      = fx.params[1] * 0.95f;
     float wet       = fx.params[2];
-    float dry       = 1.0f - wet * 0.7f;               // always keep some dry
+    float dry       = 1.0f - wet * 0.7f;
     float pd_norm   = fx.params[3];
     float width     = fx.params[4];
-    int   pd_samp   = (int)(pd_norm * 0.1f * sr);      // 0–100ms
+    int   pd_samp   = (int)(pd_norm * 0.1f * sr);
     pd_samp = std::min(pd_samp, MAX_PREDELAY_SAMP - 1);
 
     ReverbChannelState& rv = g_state.reverb_state[ch];
     rv.sample_rate = sr;
-
-    // Scale delay lengths for non-44100 sample rates
     float sr_scale = sr / 44100.0f;
 
     for (int f = 0; f < frames; ++f) {
-        // Mix input to mono for reverb processing
         float in_l = buf[f*n_ch + 0];
         float in_r = (n_ch > 1) ? buf[f*n_ch + 1] : in_l;
-        float in_mono = (in_l + in_r) * 0.5f;
 
-        // Pre-delay
         float pd_in_l = in_l, pd_in_r = in_r;
         if (pd_samp > 0) {
             pd_in_l = rv.predelay[0][rv.pd_write[0]];
@@ -311,8 +299,6 @@ static void apply_reverb_param(int ch, aud::sample_t* buf, int frames, int n_ch,
         }
         float verb_in = (pd_in_l + pd_in_r) * 0.5f;
 
-        // 8 parallel comb filters — L and R use slightly different lengths
-        // for stereo decorrelation (Freeverb's core trick)
         float out_l = 0.0f, out_r = 0.0f;
         for (int i = 0; i < PB_REVERB_COMB; ++i) {
             int len_l = (int)(COMB_LENGTHS_L[i] * sr_scale);
@@ -323,7 +309,6 @@ static void apply_reverb_param(int ch, aud::sample_t* buf, int frames, int n_ch,
             out_r += comb_step(rv.comb[1][i], verb_in, len_r, room_sz, damp);
         }
 
-        // 4 series allpass filters
         for (int i = 0; i < PB_REVERB_AP; ++i) {
             int len_l = (int)(AP_LENGTHS_L[i] * sr_scale);
             int len_r = (int)(AP_LENGTHS_R[i] * sr_scale);
@@ -333,12 +318,10 @@ static void apply_reverb_param(int ch, aud::sample_t* buf, int frames, int n_ch,
             out_r = allpass_step(rv.ap[1][i], out_r, len_r);
         }
 
-        // Width: blend L and R reverb channels for stereo spread
         float width_mix = width * 0.5f;
         float wet_l = out_l * (0.5f + width_mix) + out_r * (0.5f - width_mix);
         float wet_r = out_r * (0.5f + width_mix) + out_l * (0.5f - width_mix);
 
-        // Mix wet + dry
         buf[f*n_ch + 0] = in_l * dry + wet_l * wet;
         if (n_ch > 1)
             buf[f*n_ch + 1] = in_r * dry + wet_r * wet;
@@ -346,7 +329,102 @@ static void apply_reverb_param(int ch, aud::sample_t* buf, int frames, int n_ch,
 }
 
 // ===========================================================================
-// FFT (DFT for PB_FFT_BINS bins with Hann window)
+// Stereo Delay — with feedback, LP filter on tail, and ping-pong mode
+//
+// Design:
+//   - One circular buffer per stereo channel (buf_l, buf_r in DelayChannelState)
+//   - Feedback reads from the delay line, applies a one-pole LP filter to
+//     darken each echo (simulates tape/air HF absorption), then writes back
+//   - Ping-pong: when spread > 0.5, each echo bounces L→R→L instead of
+//     repeating in the same channel — achieved by swapping which buffer
+//     the feedback is written into
+//   - Dry signal is always passed through at full level (mix = wet only)
+//   - LP cutoff: 200 Hz (filter=0) → 20000 Hz (filter=1) on a log scale
+//
+// State is NOT reset between process_buffer() batch calls — DelayChannelState
+// lives in EngineState and persists across chunks so the tail rings through
+// correctly. It IS cleared on create_channel() / release_channel().
+// ===========================================================================
+static void apply_delay(int ch, aud::sample_t* buf, int frames, int n_ch,
+                         const EffectSlot& fx, float sr)
+{
+    // Denormalise params
+    float delay_ms  = 1.0f + fx.params[0] * 1999.0f;   // 1..2000 ms
+    float feedback  = fx.params[1] * 0.92f;              // cap at 0.92
+    float mix       = fx.params[2];
+    float spread    = fx.params[3];
+    bool  ping_pong = (spread > 0.5f);
+    float filt_hz   = 200.0f * std::pow(100.0f, fx.params[4]);
+    filt_hz = std::max(200.0f, std::min(filt_hz, sr * 0.49f));
+    float lp_a = 1.0f - std::exp(-2.0f * PI * filt_hz / sr);
+
+    int delay_samp = (int)(delay_ms * 0.001f * sr);
+    delay_samp = std::max(1, delay_samp);
+
+    // Allocate or reallocate buffer when delay time changes.
+    // Buffer is sized to delay_samp + a small pad; this keeps it small
+    // and means the struct stays tiny (just two pointers).
+    // We add 64 samples of headroom so small knob nudges don't reallocate.
+    int needed = delay_samp + 64;
+    DelayChannelState& st = g_state.delay_state[ch];
+
+    if (st.buf_l == nullptr || needed > st.buf_size) {
+        delete[] st.buf_l;
+        delete[] st.buf_r;
+        st.buf_l = new float[needed]();  // () zero-initialises
+        st.buf_r = new float[needed]();
+        st.buf_size = needed;
+        st.write_l = 0;
+        st.write_r = 0;
+        st.filter_z_l = 0.0f;
+        st.filter_z_r = 0.0f;
+        st.last_delay_samp = delay_samp;
+    } else if (std::abs(st.last_delay_samp - delay_samp) > 4) {
+        // Delay time changed — clear to avoid pitch artefacts
+        memset(st.buf_l, 0, st.buf_size * sizeof(float));
+        memset(st.buf_r, 0, st.buf_size * sizeof(float));
+        st.write_l = 0;
+        st.write_r = 0;
+        st.filter_z_l = 0.0f;
+        st.filter_z_r = 0.0f;
+        st.last_delay_samp = delay_samp;
+    }
+
+    int buf_sz = st.buf_size;
+
+    for (int f = 0; f < frames; ++f) {
+        float dry_l = buf[f * n_ch + 0];
+        float dry_r = (n_ch > 1) ? buf[f * n_ch + 1] : dry_l;
+
+        int read_l = (st.write_l - delay_samp + buf_sz) % buf_sz;
+        int read_r = (st.write_r - delay_samp + buf_sz) % buf_sz;
+        float echo_l = st.buf_l[read_l];
+        float echo_r = st.buf_r[read_r];
+
+        st.filter_z_l = lp_a * echo_l + (1.0f - lp_a) * st.filter_z_l;
+        st.filter_z_r = lp_a * echo_r + (1.0f - lp_a) * st.filter_z_r;
+        float filt_l = st.filter_z_l;
+        float filt_r = st.filter_z_r;
+
+        if (ping_pong && n_ch > 1) {
+            st.buf_l[st.write_l] = dry_l + filt_r * feedback;
+            st.buf_r[st.write_r] = dry_r + filt_l * feedback;
+        } else {
+            st.buf_l[st.write_l] = dry_l + filt_l * feedback;
+            st.buf_r[st.write_r] = dry_r + filt_r * feedback;
+        }
+
+        st.write_l = (st.write_l + 1) % buf_sz;
+        st.write_r = (st.write_r + 1) % buf_sz;
+
+        buf[f * n_ch + 0] = dry_l + echo_l * mix;
+        if (n_ch > 1)
+            buf[f * n_ch + 1] = dry_r + echo_r * mix;
+    }
+}
+
+// ===========================================================================
+// FFT
 // ===========================================================================
 static void update_fft(int ch, int band, const float* mono_buf, int frames)
 {
@@ -377,19 +455,8 @@ static void update_fft(int ch, int band, const float* mono_buf, int frames)
 
 // ===========================================================================
 // Multiband compressor
-// Crossovers: 120Hz, 800Hz, 5kHz
-// Filter states stored as flat arrays in CompressorChannelState:
-//   lp_z[band][stage*2 + ch]  — 4 states per band per audio channel
-//   Same for hp_z
-// We use a simpler flat layout here: one state set per crossover
-// processed in mono (mixed down) then output back to stereo.
 // ===========================================================================
 static const float CROSSOVER_HZ[3] = {120.0f, 800.0f, 5000.0f};
-
-// Flat filter state per crossover point: [stage0_z1, stage0_z2, stage1_z1, stage1_z2]
-// We store two sets per crossover (one per audio channel, max stereo)
-// Layout in CompressorChannelState: lp_z[band][2][2][2]
-// We'll access it as a flat pointer with stride 4 per audio channel
 
 static void apply_comp_multi(int ch, aud::sample_t* buf,
                               int frames, int n_ch,
@@ -408,7 +475,6 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
         hp_co[x] = butter_hp(CROSSOVER_HZ[x], sr);
     }
 
-    // Initialise band_buf to zero — accumulate across channels
     for (int b = 0; b < PB_MB_BANDS; ++b)
         memset(band_buf[b], 0, frames * sizeof(float));
 
@@ -417,12 +483,8 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
         float mono[MAX_F];
         for (int f = 0; f < frames; ++f) mono[f] = buf[f * n_ch + c];
 
-        // Each lp_z/hp_z entry: [band][stage][ch][z1/z2]
-        // Access as flat pointer: base + c*2  gives [z1,z2] for this channel
-        // stride per band = 2 stages * 2 channels * 2 states = 8 floats
-
-        float* lp0_state = &g_state.comp_state[ch].lp_z[0][0][c][0]; // band0 lp, stage0, ch c
-        float* lp0_state1= &g_state.comp_state[ch].lp_z[0][1][c][0]; // band0 lp, stage1, ch c
+        float* lp0_state = &g_state.comp_state[ch].lp_z[0][0][c][0];
+        float* lp0_state1= &g_state.comp_state[ch].lp_z[0][1][c][0];
         float* hp0_state = &g_state.comp_state[ch].hp_z[0][0][c][0];
         float* hp0_state1= &g_state.comp_state[ch].hp_z[0][1][c][0];
         float* lp1_state = &g_state.comp_state[ch].lp_z[1][0][c][0];
@@ -434,25 +496,20 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
         float* hp2_state = &g_state.comp_state[ch].hp_z[2][0][c][0];
         float* hp2_state1= &g_state.comp_state[ch].hp_z[2][1][c][0];
 
-        // Band 0: LP120 (2 cascaded biquads)
         memcpy(band_buf[0], mono, frames * sizeof(float));
         lr_filter(band_buf[0], frames, lp_co[0], lp0_state);
 
-        // Band 1: HP120 then LP800
         memcpy(tmp, mono, frames * sizeof(float));
-        // HP stage 1
         for (int f = 0; f < frames; ++f)
             tmp[f] = biquad_step(tmp[f], hp_co[0], hp0_state[0], hp0_state[1]);
         for (int f = 0; f < frames; ++f)
             tmp[f] = biquad_step(tmp[f], hp_co[0], hp0_state1[0], hp0_state1[1]);
         memcpy(band_buf[1], tmp, frames * sizeof(float));
-        // LP stage 2
         for (int f = 0; f < frames; ++f)
             band_buf[1][f] = biquad_step(band_buf[1][f], lp_co[1], lp1_state[0], lp1_state[1]);
         for (int f = 0; f < frames; ++f)
             band_buf[1][f] = biquad_step(band_buf[1][f], lp_co[1], lp1_state1[0], lp1_state1[1]);
 
-        // Band 2: HP800 then LP5k
         memcpy(tmp, mono, frames * sizeof(float));
         for (int f = 0; f < frames; ++f)
             tmp[f] = biquad_step(tmp[f], hp_co[1], hp1_state[0], hp1_state[1]);
@@ -464,14 +521,12 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
         for (int f = 0; f < frames; ++f)
             band_buf[2][f] = biquad_step(band_buf[2][f], lp_co[2], lp2_state1[0], lp2_state1[1]);
 
-        // Band 3: HP5k
         memcpy(band_buf[3], mono, frames * sizeof(float));
         for (int f = 0; f < frames; ++f)
             band_buf[3][f] = biquad_step(band_buf[3][f], hp_co[2], hp2_state[0], hp2_state[1]);
         for (int f = 0; f < frames; ++f)
             band_buf[3][f] = biquad_step(band_buf[3][f], hp_co[2], hp2_state1[0], hp2_state1[1]);
 
-        // Compress each band
         for (int b = 0; b < PB_MB_BANDS; ++b) {
             float thr_db  = denorm_threshold(fx.params[b]);
             float ratio   = denorm_ratio    (fx.params[b + 4]);
@@ -502,18 +557,15 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
             g_state.gr_levels[ch][b] = sm * g_state.gr_levels[ch][b]
                                      + (1.0f - sm) * (-max_gr_db);
 
-            // FFT for spectrum — channel 0 only to save CPU
             if (c == 0) update_fft(ch, b, band_buf[b], frames);
         }
 
-        // Sum bands back to interleaved output
         for (int f = 0; f < frames; ++f) {
             buf[f * n_ch + c] = band_buf[0][f] + band_buf[1][f]
                                + band_buf[2][f] + band_buf[3][f];
         }
     }
 
-    // Band level RMS for display
     const float sm = 0.85f;
     for (int b = 0; b < PB_MB_BANDS; ++b) {
         float rms = 0.0f;
@@ -525,7 +577,67 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
 }
 
 // ===========================================================================
-// apply_effect_chain
+// Noise Gate
+// ===========================================================================
+static inline float gate_thr_db  (float n){ return -60.0f + n * 60.0f;  }
+static inline float gate_atk_ms  (float n){ return   0.1f + n * 99.9f;  }
+static inline float gate_hold_ms (float n){ return   0.0f + n * 500.0f; }
+static inline float gate_rel_ms  (float n){ return  10.0f + n * 990.0f; }
+static inline float gate_range_db(float n){ return -90.0f + n * 90.0f;  }
+
+static void apply_noise_gate(int ch, aud::sample_t* buf,
+                              int frames, int n_ch,
+                              const EffectSlot& fx, float sr)
+{
+    float thr_lin    = db2lin(gate_thr_db  (fx.params[0]));
+    float atk_c      = time_coeff(gate_atk_ms (fx.params[1]), sr);
+    float hold_total = gate_hold_ms(fx.params[2]) * 0.001f * sr;
+    float rel_c      = time_coeff(gate_rel_ms (fx.params[3]), sr);
+    float range_lin  = db2lin(gate_range_db(fx.params[4]));
+
+    GateChannelState& st = g_state.gate_state[ch];
+    float max_gr_db = 0.0f;
+
+    for (int f = 0; f < frames; ++f) {
+        float peak = 0.0f;
+        for (int c = 0; c < n_ch; ++c)
+            peak = std::max(peak, std::abs(buf[f * n_ch + c]));
+
+        float env_c  = (peak > st.envelope) ? atk_c : rel_c;
+        st.envelope  = env_c * st.envelope + (1.0f - env_c) * peak;
+
+        if (st.envelope >= thr_lin) {
+            st.is_open   = true;
+            st.hold_samp = hold_total;
+        } else if (st.is_open) {
+            if (st.hold_samp > 0.0f)
+                st.hold_samp -= 1.0f;
+            else
+                st.is_open = false;
+        }
+
+        float target   = st.is_open ? 1.0f : range_lin;
+        float cur_lin  = db2lin(st.gain_db);
+        float gain_c   = (target > cur_lin) ? atk_c : rel_c;
+        float smooth   = gain_c * cur_lin + (1.0f - gain_c) * target;
+        smooth         = std::max(smooth, 1e-9f);
+        st.gain_db     = lin2db(smooth);
+
+        float gr_db = (smooth < 1.0f) ? lin2db(smooth) : 0.0f;
+        if (gr_db < max_gr_db) max_gr_db = gr_db;
+
+        for (int c = 0; c < n_ch; ++c)
+            buf[f * n_ch + c] *= smooth;
+    }
+
+    const float sm = 0.85f;
+    g_state.gr_levels[ch][1] = sm * g_state.gr_levels[ch][1]
+                              + (1.0f - sm) * (-max_gr_db);
+    g_state.gr_levels[ch][2] = st.is_open ? 1.0f : 0.0f;
+}
+
+// ===========================================================================
+// apply_effect_chain_batch
 // ===========================================================================
 void apply_effect_chain_batch(int ch, aud::sample_t* buf,
                                 int frames, int n_ch, float sr)
@@ -554,14 +666,18 @@ void apply_effect_chain_batch(int ch, aud::sample_t* buf,
             apply_eq_param   (ch, buf, frames, n_ch, fx, sr); break;
         case EffectType::REVERB_PARAM:
             apply_reverb_param(ch, buf, frames, n_ch, fx, sr); break;
-        case EffectType::REVERB: break;  // legacy stub
+        case EffectType::GATE_PARAM:
+            apply_noise_gate (ch, buf, frames, n_ch, fx, sr); break;
+        case EffectType::DELAY_PARAM:
+            apply_delay      (ch, buf, frames, n_ch, fx, sr); break;
+        case EffectType::REVERB: break;
         default: break;
         }
     }
 }
 
 // ===========================================================================
-// PedalboardReader
+// PedalboardReader / PedalboardSound
 // ===========================================================================
 class PedalboardReader : public aud::IReader
 {
@@ -605,9 +721,6 @@ private:
     int m_ch;
 };
 
-// ===========================================================================
-// PedalboardSound
-// ===========================================================================
 class PedalboardSound : public aud::ISound
 {
 public:
@@ -643,6 +756,11 @@ void* create_channel(void* sound_ptr, int ch, int strip_ch)
     g_state.comp_state[ch]     = CompressorChannelState{};
     g_state.eq_state[ch]       = EqChannelState{};
     g_state.reverb_state[ch]   = ReverbChannelState{};
+    g_state.gate_state[ch]     = GateChannelState{};
+    // Free any existing delay buffers before resetting state
+    delete[] g_state.delay_state[ch].buf_l;
+    delete[] g_state.delay_state[ch].buf_r;
+    g_state.delay_state[ch] = DelayChannelState{};
     for (int b = 0; b < PB_MB_BANDS; ++b)
         g_state.fft_state[ch][b] = FFTBandState{};
     printf("[ENGINE] ch=%d strip=%d started\n", ch, strip_ch);
@@ -659,6 +777,9 @@ void release_channel(void* h) {
     ChannelHandle* c = reinterpret_cast<ChannelHandle*>(h);
     if (c->channel_idx >= 0 && c->channel_idx < PB_MAX_CHANNELS) {
         g_state.meter_levels[c->channel_idx] = 0.0f;
+        delete[] g_state.delay_state[c->channel_idx].buf_l;
+        delete[] g_state.delay_state[c->channel_idx].buf_r;
+        g_state.delay_state[c->channel_idx] = DelayChannelState{};
         for (int b = 0; b < PB_MB_BANDS; ++b) {
             g_state.band_levels[c->channel_idx][b] = 0.0f;
             g_state.gr_levels  [c->channel_idx][b] = 0.0f;

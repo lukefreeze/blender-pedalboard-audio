@@ -12,12 +12,14 @@
 enum class EffectType {
     NONE        = 0,
     GAIN        = 1,
-    EQ_3BAND    = 2,   // legacy stub — kept so enum values don't shift
+    EQ_3BAND    = 2,
     COMP_SINGLE = 3,
     COMP_MULTI  = 4,
-    REVERB      = 5,   // legacy stub slot — kept for enum stability
-    EQ_PARAM    = 6,   // 7-band parametric EQ
-    REVERB_PARAM= 7,   // Freeverb algorithmic reverb
+    REVERB      = 5,
+    EQ_PARAM    = 6,
+    REVERB_PARAM= 7,
+    GATE_PARAM  = 8,   // Noise gate — downward expander
+    DELAY_PARAM = 9,   // Stereo delay with feedback, LP filter, ping-pong
 };
 
 // ---------------------------------------------------------------------------
@@ -44,6 +46,20 @@ enum class EffectType {
 //   p[2] = wet        0-1  (wet level)
 //   p[3] = pre_delay  0-1  (maps to 0-100ms)
 //   p[4] = width      0-1  (stereo spread, 0=mono 1=full stereo)
+//
+// GATE_PARAM (5 params used, 24 allocated):
+//   p[0] = threshold  0-1  (maps -60..0 dB)
+//   p[1] = attack     0-1  (maps 0.1..100 ms)
+//   p[2] = hold       0-1  (maps 0..500 ms)
+//   p[3] = release    0-1  (maps 10..1000 ms)
+//   p[4] = range      0-1  (maps -90..0 dB floor when gate closed)
+//
+// DELAY_PARAM (5 params used, 24 allocated):
+//   p[0] = time       0-1  (maps 1..2000 ms)
+//   p[1] = feedback   0-1  (0=no repeats, 1=infinite)
+//   p[2] = mix        0-1  (wet mix, dry is always 1.0)
+//   p[3] = spread     0-1  (>0.5 enables ping-pong L/R alternating)
+//   p[4] = filter     0-1  (LP cutoff: 200 Hz..20 kHz log scale)
 // ---------------------------------------------------------------------------
 struct EffectSlot {
     EffectType type    = EffectType::NONE;
@@ -82,8 +98,6 @@ struct EqChannelState {
 
 // ---------------------------------------------------------------------------
 // Freeverb reverb state — one per channel
-// 8 comb filters + 4 allpass per stereo channel
-// Each comb filter has a delay buffer, read/write index, and filter state
 // ---------------------------------------------------------------------------
 static const int COMB_LENGTHS_L[8] = {1116,1188,1277,1356,1422,1491,1557,1617};
 static const int COMB_LENGTHS_R[8] = {1116+23,1188+23,1277+23,1356+23,
@@ -97,7 +111,7 @@ static const int MAX_PREDELAY_SAMP = 4411;   // 100ms @ 44100Hz
 struct CombState {
     float buf[MAX_COMB_LEN] = {};
     int   pos    = 0;
-    float filter = 0.0f;   // simple one-pole LPF state
+    float filter = 0.0f;
 };
 
 struct AllpassState {
@@ -106,11 +120,35 @@ struct AllpassState {
 };
 
 struct ReverbChannelState {
-    CombState    comb[2][PB_REVERB_COMB]   = {};  // [ch][filter]
+    CombState    comb[2][PB_REVERB_COMB]   = {};
     AllpassState ap  [2][PB_REVERB_AP]     = {};
     float        predelay[2][MAX_PREDELAY_SAMP] = {};
     int          pd_write[2] = {0, 0};
     float        sample_rate = 44100.0f;
+};
+
+// Per-channel noise gate state
+struct GateChannelState {
+    float envelope  = 0.0f;
+    float hold_samp = 0.0f;
+    bool  is_open   = false;
+    float gain_db   = 0.0f;
+};
+
+// ---------------------------------------------------------------------------
+// Stereo delay state — heap-allocated circular buffers (avoids huge BSS).
+// Buffers are lazily created on first use and freed on release_channel().
+// Using raw pointers + size so EngineState stays small and compiles fast.
+// ---------------------------------------------------------------------------
+struct DelayChannelState {
+    float* buf_l         = nullptr;
+    float* buf_r         = nullptr;
+    int    buf_size      = 0;       // allocated size in samples
+    int    write_l       = 0;
+    int    write_r       = 0;
+    float  filter_z_l   = 0.0f;
+    float  filter_z_r   = 0.0f;
+    int    last_delay_samp = 0;
 };
 
 struct EngineState {
@@ -137,6 +175,8 @@ struct EngineState {
     FFTBandState           fft_state   [PB_MAX_CHANNELS][PB_MB_BANDS] = {};
     EqChannelState         eq_state    [PB_MAX_CHANNELS] = {};
     ReverbChannelState     reverb_state[PB_MAX_CHANNELS] = {};
+    GateChannelState       gate_state  [PB_MAX_CHANNELS] = {};
+    DelayChannelState      delay_state [PB_MAX_CHANNELS] = {};
 
     // Legacy
     int   active_track_id = 1;

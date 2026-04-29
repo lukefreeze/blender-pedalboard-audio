@@ -15,9 +15,9 @@ EngineState* get_state() { return &g_state; }
 
 // ---------------------------------------------------------------------------
 // process_buffer — batch DSP entry point.
-// Called from Python with a (n_samples, n_channels) float32 numpy array.
-// Applies the full effect chain for channel_idx and returns processed array.
-// Also populates fft_bins and gr_levels for display.
+// NOTE: delay state is NOT reset here — DelayChannelState must persist across
+// chunks so the tail rings through between batch calls. All other state IS
+// reset so batch processing starts clean for comp/eq/reverb/gate.
 // ---------------------------------------------------------------------------
 py::array_t<float> process_buffer(int channel_idx,
                                    py::array_t<float, py::array::c_style> samples,
@@ -34,43 +34,34 @@ py::array_t<float> process_buffer(int channel_idx,
     int n_channels = (int)info.shape[1];
     float sr       = (float)sample_rate;
 
-    // Make a mutable copy — we process in-place
     py::array_t<float> output({n_frames, n_channels});
     py::buffer_info out_info = output.request();
     float* out_ptr = (float*)out_info.ptr;
     float* in_ptr  = (float*)info.ptr;
 
-    // Copy input to output buffer
     int total = n_frames * n_channels;
     for (int i = 0; i < total; ++i) out_ptr[i] = in_ptr[i];
 
-    // Reset DSP state for a fresh batch pass
+    // Reset stateful DSP — but NOT delay_state, which must persist across
+    // batch calls so delay tails carry through between audio chunks.
     g_state.comp_state[channel_idx]   = CompressorChannelState{};
     g_state.eq_state[channel_idx]     = EqChannelState{};
     g_state.reverb_state[channel_idx] = ReverbChannelState{};
+    g_state.gate_state[channel_idx]   = GateChannelState{};
     for (int b = 0; b < PB_MB_BANDS; ++b)
         g_state.fft_state[channel_idx][b] = FFTBandState{};
 
-    // Set volume to 1.0 for batch processing (volume handled by Blender handle)
     float saved_vol = g_state.volumes[channel_idx];
     g_state.volumes[channel_idx] = 1.0f;
 
-    // Process in chunks matching what the audio thread would see
     const int CHUNK = 1024;
     for (int offset = 0; offset < n_frames; offset += CHUNK) {
         int chunk_frames = std::min(CHUNK, n_frames - offset);
-        int chunk_samples = chunk_frames * n_channels;
-
-        // apply_effect_chain expects interleaved samples
-        // our array is (frames, channels) which is already interleaved
         float* chunk_ptr = out_ptr + offset * n_channels;
-
-        // Apply fader (1.0) + effect chain
         apply_effect_chain_batch(channel_idx, chunk_ptr,
                                   chunk_frames, n_channels, sr);
     }
 
-    // Restore volume
     g_state.volumes[channel_idx] = saved_vol;
 
     printf("[ENGINE] ch%d batch processed %d frames @ %dHz\n",
@@ -97,6 +88,8 @@ PYBIND11_MODULE(pedalboard_engine, m)
     m.attr("FX_COMP_MULTI")   = (int)EffectType::COMP_MULTI;
     m.attr("FX_REVERB")       = (int)EffectType::REVERB;
     m.attr("FX_REVERB_PARAM") = (int)EffectType::REVERB_PARAM;
+    m.attr("FX_GATE_PARAM")   = (int)EffectType::GATE_PARAM;
+    m.attr("FX_DELAY_PARAM")  = (int)EffectType::DELAY_PARAM;
     m.attr("MB_BANDS")        = PB_MB_BANDS;
     m.attr("FFT_BINS")        = PB_FFT_BINS;
 

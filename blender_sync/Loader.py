@@ -294,8 +294,10 @@ _pb_full_wav_cache  = {}        # channel_idx -> full-track wav from frame_start
 _fft_timeline      = {}   # trimmed — from position_seconds to end
 _fft_timeline_full = {}   # full track — always from seq frame_start
 _fft_timeline_eq_input = {}  # pre-EQ signal per channel — for EQ spectrum display
-_gr_timeline       = {}   # trimmed — from position_seconds to end
-_gr_timeline_full  = {}   # full track — always from seq frame_start
+_gr_timeline       = {}
+_gr_timeline_full  = {}
+_gate_timeline     = {}   # gate open/closed + GR per channel per snapshot
+_gate_timeline_full= {}
 
 
 
@@ -464,6 +466,24 @@ def _apply_effect_chain(samples, channel_idx, sr):
                 fx.params  = ([getattr(rack, f'p{i}', 0.0)
                                for i in range(5)] + [0.0]*19)
                 chain_log.append("REVERB")
+                slot_idx += 1
+
+            elif etype == "NOISE_GATE":
+                fx.type    = engine.FX_GATE_PARAM
+                fx.enabled = True
+                # p0=threshold, p1=attack, p2=hold, p3=release, p4=range
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                chain_log.append("GATE")
+                slot_idx += 1
+
+            elif etype == "DELAY":
+                fx.type    = engine.FX_DELAY_PARAM
+                fx.enabled = True
+                # p0=time, p1=feedback, p2=mix, p3=spread, p4=filter
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                chain_log.append("DELAY")
                 slot_idx += 1
 
         except Exception as _se:
@@ -834,6 +854,35 @@ def _pb_wire_rack_to_engine(channel_idx):
             except Exception as e:
                 print(f"[WIRE] REVERB wiring failed: {e}")
 
+        elif etype == "NOISE_GATE":
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_GATE_PARAM
+                fx.enabled = True
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                slot_idx  += 1
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} GATE "
+                      f"thr={rack.p0:.2f} atk={rack.p1:.2f} rel={rack.p3:.2f}")
+            except Exception as e:
+                print(f"[WIRE] GATE wiring failed: {e}")
+
+        elif etype == "DELAY":
+            try:
+                fx         = state.get_effect_slot(channel_idx, slot_idx)
+                fx.type    = engine.FX_DELAY_PARAM
+                fx.enabled = True
+                # p0=time, p1=feedback, p2=mix, p3=spread, p4=filter
+                fx.params  = ([getattr(rack, f'p{i}', 0.0)
+                               for i in range(5)] + [0.0]*19)
+                slot_idx  += 1
+                delay_ms = 1.0 + rack.p0 * 1999.0
+                print(f"[WIRE] ch{channel_idx+1} slot{slot_idx-1} DELAY "
+                      f"t={delay_ms:.0f}ms fb={rack.p1:.2f} mix={rack.p2:.2f} "
+                      f"ping={'Y' if rack.p3 > 0.5 else 'N'}")
+            except Exception as e:
+                print(f"[WIRE] DELAY wiring failed: {e}")
+
         if slot_idx >= 8:
             break
 
@@ -852,6 +901,16 @@ def _pb_reprocess_channel(channel_idx):
     is_playing = getattr(_bpy.context.screen, 'is_animation_playing', False)
     if not is_playing: return
     fps = scene.render.fps / scene.render.fps_base
+
+    # Clear the wav cache so the fresh reprocess is never skipped
+    import os
+    cached = _pb_proc_wav_cache.get(channel_idx)
+    if cached:
+        try:
+            if os.path.exists(cached): os.remove(cached)
+        except Exception:
+            pass
+        _pb_proc_wav_cache.pop(channel_idx, None)
 
     # Use scene.frame_current for position — more reliable than wall clock
     # which drifts after loops and repeated reprocesses
@@ -965,16 +1024,20 @@ def _build_timelines(channel_idx, proc_np, sr, scene_fps,
     if not fft_snaps:
         return
 
+    _scene_bt2 = bpy.context.scene
+    _sf_bt2 = float((_scene_bt2.frame_preview_start
+                     if _scene_bt2 and _scene_bt2.use_preview_range
+                     else (_scene_bt2.frame_start if _scene_bt2 else 1)))
     tl = {
         'snapshots'  : _np2.stack(fft_snaps),
         'snap_frames': snap_frames,
-        'start_frame': position_seconds * scene_fps,
+        'start_frame': _sf_bt2,
         'sr': sr, 'fps': scene_fps,
     }
     gl = {
         'snapshots'  : _np2.stack(gr_snaps),
         'snap_frames': snap_frames,
-        'start_frame': position_seconds * scene_fps,
+        'start_frame': _sf_bt2,
         'sr': sr, 'fps': scene_fps,
     }
     if full_track:
@@ -983,6 +1046,76 @@ def _build_timelines(channel_idx, proc_np, sr, scene_fps,
     else:
         _fft_timeline[channel_idx] = tl
         _gr_timeline[channel_idx]  = gl
+
+    # --- Gate timeline: open/closed + GR per 80ms snapshot ---
+    # Uses gr_levels[ch][1]=GR magnitude, gr_levels[ch][2]=open flag
+    # written by apply_noise_gate per chunk.
+    try:
+        from Racks import get_rack_channels as _grc_gt
+        scene_gt = bpy.context.scene
+        racks_gt = getattr(scene_gt, "pb_racks", []) if scene_gt else []
+        has_gate = False
+        for r in racks_gt:
+            _rch = _grc_gt(r)
+            if r.enabled and r.effect_type == "NOISE_GATE" and channel_idx in _rch:
+                has_gate = True
+                break
+        if not has_gate:
+            print(f"[GATE_TL_SKIP] ch{channel_idx+1} full_track={full_track} "
+                  f"racks={len(racks_gt)} "
+                  f"gate_racks={[r.effect_type for r in racks_gt if r.effect_type=='NOISE_GATE']} "
+                  f"assigned={[_grc_gt(r) for r in racks_gt if r.effect_type=='NOISE_GATE']}")
+        if has_gate:
+            gate_snaps = []
+            # Reset the gate DSP state so envelope follower starts fresh
+            try:
+                engine.create_channel(channel_idx)
+                # Re-wire the gate effect so slots are set after create_channel reset
+                from Racks import get_rack_params as _grp_gt
+                for r in racks_gt:
+                    if r.enabled and r.effect_type == "NOISE_GATE" and channel_idx in _grc_gt(r):
+                        p = _grp_gt(r)
+                        engine.set_effect(channel_idx, 0, engine.FX_GATE_PARAM,
+                                          p[0], p[1], p[2], p[3], p[4], 0.0, 0.0, 0.0)
+                        break
+            except Exception:
+                pass
+            # Use raw pre-effects audio for gate timeline (same source as FFT)
+            _gate_src = raw_np if raw_np is not None else proc_np
+            inp_gt = _np2.asarray(_gate_src, dtype=_np2.float32)
+            if inp_gt.ndim == 1:
+                inp_gt = inp_gt.reshape(-1, 1)
+            n_snaps_gt = max(1, inp_gt.shape[0] // snap_frames)
+            for snap_i in range(n_snaps_gt):
+                s = snap_i * snap_frames
+                chunk_gt = inp_gt[s:s + snap_frames]
+                if chunk_gt.shape[0] < 64:
+                    break
+                chunk_gt = _np2.ascontiguousarray(chunk_gt, dtype=_np2.float32)
+                try:
+                    engine.process_buffer(channel_idx, chunk_gt, int(sr))
+                    gr_db   = float(engine.get_state().get_gr_levels(channel_idx)[1])
+                    is_open = float(engine.get_state().get_gr_levels(channel_idx)[2])
+                    # Fallback: if is_open is always 1 (state not updating),
+                    # derive from GR amount — if gate is attenuating, it's closed
+                    if is_open > 0.5 and gr_db > 2.0:
+                        is_open = 0.0
+                    gate_snaps.append(_np2.array([gr_db, is_open], dtype=_np2.float32))
+                except Exception:
+                    gate_snaps.append(_np2.array([0.0, 1.0], dtype=_np2.float32))
+            if gate_snaps:
+                gate_tl = {
+                    'snapshots'  : _np2.stack(gate_snaps),
+                    'snap_frames': snap_frames,
+                    'start_frame': _sf_bt2,
+                    'sr': float(sr), 'fps': float(scene_fps),
+                }
+                if full_track:
+                    _gate_timeline_full[channel_idx] = gate_tl
+                else:
+                    _gate_timeline[channel_idx]      = gate_tl
+    except Exception:
+        pass  # gate timeline is decorative — never block playback
 
 
 def _pb_start_channel(channel_idx, position_seconds):
@@ -1122,10 +1255,14 @@ def _pb_start_channel(channel_idx, position_seconds):
                     scene_fps = (bpy.context.scene.render.fps /
                                  bpy.context.scene.render.fps_base
                                  if bpy.context.scene else 24.0)
+                    _scene_sf = bpy.context.scene
+                    _sf_frames = ((_scene_sf.frame_preview_start
+                                   if _scene_sf and _scene_sf.use_preview_range
+                                   else (_scene_sf.frame_start if _scene_sf else 1)))
                     _fft_timeline[channel_idx] = {
                         'snapshots'  : fft_array,
                         'snap_frames': snap_frames,
-                        'start_frame': position_seconds * scene_fps,
+                        'start_frame': float(_sf_frames),
                         'sr'         : sr,
                         'fps'        : scene_fps,
                     }
@@ -1306,6 +1443,16 @@ def _pb_start_channel(channel_idx, position_seconds):
                                                 scene_fps, start_s,
                                                 full_track=True,
                                                 raw_np=_raw_np)
+                                            # DEBUG: confirm full-track timeline contents
+                                            _ft_check = _fft_timeline_full.get(channel_idx)
+                                            _gt_check = _gate_timeline_full.get(channel_idx)
+                                            print(f"[FULL_TL] ch{channel_idx+1} "
+                                                  f"fft_snaps={len(_ft_check['snapshots']) if _ft_check else 0} "
+                                                  f"gate_snaps={len(_gt_check['snapshots']) if _gt_check else 0} "
+                                                  f"start_frame={_ft_check['start_frame'] if _ft_check else 'None'} "
+                                                  f"snap_frames={_ft_check['snap_frames'] if _ft_check else 'None'} "
+                                                  f"sr={_ft_check['sr'] if _ft_check else 'None'} "
+                                                  f"fps={_ft_check['fps'] if _ft_check else 'None'}")
                                         except Exception:
                                             _fft_timeline_full[channel_idx] = (
                                                 _fft_timeline.get(channel_idx))
@@ -2139,6 +2286,33 @@ def draw_rect(x, y, w, h, color):
                               {"pos": [(x,y),(x+w,y),(x,y+h),(x+w,y+h)]})
     shader.bind(); shader.uniform_float("color", color); batch.draw(shader)
 
+def draw_rounded_rect(x, y, w, h, r, color):
+    """Filled rounded rectangle. r = corner radius in px. Falls back to plain rect if too small."""
+    if w <= 0 or h <= 0: return
+    r = min(r, w / 2.0, h / 2.0)
+    if r < 1.0:
+        draw_rect(x, y, w, h, color)
+        return
+    import math as _m
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    # Build a TRI_FAN from the centre — 4 corner arcs of 8 segments each
+    cx, cy = x + w / 2.0, y + h / 2.0
+    verts  = [(cx, cy)]
+    corners = [
+        (x + r,     y + r,     _m.pi,       1.5 * _m.pi),   # bottom-left
+        (x + w - r, y + r,     1.5 * _m.pi, 2.0 * _m.pi),   # bottom-right
+        (x + w - r, y + h - r, 0.0,         0.5 * _m.pi),   # top-right
+        (x + r,     y + h - r, 0.5 * _m.pi, _m.pi),         # top-left
+    ]
+    SEGS = 8
+    for (ox, oy, a0, a1) in corners:
+        for i in range(SEGS + 1):
+            a = a0 + (a1 - a0) * i / SEGS
+            verts.append((ox + _m.cos(a) * r, oy + _m.sin(a) * r))
+    verts.append(verts[1])   # close fan
+    batch = batch_for_shader(shader, "TRI_FAN", {"pos": verts})
+    shader.bind(); shader.uniform_float("color", color); batch.draw(shader)
+
 def draw_circle_knob(x, y, radius, value, color, label):
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts  = [(x, y)]
@@ -2451,13 +2625,52 @@ def draw_callback_px(self, context):
             print(f"[RACKS] draw error: {e}")
 
         # --- SCROLLBARS ---
-        draw_rect(0, 0, width, 25, (0.05,0.05,0.05,1.0))
-        hx = (abs(SCROLL_X)/5000)*(width-150) if SCROLL_X != 0 else 0
-        draw_rect(max(0,hx), 2, 150, 21, (0.4,0.4,0.4,1.0))
-        draw_rect(width-25, 0, 25, height, (0.05,0.05,0.05,1.0))
-        vy = (height-100-(abs(SCROLL_Y)/2000*(height-100))
-              if SCROLL_Y != 0 else height-100)
-        draw_rect(width-23, vy, 21, 100, (0.4,0.4,0.4,1.0))
+        # Blender-style: thin 8px track, 6px pill thumb, 2px inset from edge.
+        # Horizontal bar along the bottom, vertical bar on the right.
+        _SB_TRACK  = 8    # track thickness in px (unscaled — always thin)
+        _SB_THUMB_H = 6   # thumb thickness (sits centred in track)
+        _SB_INSET  = 1    # gap between thumb and track edge
+        _SB_MARGIN = 2    # gap between scrollbar and canvas edge
+        _SB_R      = 3    # corner radius of thumb pill
+
+        # ── Horizontal scrollbar (bottom) ─────────────────────────────────────
+        _h_track_y = _SB_MARGIN
+        _h_track_w = width - _SB_TRACK - _SB_MARGIN * 2
+        # Draw track — very subtle, almost invisible like Blender's
+        draw_rect(_SB_MARGIN, _h_track_y,
+                  _h_track_w, _SB_TRACK,
+                  (0.10, 0.10, 0.10, 0.55))
+        # Thumb: 60px wide pill (Blender uses fixed-ish thumb size)
+        _h_thumb_w  = max(30, int(_h_track_w * 0.12))
+        _h_travel   = _h_track_w - _h_thumb_w
+        _h_frac     = min(1.0, abs(SCROLL_X) / max(1.0, 5000.0))
+        _h_thumb_x  = _SB_MARGIN + int(_h_frac * _h_travel)
+        draw_rounded_rect(_h_thumb_x,
+                          _h_track_y + _SB_INSET,
+                          _h_thumb_w,
+                          _SB_THUMB_H,
+                          _SB_R,
+                          (0.50, 0.50, 0.50, 0.80))
+
+        # ── Vertical scrollbar (right) ─────────────────────────────────────────
+        _v_track_x = width - _SB_TRACK - _SB_MARGIN
+        _v_track_h = height - _SB_TRACK - _SB_MARGIN * 2
+        # Draw track
+        draw_rect(_v_track_x, _SB_MARGIN + _SB_TRACK,
+                  _SB_TRACK, _v_track_h,
+                  (0.10, 0.10, 0.10, 0.55))
+        # Thumb: travels top-to-bottom, sits at top when SCROLL_Y=0
+        _v_thumb_h  = max(20, int(_v_track_h * 0.18))
+        _v_travel   = _v_track_h - _v_thumb_h
+        _v_frac     = min(1.0, abs(SCROLL_Y) / max(1.0, 2000.0))
+        _v_thumb_y  = (_SB_MARGIN + _SB_TRACK + _v_travel
+                       - int(_v_frac * _v_travel))
+        draw_rounded_rect(_v_track_x + _SB_INSET,
+                          _v_thumb_y,
+                          _SB_THUMB_H,
+                          _v_thumb_h,
+                          _SB_R,
+                          (0.50, 0.50, 0.50, 0.80))
 
     except Exception as e:
         print(f"DRAW ERROR: {e}")
@@ -2559,11 +2772,18 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 save_ui_state(); context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
             if is_dragging_h:
-                SCROLL_X -= (event.mouse_x-event.mouse_prev_x)*12
+                # Derive ratio from actual scrollbar geometry so thumb tracks mouse.
+                # Horizontal: thumb=150px wide, range=5000 content px over (width-150) track px.
+                _h_track = max(1, region.width - 150)
+                _h_ratio = 5000.0 / _h_track
+                SCROLL_X -= (event.mouse_x - event.mouse_prev_x) * _h_ratio
                 save_ui_state(); context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
             if is_dragging_v:
-                SCROLL_Y += (event.mouse_y-event.mouse_prev_y)*12
+                # Vertical: thumb=100px tall, range=2000 content px over (height-100) track px.
+                _v_track = max(1, region.height - 100)
+                _v_ratio = 2000.0 / _v_track
+                SCROLL_Y += (event.mouse_y - event.mouse_prev_y) * _v_ratio
                 save_ui_state(); context.area.tag_redraw()
                 return {"RUNNING_MODAL"}
 
@@ -2660,9 +2880,9 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
 
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
-                if ry < 25:
+                if ry < 14:   # horizontal scrollbar hit zone (8px track + margin)
                     is_dragging_h = True; return {"RUNNING_MODAL"}
-                if rx > region.width-25:
+                if rx > region.width - 14:   # vertical scrollbar hit zone
                     is_dragging_v = True; return {"RUNNING_MODAL"}
 
                 import time
@@ -2893,19 +3113,63 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
     bl_label  = "Toggle Pedalboard"
 
     def execute(self, context):
-        global pb_ui_enabled, SCROLL_X, SCROLL_Y, HUD_AREA_PTR
+        global pb_ui_enabled, UI_SCALE, SCROLL_X, SCROLL_Y, HUD_AREA_PTR
         load_ui_state()
         pb_ui_enabled = not pb_ui_enabled
         print(f"[TOGGLE] pb_ui_enabled={pb_ui_enabled}")
         if pb_ui_enabled:
-            # Store the pointer of the area where the HUD is being enabled
-            # so the draw callback only fires for this specific area
-            HUD_AREA_PTR = context.area.as_pointer()
-            print(f"[TOGGLE] HUD area ptr={HUD_AREA_PTR}")
-            # Always reset scroll to (0,0) on enable so the faders are
-            # immediately visible — user can scroll/zoom from there.
-            SCROLL_X = 0.0
-            SCROLL_Y = 0.0
+            # Pick the largest Node Editor WINDOW as the HUD canvas.
+            # The draw handler lives on SpaceNodeEditor so it can only fire there.
+            # Choosing the biggest one means the HUD uses maximum available space.
+            _hud_best_ptr = context.area.as_pointer()
+            _hud_best_w   = 0
+            _hud_best_h   = 0
+            for _ha in context.screen.areas:
+                if _ha.type == 'NODE_EDITOR':
+                    for _hr in _ha.regions:
+                        if _hr.type == 'WINDOW':
+                            if _hr.width * _hr.height > _hud_best_w * _hud_best_h:
+                                _hud_best_w   = _hr.width
+                                _hud_best_h   = _hr.height
+                                _hud_best_ptr = _ha.as_pointer()
+
+            HUD_AREA_PTR = _hud_best_ptr
+            print(f"[TOGGLE] HUD area ptr={HUD_AREA_PTR} "
+                  f"NODE_EDITOR WINDOW={_hud_best_w}x{_hud_best_h}")
+
+            # Auto-fit UI_SCALE so 9 channels fill the canvas, then centre them.
+            # Mixer content at scale=1.0:
+            #   width  = 30 + 9×135 + 120 - 15 = 1260px
+            #   height = 150 (header gap) + 650 (strip body) = 800px
+            #
+            # Centring derivation:
+            #   Mixer left edge:  x = 30*scale + SCROLL_X
+            #   => SCROLL_X = (canvas_w - 1260*scale) / 2 - 30*scale
+            #
+            #   Mixer draws from base_y = canvas_h - 150*scale - SCROLL_Y downward.
+            #   To vertically centre: base_y = canvas_h/2 + 400*scale
+            #   => SCROLL_Y = canvas_h/2 - 550*scale
+            try:
+                _content_w = 1260.0
+                _content_h = 800.0
+                _draw_w = _hud_best_w if _hud_best_w > 100 else context.region.width
+                _draw_h = _hud_best_h if _hud_best_h > 100 else context.region.height
+                _fit_x   = _draw_w / _content_w
+                _fit_y   = _draw_h / _content_h
+                _fit     = min(_fit_x, _fit_y) * 0.95   # 5% padding
+                UI_SCALE = max(0.35, min(2.0, _fit))
+                # Centre horizontally and vertically
+                SCROLL_X = (_draw_w - _content_w * UI_SCALE) / 2.0 - 30.0 * UI_SCALE
+                SCROLL_Y = _draw_h / 2.0 - 550.0 * UI_SCALE
+                print(f"[TOGGLE] auto-fit UI_SCALE={UI_SCALE:.3f} "
+                      f"canvas={_draw_w}x{_draw_h} "
+                      f"scroll=({SCROLL_X:.1f},{SCROLL_Y:.1f})")
+            except Exception as _fe:
+                UI_SCALE = 1.0
+                SCROLL_X = 0.0
+                SCROLL_Y = 0.0
+                print(f"[TOGGLE] auto-fit failed: {_fe}")
+
             save_ui_state()
             bpy.ops.vse.pb_interaction("INVOKE_DEFAULT")
             _ensure_meter_timer()
