@@ -142,11 +142,12 @@ EFFECT_PARAMS = {
         ("HIGH",      "High",       -24.0, 24.0,   0.0, "{:+.0f}dB"),
     ],
     "REVERB": [
+        # Order MUST match audio engine: p0=room, p1=damp, p2=wet, p3=pre_delay, p4=width
         ("ROOM",      "Room",         0.0,  1.0,   0.5, "{:.0%}"),
         ("DAMP",      "Damp",         0.0,  1.0,   0.5, "{:.0%}"),
-        ("WIDTH",     "Width",        0.0,  1.0,   1.0, "{:.0%}"),
         ("WET",       "Wet",          0.0,  1.0,   0.3, "{:.0%}"),
-        ("DRY",       "Dry",          0.0,  1.0,   1.0, "{:.0%}"),
+        ("PRE_DELAY", "Pre-dly",      0.0,  1.0,   0.0, "{:.0%}"),
+        ("WIDTH",     "Width",        0.0,  1.0,   1.0, "{:.0%}"),
     ],
     "NOISE_GATE": [
         ("THRESHOLD", "Threshold",  -80.0,  0.0, -40.0, "{:.0f}dB"),
@@ -3137,6 +3138,12 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     Draw all rack units below the fader section.
     Called from Loader.py draw_callback_px after drawing faders.
     """
+    # Import rack chassis draw functions from rack_base
+    # (lazy import here so rack_base can in turn import body funcs from rack_*.py)
+    from ui.racks.rack_base import (
+        _draw_rack_expanded, _draw_rack_collapsed,
+        _draw_add_rack_button, _draw_add_popup,
+    )
     global _UI_SCALE, _SCROLL_X, _SCROLL_Y
     _UI_SCALE = ui_scale
     _SCROLL_X = scroll_x
