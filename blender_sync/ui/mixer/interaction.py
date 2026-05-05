@@ -80,6 +80,10 @@ active_knob_track  = -1
 active_knob_type   = ""
 active_rack_knob   = None   # (rack_idx, param_idx) or None
 active_ai_knob     = None   # (ai_idx, knob_idx) or None
+
+# Active text field state — when set, keyboard events type into rack.ai_text
+# Format: {'ai_idx': int, 'cursor': int}  or None
+_active_text_field = None
 active_fader_track = -1
 
 _last_click_time   = 0.0
@@ -136,6 +140,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                active_knob_track, active_knob_type, active_fader_track, \
                active_rack_knob, \
                active_ai_knob, \
+               _active_text_field, \
                is_dragging_h, is_dragging_v, \
                _last_click_time, _last_click_track
 
@@ -167,6 +172,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         widget_drag = (active_fader_track != -1 or active_knob_track != -1
                        or active_rack_knob is not None
                        or active_ai_knob is not None
+                       or _active_text_field is not None
                        or is_dragging_h or is_dragging_v)
 
         if not (is_inside or mid_drag or widget_drag):
@@ -313,6 +319,11 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
 
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
+                # Any click outside a text field closes it
+                if _active_text_field is not None:
+                    _active_text_field = None
+                    context.area.tag_redraw()
+                    # Don't return — let the click be processed normally below
                 if ry < 14:   # horizontal scrollbar hit zone (8px track + margin)
                     is_dragging_h = True; return {"RUNNING_MODAL"}
                 if rx > region.width - 14:   # vertical scrollbar hit zone
@@ -515,7 +526,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         # Inject scale and region width so popup can clamp its x
                         ai_hit['scale']    = UI_SCALE
                         ai_hit['region_w'] = region.width
-                        if ai_hit.get('zone') == 'ai_dnf_knob':
+                        if ai_hit.get('zone') in ('ai_dnf_knob', 'ai_piper_knob'):
                             active_ai_knob = (ai_hit['ai_idx'], ai_hit['knob_idx'])
                             return {"RUNNING_MODAL"}
                         if ai_handle_click(ai_hit, context):
@@ -575,6 +586,123 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
             save_ui_state()
             context.area.tag_redraw()
             return {"RUNNING_MODAL"}
+
+        # ── Text field keyboard handling ─────────────────────────────────────
+        if _active_text_field is not None and event.value == "PRESS":
+            ai_idx  = _active_text_field.get('ai_idx', -1)
+            ai_racks = getattr(context.scene, "pb_ai_racks", []) if context.scene else []
+            if ai_idx < 0 or ai_idx >= len(ai_racks):
+                _active_text_field = None
+                return {"PASS_THROUGH"}
+
+            rack     = ai_racks[ai_idx]
+            text     = getattr(rack, 'ai_text', '') or ''
+            cursor   = _active_text_field.get('cursor', len(text))
+            sel_start = _active_text_field.get('sel_start', -1)
+            sel_end   = _active_text_field.get('sel_end', -1)
+            cursor    = max(0, min(len(text), cursor))
+
+            def _has_sel():
+                return sel_start >= 0 and sel_end >= 0 and sel_start != sel_end
+
+            def _sel_range():
+                return min(sel_start, sel_end), max(sel_start, sel_end)
+
+            def _clear_sel():
+                _active_text_field['sel_start'] = -1
+                _active_text_field['sel_end']   = -1
+
+            def _delete_sel():
+                lo, hi = _sel_range()
+                return text[:lo] + text[hi:], lo
+
+            consumed = True
+
+            if event.type == "BACK_SPACE":
+                if _has_sel():
+                    text, cursor = _delete_sel(); _clear_sel()
+                elif cursor > 0:
+                    text = text[:cursor-1] + text[cursor:]
+                    cursor -= 1
+            elif event.type == "DEL":
+                if _has_sel():
+                    text, cursor = _delete_sel(); _clear_sel()
+                elif cursor < len(text):
+                    text = text[:cursor] + text[cursor+1:]
+            elif event.type == "LEFT_ARROW":
+                if event.shift:
+                    # Extend/start selection
+                    if not _has_sel():
+                        _active_text_field['sel_start'] = cursor
+                    cursor = max(0, cursor - 1)
+                    _active_text_field['sel_end'] = cursor
+                else:
+                    if _has_sel():
+                        cursor = _sel_range()[0]
+                    else:
+                        cursor = max(0, cursor - 1)
+                    _clear_sel()
+            elif event.type == "RIGHT_ARROW":
+                if event.shift:
+                    if not _has_sel():
+                        _active_text_field['sel_start'] = cursor
+                    cursor = min(len(text), cursor + 1)
+                    _active_text_field['sel_end'] = cursor
+                else:
+                    if _has_sel():
+                        cursor = _sel_range()[1]
+                    else:
+                        cursor = min(len(text), cursor + 1)
+                    _clear_sel()
+            elif event.type == "HOME":
+                if event.shift:
+                    if not _has_sel(): _active_text_field['sel_start'] = cursor
+                    cursor = 0
+                    _active_text_field['sel_end'] = cursor
+                else:
+                    cursor = 0; _clear_sel()
+            elif event.type == "END":
+                if event.shift:
+                    if not _has_sel(): _active_text_field['sel_start'] = cursor
+                    cursor = len(text)
+                    _active_text_field['sel_end'] = cursor
+                else:
+                    cursor = len(text); _clear_sel()
+            elif event.type == "A" and event.ctrl:
+                # Ctrl+A select all
+                _active_text_field['sel_start'] = 0
+                _active_text_field['sel_end']   = len(text)
+                cursor = len(text)
+            elif event.type == "RET" or event.type == "NUMPAD_ENTER":
+                if event.shift:
+                    if _has_sel():
+                        text, cursor = _delete_sel(); _clear_sel()
+                    text   = text[:cursor] + "\n" + text[cursor:]
+                    cursor += 1
+                else:
+                    _active_text_field = None
+                    rack.ai_text = text
+                    context.area.tag_redraw()
+                    return {"RUNNING_MODAL"}
+            elif event.type == "ESC":
+                _active_text_field = None
+                context.area.tag_redraw()
+                return {"RUNNING_MODAL"}
+            elif event.unicode and len(event.unicode) == 1 and not event.ctrl:
+                ch = event.unicode
+                if _has_sel():
+                    text, cursor = _delete_sel(); _clear_sel()
+                if len(text) < 4096:
+                    text   = text[:cursor] + ch + text[cursor:]
+                    cursor += 1
+            else:
+                consumed = False
+
+            if consumed:
+                rack.ai_text = text
+                _active_text_field['cursor'] = cursor
+                context.area.tag_redraw()
+                return {"RUNNING_MODAL"}
 
         return {"PASS_THROUGH"}
 

@@ -294,7 +294,32 @@ AI_PRESET_DATA = {
         ('Bypass',            [0.00, 1.00, 0.50]),   # No processing — diagnostic use
     ],
 }
+# Piper TTS presets are voice names — discovered at runtime from voices/ folder
+# These are fallback display names if the folder can't be scanned
+AI_PRESET_DATA['PIPER_TTS'] = [
+    # (name, [p0_speed_norm, p1_noise_scale, p2_noise_w])
+    ('Narration',      [0.50, 0.667, 0.80]),  # Normal pace, natural expression
+    ('Audiobook',      [0.45, 0.500, 0.70]),  # Slightly slower, consistent tone
+    ('Fast Read',      [0.75, 0.667, 0.80]),  # Quick, for subtitles/temp tracks
+    ('Slow & Clear',   [0.25, 0.500, 0.60]),  # Deliberate, great for instruction
+    ('Expressive',     [0.50, 0.900, 0.90]),  # High variation, dramatic
+    ('Monotone',       [0.50, 0.100, 0.20]),  # Robotic, low variation
+    ('Whisper',        [0.40, 0.800, 0.95]),  # Soft, breathy quality
+    ('Broadcaster',    [0.55, 0.400, 0.65]),  # Professional, even delivery
+    ('Character',      [0.50, 1.000, 1.00]),  # Max variation, for characters
+    ('Subtitle Pace',  [0.80, 0.667, 0.80]),  # Fast, matches subtitle timing
+]
 AI_PRESETS = {k: [p[0] for p in v] for k, v in AI_PRESET_DATA.items()}
+
+
+def _get_piper_voice_presets():
+    """Return list of voice display names for the preset selector."""
+    try:
+        from core.ai_piper import get_voices
+        voices = get_voices()
+        return [name for name, _, _ in voices] if voices else ["No voices found"]
+    except Exception:
+        return ["No voices found"]
 
 
 def _load_ai_preset(rack, preset_idx):
@@ -4339,6 +4364,7 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     _p_bw     = min(120*scale, _p_right - name_draw_x - _text_width(aname.upper(), fs_name) - 8*scale - _p_aw*2 - 4*scale)
 
     if _p_bw > 30*scale:
+        # For all rack types including Piper, use AI_PRESETS for rail preset selector
         ai_presets_ps = AI_PRESETS.get(atype, [])
         if ai_presets_ps:
             p_idx    = getattr(rack, 'preset_idx', 0) % max(1, len(ai_presets_ps))
@@ -4454,6 +4480,13 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
             _draw_deepfilternet_body(rx, ry, rw, rh, rack, ai_idx, scale)
         except Exception as e:
             print(f"[AI RACKS] draw error rack {ai_idx}: {e}")
+
+    elif atype == "PIPER_TTS":
+        try:
+            from ui.racks.rack_piper import _draw_piper_body
+            _draw_piper_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] Piper draw error rack {ai_idx}: {e}")
 
 
 def draw_ai_racks(rx, ry, scale, area_width=None):
@@ -4690,6 +4723,78 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
         on_y_ht  = rack_top - 27*scale
         if on_x_ht <= mouse_x <= on_x_ht+on_w_ht and on_y_ht <= mouse_y <= on_y_ht+16*scale:
             return {'zone': 'ai_on_off', 'ai_idx': ai_idx}
+
+        # Piper TTS: CLEAR button, voice cards, and knob hit testing
+        if rack.ai_type == "PIPER_TTS" and not rack.collapsed:
+            _r_h_p   = RACK_RAIL_H * scale
+            _bb_p    = rack_y
+            _bt_p    = rack_y + rack_h - _r_h_p
+            _bh_p    = _bt_p - _bb_p
+            _sb_h_p  = max(16*scale, _bh_p * 0.065)
+            _ct_h_p  = _bh_p * 0.22
+            _ct_b_p  = _bb_p + _sb_h_p + 2*scale
+            _wh_p    = _bh_p * 0.18
+            _wy_p    = _ct_b_p + _ct_h_p + 2*scale
+            _uh_p    = _bt_p - (_wy_p + _wh_p) - 4*scale
+            _uy_p    = _wy_p + _wh_p + 2*scale
+            _marg_p  = 8*scale
+            _sp_x_p  = rack_x + _marg_p
+            _sp_w_p  = (rack_x + rw * 0.52) - rack_x - _marg_p*2
+
+            # SCRIPT TEXT AREA click — activates text input
+            _ta_y_p = _uy_p + _fs_lbl_p2 + 6*scale if False else _uy_p
+            _fs_lbl_p2 = max(1, int(8*scale))
+            _ta_top_p  = _uy_p + _uh_p
+            _ta_bot_p  = _uy_p + 28*scale   # above buttons
+            if (_sp_x_p <= mouse_x <= _sp_x_p+_sp_w_p and
+                    _ta_bot_p <= mouse_y <= _ta_top_p):
+                return {'zone': 'ai_piper_text', 'ai_idx': ai_idx}
+
+            # GENERATE button
+            _gw_p = min(80*scale, _sp_w_p*0.48)
+            _gh_p = max(16*scale, 20*scale)
+            _gx_p = _sp_x_p + 4*scale
+            _gy_p = _uy_p + 4*scale
+            if _gx_p <= mouse_x <= _gx_p+_gw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
+                return {'zone': 'ai_process', 'ai_idx': ai_idx, 'ai_type': 'PIPER_TTS'}
+
+            # CLEAR button
+            _clw_p = min(45*scale, _sp_w_p*0.28)
+            _clx_p = _gx_p + _gw_p + 4*scale
+            if _clx_p <= mouse_x <= _clx_p+_clw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
+                return {'zone': 'ai_piper_clear', 'ai_idx': ai_idx}
+
+            # Voice cards
+            _spl_x_p = rack_x + rw * 0.52
+            _vp_x_p  = _spl_x_p + _marg_p*0.5
+            _vp_w_p  = rack_x + rw - _spl_x_p - _marg_p*1.5
+            _cd_h_p  = max(24*scale, _uh_p * 0.22)
+            _cg_p    = 3*scale
+            _fs_lbl_p = max(1, int(8*scale))
+            _vs_p    = _uy_p + _uh_p - _fs_lbl_p - 8*scale
+            try:
+                from core.ai_piper import get_voices as _gv_p
+                _vlist_p = _gv_p()
+            except Exception:
+                _vlist_p = []
+            for _vi in range(min(4, len(_vlist_p))):
+                _cy_c = _vs_p - _vi*(_cd_h_p+_cg_p) - _cd_h_p
+                if _cy_c < _uy_p + 2*scale: break
+                if (_vp_x_p+4*scale <= mouse_x <= _vp_x_p+_vp_w_p-4*scale and
+                        _cy_c <= mouse_y <= _cy_c+_cd_h_p):
+                    return {'zone': 'ai_piper_voice', 'ai_idx': ai_idx, 'voice_idx': _vi}
+
+            # Piper knobs
+            import math as _math_p
+            _cs_p   = rack_x + rw * 0.45
+            _kzw_p  = rack_x + rw - _cs_p - _marg_p
+            _kw_p   = _kzw_p / 3
+            _kr_p   = min(12*scale, _ct_h_p*0.38) + 8*scale
+            _ky_p   = _ct_b_p + _ct_h_p * 0.58
+            for _ki in range(3):
+                _kx_p = _cs_p + _kw_p*(_ki+0.5)
+                if _math_p.sqrt((mouse_x-_kx_p)**2+(mouse_y-_ky_p)**2) < _kr_p:
+                    return {'zone': 'ai_piper_knob', 'ai_idx': ai_idx, 'knob_idx': _ki}
 
         # PROCESS button — mirrors _draw_deepfilternet_body geometry exactly
         if rack.ai_type == "DEEPFILTERNET" and not rack.collapsed:
@@ -4950,19 +5055,68 @@ def handle_ai_rack_click(hit, context):
                     print(f"[AI RACKS] DeepFilterNet launch failed: {e}")
                     import traceback; traceback.print_exc()
                     rack.ai_status = "ERROR"
+            elif atype == "PIPER_TTS":
+                try:
+                    from core.ai_piper import generate_piper
+                    generate_piper(i, context)
+                except Exception as e:
+                    print(f"[AI RACKS] Piper launch failed: {e}")
+                    import traceback; traceback.print_exc()
+                    rack.ai_status = "ERROR"
             else:
                 print(f"[AI RACKS] {atype} processing not yet implemented")
         return True
 
-    # ai_dnf_knob drag is handled in interaction.py — consume here to prevent fallthrough
+    # ai_dnf_knob drag is handled in interaction.py — consume here
     if zone == 'ai_dnf_knob':
+        return True
+
+    # Piper text area click — activate text field
+    if zone == 'ai_piper_text':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack = ai_racks[i]
+            # Signal interaction.py to activate text field for this rack
+            try:
+                import ui.mixer.interaction as _inter
+                _inter._active_text_field = {
+                    'ai_idx': i,
+                    'cursor': len(getattr(rack, 'ai_text', '') or ''),
+                }
+                print(f"[PIPER] text field activated for rack {i}")
+            except Exception as _te:
+                print(f"[PIPER] text field activate error: {_te}")
+        return True
+
+    # Piper CLEAR button — wipe the script text
+    if zone == 'ai_piper_clear':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].ai_text   = ""
+            ai_racks[i].ai_status = "READY"
+            print(f"[PIPER] rack {i} script cleared")
+        return True
+
+    # Piper voice card click — store in p4 (separate from knob preset_idx)
+    if zone == 'ai_piper_voice':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p4 = float(hit['voice_idx'])
+            print(f"[PIPER] rack {i} voice → {hit['voice_idx']}")
+        return True
+
+    # Piper knob drag handled in interaction.py — consume here
+    if zone == 'ai_piper_knob':
         return True
 
     if zone == 'ai_preset_prev':
         ai_racks = getattr(context.scene, "pb_ai_racks", [])
         i = hit['ai_idx']
         if i < len(ai_racks):
-            rack = ai_racks[i]
+            rack    = ai_racks[i]
             presets = AI_PRESET_DATA.get(rack.ai_type, [])
             if presets:
                 new_idx = (getattr(rack, 'preset_idx', 0) - 1) % len(presets)
@@ -4974,7 +5128,7 @@ def handle_ai_rack_click(hit, context):
         ai_racks = getattr(context.scene, "pb_ai_racks", [])
         i = hit['ai_idx']
         if i < len(ai_racks):
-            rack = ai_racks[i]
+            rack    = ai_racks[i]
             presets = AI_PRESET_DATA.get(rack.ai_type, [])
             if presets:
                 new_idx = (getattr(rack, 'preset_idx', 0) + 1) % len(presets)
