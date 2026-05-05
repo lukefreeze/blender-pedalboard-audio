@@ -41,6 +41,11 @@ _reorder_rack_idx = -1      # which rack's badge was clicked
 _reorder_x        = 0.0
 _reorder_y        = 0.0
 
+# AI popup state — for the + ADD AI RACK selector
+_ai_popup_open = False
+_ai_popup_x    = 0.0
+_ai_popup_y    = 0.0
+
 # ---------------------------------------------------------------------------
 # Rack dimensions (in unscaled pixels, multiplied by UI_SCALE at draw time)
 # ---------------------------------------------------------------------------
@@ -94,6 +99,15 @@ EFFECT_TYPES = [
     ("REVERB",      "Reverb"),
     ("NOISE_GATE",  "Noise Gate"),
     ("DELAY",       "Delay"),
+]
+
+# AI rack type identifiers — separate namespace from DSP racks
+AI_RACK_TYPES = [
+    ("DEEPFILTERNET", "DeepFilterNet — AI Noise Reduction"),
+    ("WHISPER",       "Whisper — Speech to Text"),
+    ("DEMUCS",        "Demucs — Source Separation"),
+    ("PIPER_TTS",     "Piper TTS — Text to Speech"),
+    ("MATCHERING",    "Matchering — AI Mastering"),
 ]
 
 EFFECT_PARAMS = {
@@ -260,6 +274,42 @@ PRESET_DATA['DELAY'] = [
     ('Long Ambient',   [0.249, 0.60,  0.25, 0.80,  0.40]),
 ]
 
+# AI rack presets — keyed by ai_type
+# DeepFilterNet params: [p0=atten(0-1), p1=sensitiv(0-1), p2=postgain_norm(0-1)]
+# p0: 0=no attenuation, 1=max attenuation (-40dB limit)
+# p1: 0=always process, 1=only process silence gaps
+# p2: 0.5=0dB post gain, 0=−12dB, 1=+12dB
+AI_PRESET_DATA = {
+    'DEEPFILTERNET': [
+        # (name, [p0_atten, p1_sensitiv, p2_postgain_norm])
+        ('Dialogue Clean',    [0.60, 0.80, 0.50]),   # Voice recording, moderate noise removal
+        ('Heavy Denoise',     [0.90, 0.60, 0.50]),   # Heavy background noise, music/HVAC
+        ('Gentle Touch',      [0.30, 0.90, 0.50]),   # Slight hiss reduction, preserve character
+        ('Interview Audio',   [0.65, 0.75, 0.50]),   # Field interview, wind/traffic noise
+        ('Podcast Voice',     [0.55, 0.85, 0.52]),   # Studio podcast with room noise
+        ('Outdoor Recording', [0.80, 0.65, 0.50]),   # Wind, traffic, crowd reduction
+        ('Phone / Voip',      [0.75, 0.70, 0.54]),   # Codec artifacts, background chatter
+        ('Music Stems',       [0.40, 0.55, 0.50]),   # Stems with bleed — conservative
+        ('Max Denoise',       [1.00, 0.50, 0.50]),   # Aggressive — may affect voice quality
+        ('Bypass',            [0.00, 1.00, 0.50]),   # No processing — diagnostic use
+    ],
+}
+AI_PRESETS = {k: [p[0] for p in v] for k, v in AI_PRESET_DATA.items()}
+
+
+def _load_ai_preset(rack, preset_idx):
+    """Load a DeepFilterNet preset by index into rack params."""
+    atype   = rack.ai_type
+    presets = AI_PRESET_DATA.get(atype)
+    if presets and 0 <= preset_idx < len(presets):
+        _, params = presets[preset_idx]
+        for i, v in enumerate(params):
+            attr = f'p{i}'
+            if hasattr(rack, attr):
+                setattr(rack, attr, float(v))
+        rack.preset_idx = preset_idx
+
+
 # Legacy name lists for rack preset display
 PRESETS = {
     "COMP_SINGLE": [p[0] for p in PRESET_DATA["COMP_SINGLE"]],
@@ -343,6 +393,69 @@ class PB_RackSettings(bpy.types.PropertyGroup):
 
 
 # ---------------------------------------------------------------------------
+# Property group — one AI rack instance
+# ---------------------------------------------------------------------------
+class PB_AIRackSettings(bpy.types.PropertyGroup):
+    """Property group for a single AI rack instance."""
+    ai_type:   bpy.props.StringProperty(default="DEEPFILTERNET")
+    enabled:   bpy.props.BoolProperty(default=True)
+    collapsed: bpy.props.BoolProperty(default=False)
+    # Channel assignment — which channels feed into this AI rack
+    ch0:  bpy.props.BoolProperty(default=False)
+    ch1:  bpy.props.BoolProperty(default=False)
+    ch2:  bpy.props.BoolProperty(default=False)
+    ch3:  bpy.props.BoolProperty(default=False)
+    ch4:  bpy.props.BoolProperty(default=False)
+    ch5:  bpy.props.BoolProperty(default=False)
+    ch6:  bpy.props.BoolProperty(default=False)
+    ch7:  bpy.props.BoolProperty(default=False)
+    ch8:  bpy.props.BoolProperty(default=False)
+    ch9:  bpy.props.BoolProperty(default=False)
+    ch10: bpy.props.BoolProperty(default=False)
+    ch11: bpy.props.BoolProperty(default=False)
+    ch12: bpy.props.BoolProperty(default=False)
+    ch13: bpy.props.BoolProperty(default=False)
+    ch14: bpy.props.BoolProperty(default=False)
+    ch15: bpy.props.BoolProperty(default=False)
+    ch16: bpy.props.BoolProperty(default=False)
+    ch17: bpy.props.BoolProperty(default=False)
+    ch18: bpy.props.BoolProperty(default=False)
+    ch19: bpy.props.BoolProperty(default=False)
+    ch20: bpy.props.BoolProperty(default=False)
+    ch21: bpy.props.BoolProperty(default=False)
+    ch22: bpy.props.BoolProperty(default=False)
+    ch23: bpy.props.BoolProperty(default=False)
+    ch24: bpy.props.BoolProperty(default=False)
+    ch25: bpy.props.BoolProperty(default=False)
+    ch26: bpy.props.BoolProperty(default=False)
+    ch27: bpy.props.BoolProperty(default=False)
+    ch28: bpy.props.BoolProperty(default=False)
+    ch29: bpy.props.BoolProperty(default=False)
+    ch30: bpy.props.BoolProperty(default=False)
+    ch31: bpy.props.BoolProperty(default=False)
+    # Float params
+    # p0 = Attenuation limit (norm 0-1, maps -40..0 dB)
+    # p1 = Sensitivity / voice activity threshold (0-1)
+    # p2 = Post gain (norm 0-1, maps -12..+12 dB)
+    # p3-p7 reserved for Whisper/Demucs/Piper/Matchering
+    p0: bpy.props.FloatProperty(default=0.5)   # Attenuation default = -20dB
+    p1: bpy.props.FloatProperty(default=0.75)  # Sensitivity default = 0.75
+    p2: bpy.props.FloatProperty(default=0.5)   # Post gain default = 0dB
+    p3: bpy.props.FloatProperty(default=0.0)
+    p4: bpy.props.FloatProperty(default=0.0)
+    p5: bpy.props.FloatProperty(default=0.0)
+    p6: bpy.props.FloatProperty(default=0.0)
+    p7: bpy.props.FloatProperty(default=0.0)
+    # Processing state — updated by the processing thread
+    ai_status: bpy.props.StringProperty(default="READY")
+    # Text field for Piper TTS script input
+    ai_text: bpy.props.StringProperty(default="", maxlen=4096)
+    # Path to last processed output file (for reload/bypass)
+    ai_output_path: bpy.props.StringProperty(default="", subtype='FILE_PATH')
+    preset_idx:     bpy.props.IntProperty(default=0)
+
+
+# ---------------------------------------------------------------------------
 # EQ band constants and helpers — defined early so _load_preset can use them
 # p0-p4 = gain (0.5 = 0dB, range -24..+24dB)
 # p5-p9 = freq (log-normalised 0-1 over 20Hz..20kHz)
@@ -407,6 +520,11 @@ def _rp(rack, idx, default=0.0):
 
 def get_rack_channels(rack):
     """Return list of assigned channel indices (0-based) for a rack."""
+    return [i for i in range(32) if getattr(rack, f'ch{i}', False)]
+
+
+def get_ai_rack_channels(rack):
+    """Return list of assigned channel indices for an AI rack."""
     return [i for i in range(32) if getattr(rack, f'ch{i}', False)]
 
 
@@ -3218,6 +3336,13 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     _draw_add_rack_button(rack_x, cur_y - 28*ui_scale, ui_scale,
                           dynamic_rack_w)
 
+    # AI processing section — drawn below DSP racks
+    ai_section_top_y = cur_y - 28*ui_scale  # sits at top of add-rack button
+    try:
+        draw_ai_racks(rack_x, ai_section_top_y, ui_scale, dynamic_rack_w)
+    except Exception as e:
+        print(f"[AI RACKS] draw error: {e}")
+
     # Popup (drawn on top of everything)
     if _popup_open:
         _draw_add_popup(_popup_x, _popup_y, ui_scale)
@@ -3937,6 +4062,7 @@ def register_racks():
     bpy.types.Scene.pb_racks = bpy.props.CollectionProperty(
         type=PB_RackSettings)
     print("[RACKS] registered")
+    register_ai_racks()
 
 
 def unregister_racks():
@@ -3945,4 +4071,934 @@ def unregister_racks():
         del bpy.types.Scene.pb_racks
     except Exception:
         pass
+    unregister_ai_racks()
     print("[RACKS] unregistered")
+
+
+# ---------------------------------------------------------------------------
+# AI rack draw helpers
+# ---------------------------------------------------------------------------
+def _get_ai_rack_height(rack, scale):
+    """Return the pixel height of an AI rack at given scale."""
+    if rack.collapsed:
+        return RACK_COLLAPSED_H * scale
+    heights = {
+        "DEEPFILTERNET": 340,
+        "WHISPER":       280,
+        "DEMUCS":        300,
+        "PIPER_TTS":     320,
+        "MATCHERING":    280,
+    }
+    return heights.get(rack.ai_type, 300) * scale
+
+
+def _draw_ai_channel_buttons(rx, ry, rw, rh, rack, scale):
+    """Draw channel assignment buttons on the AI rack rail (right side)."""
+    try:
+        from ui.mixer.draw_utils import (
+            draw_rect  as _draw_rect,
+            draw_text  as _draw_text,
+            text_width as _text_width,
+        )
+    except ImportError:
+        from ui.racks.rack_base import _draw_rect, _draw_text, _text_width
+
+    btn_s = CH_BTN_SIZE * scale
+    gap   = 4 * scale
+    fs    = max(1, int(10 * scale))
+
+    scene   = bpy.context.scene
+    highest = 0
+    if scene and scene.sequence_editor:
+        for s in scene.sequence_editor.sequences_all:
+            if s.type == "SOUND" and s.sound:
+                highest = max(highest, s.channel - 1)
+    num_buttons = max(9, highest + 1)
+
+    ch_area_x = rx + rw - 100*scale
+    ch_area_y = ry + rh - RACK_RAIL_H*scale - 20*scale
+
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    for col_idx in range(num_buttons):
+        row = col_idx // 3
+        col = col_idx % 3
+        bx  = ch_area_x + col * (btn_s + gap)
+        by  = ch_area_y - row * (btn_s + gap) - btn_s
+        attr     = f'ch{col_idx}' if col_idx < 32 else None
+        assigned = getattr(rack, attr, False) if attr else False
+        bg = (0.0, 0.18, 0.10, 1.0) if assigned else (0.07, 0.07, 0.07, 1.0)
+        bc = (0.0, 0.75, 0.45, 1.0) if assigned else (0.2, 0.2, 0.2, 1.0)
+        _draw_rect(bx, by, btn_s, btn_s, bg)
+        verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
+        batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
+        shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
+        label = str(col_idx + 1)
+        tw    = _text_width(label, fs)
+        _draw_text(label, bx+btn_s/2-tw/2, by+btn_s/2-fs/2, fs, bc)
+
+
+def _draw_ai_rack_collapsed(rx, ry, rw, rh, rack, ai_idx, scale):
+    """Draw AI rack in collapsed single-row form."""
+    try:
+        from ui.mixer.draw_utils import (
+            draw_rect   as _draw_rect,
+            draw_text   as _draw_text,
+            text_width  as _text_width,
+            draw_circle as _draw_circle,
+            draw_line   as _draw_line,
+        )
+    except ImportError:
+        from ui.racks.rack_base import (
+            _draw_rect, _draw_text, _text_width, _draw_circle, _draw_line,
+        )
+
+    HAL_BG     = (0.05, 0.04, 0.04, 1.0)
+    HAL_BORDER = (0.20, 0.08, 0.08, 1.0)
+    HAL_TEXT   = (0.80, 0.22, 0.14, 1.0)
+
+    cy = ry + rh / 2
+    _draw_rect(rx, ry, rw, rh, HAL_BG)
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
+    batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
+    shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
+
+    for sx, sy in [(rx+12*scale, cy), (rx+rw-12*scale, cy)]:
+        _draw_circle(sx, sy, 3*scale, (0.07, 0.03, 0.03, 1.0))
+        _draw_circle(sx, sy, 3*scale, (0.25, 0.10, 0.08, 1.0), filled=False)
+        _draw_line(sx-2*scale, sy, sx+2*scale, sy, (0.25, 0.10, 0.08, 0.8))
+        _draw_line(sx, sy-2*scale, sx, sy+2*scale, (0.25, 0.10, 0.08, 0.8))
+
+    ax = rx + 26*scale
+    arrow = [(ax-5*scale, cy+5*scale), (ax-5*scale, cy-5*scale), (ax+5*scale, cy)]
+    abat = batch_for_shader(shader, "TRIS", {"pos": arrow})
+    shader.uniform_float("color", (0.50, 0.18, 0.12, 1.0)); abat.draw(shader)
+
+    ai_type_names = dict(AI_RACK_TYPES)
+    aname    = ai_type_names.get(rack.ai_type, rack.ai_type).split("—")[0].strip()
+    badge_fs = max(1, int(12*scale))
+    name_fs  = max(1, int(10*scale))
+    badge_x  = rx + 38*scale
+    _draw_text(str(ai_idx+1), badge_x, cy - badge_fs/2, badge_fs, HAL_TEXT)
+    bw = _text_width(str(ai_idx+1), badge_fs) + 5*scale
+    _draw_text(aname.upper(), badge_x+bw, cy-name_fs/2, name_fs,
+               (0.55, 0.22, 0.16, 1.0))
+
+    status = getattr(rack, 'ai_status', 'READY')
+    dot_cols = {
+        'READY':      (0.1, 0.7, 0.3, 1.0),
+        'PROCESSING': (0.9, 0.5, 0.1, 1.0),
+        'DONE':       (0.1, 0.9, 0.4, 1.0),
+        'ERROR':      (0.9, 0.1, 0.1, 1.0),
+    }
+    _draw_circle(rx + rw/2, cy, 4*scale, dot_cols.get(status, (0.3, 0.3, 0.3, 1.0)))
+
+    btn_h  = 16*scale
+    btn_y  = cy - btn_h / 2
+    del_w  = 18*scale
+    del_x  = rx + rw - 22*scale
+    _draw_rect(del_x, btn_y, del_w, btn_h, (0.18, 0.04, 0.04, 1.0))
+    dvs = [(del_x,btn_y),(del_x+del_w,btn_y),(del_x+del_w,btn_y+btn_h),
+           (del_x,btn_y+btn_h),(del_x,btn_y)]
+    db2 = batch_for_shader(shader, "LINE_STRIP", {"pos": dvs})
+    shader.bind(); shader.uniform_float("color", (0.6, 0.1, 0.1, 1.0)); db2.draw(shader)
+    fs_x = max(1, int(9*scale))
+    tw_x = _text_width("X", fs_x)
+    _draw_text("X", del_x+del_w/2-tw_x/2, btn_y+btn_h/2-fs_x/2+1,
+               fs_x, (0.8, 0.15, 0.15, 1.0))
+
+    onoff_w = 40*scale
+    onoff_x = del_x - onoff_w - 4*scale
+    if rack.enabled:
+        _draw_rect(onoff_x, btn_y, onoff_w, btn_h, (0.0, 0.12, 0.0, 1.0))
+        oc = (0.0, 0.65, 0.3, 1.0); ot = "ON"
+    else:
+        _draw_rect(onoff_x, btn_y, onoff_w, btn_h, (0.12, 0.0, 0.0, 1.0))
+        oc = (0.65, 0.0, 0.0, 1.0); ot = "OFF"
+    ovs = [(onoff_x,btn_y),(onoff_x+onoff_w,btn_y),
+           (onoff_x+onoff_w,btn_y+btn_h),(onoff_x,btn_y+btn_h),(onoff_x,btn_y)]
+    obat = batch_for_shader(shader, "LINE_STRIP", {"pos": ovs})
+    shader.bind(); shader.uniform_float("color", oc); obat.draw(shader)
+    fs_oo = max(1, int(9*scale))
+    tw_oo = _text_width(ot, fs_oo)
+    _draw_text(ot, onoff_x+onoff_w/2-tw_oo/2, btn_y+btn_h/2-fs_oo/2+1, fs_oo, oc)
+
+    assigned = get_ai_rack_channels(rack)
+    ch_size  = CH_BTN_SIZE * scale
+    ch_gap   = 4 * scale
+    fs_b     = max(1, int(10*scale))
+    ch_right = onoff_x - 6*scale
+    for i, ch_idx in enumerate(sorted(assigned)):
+        bx   = ch_right - (i+1) * (ch_size+ch_gap)
+        ch_y = cy - ch_size/2
+        is_on = getattr(rack, f'ch{ch_idx}', False)
+        bg = (0.0, 0.18, 0.10, 1.0) if is_on else (0.07, 0.07, 0.07, 1.0)
+        bc = (0.0, 0.75, 0.45, 1.0) if is_on else (0.2, 0.2, 0.2, 1.0)
+        _draw_rect(bx, ch_y, ch_size, ch_size, bg)
+        csv = [(bx,ch_y),(bx+ch_size,ch_y),(bx+ch_size,ch_y+ch_size),
+               (bx,ch_y+ch_size),(bx,ch_y)]
+        cbat = batch_for_shader(shader, "LINE_STRIP", {"pos": csv})
+        shader.bind(); shader.uniform_float("color", bc); cbat.draw(shader)
+        tw = _text_width(str(ch_idx+1), fs_b)
+        _draw_text(str(ch_idx+1), bx+ch_size/2-tw/2, ch_y+ch_size/2-fs_b/2, fs_b, bc)
+
+
+def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
+    """Draw a fully expanded AI rack — chassis, rail, body dispatch."""
+    try:
+        from ui.mixer.draw_utils import (
+            draw_rect   as _draw_rect,
+            draw_text   as _draw_text,
+            text_width  as _text_width,
+            draw_circle as _draw_circle,
+            draw_line   as _draw_line,
+        )
+    except ImportError:
+        from ui.racks.rack_base import (
+            _draw_rect, _draw_text, _text_width, _draw_circle, _draw_line,
+        )
+
+    HAL_BG     = (0.05, 0.04, 0.04, 1.0)
+    HAL_RAIL   = (0.09, 0.07, 0.07, 1.0)
+    HAL_BORDER = (0.20, 0.08, 0.08, 1.0)
+    HAL_TEXT   = (0.80, 0.22, 0.14, 1.0)
+
+    _draw_rect(rx, ry, rw, rh, HAL_BG)
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
+    batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
+    shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
+
+    for sx, sy in [(rx+14*scale, ry+rh-16*scale), (rx+rw-14*scale, ry+rh-16*scale),
+                   (rx+14*scale, ry+14*scale),     (rx+rw-14*scale, ry+14*scale)]:
+        _draw_circle(sx, sy, 4*scale, (0.07, 0.03, 0.03, 1.0))
+        _draw_circle(sx, sy, 4*scale, (0.25, 0.10, 0.08, 1.0), filled=False)
+        _draw_line(sx-3*scale, sy, sx+3*scale, sy, (0.25, 0.10, 0.08, 0.8))
+        _draw_line(sx, sy-3*scale, sx, sy+3*scale, (0.25, 0.10, 0.08, 0.8))
+
+    rail_h = RACK_RAIL_H * scale
+    _draw_rect(rx, ry+rh-rail_h, rw, rail_h, HAL_RAIL)
+    _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.06, 0.04, 0.04, 1.0))
+
+    col_x = rx + 4*scale
+    col_y = ry + rh - 28*scale
+    col_w = 24*scale
+    col_h = 20*scale
+    _draw_rect(col_x, col_y, col_w, col_h, (0.08, 0.05, 0.05, 1.0))
+    cbv = [(col_x,col_y),(col_x+col_w,col_y),(col_x+col_w,col_y+col_h),
+           (col_x,col_y+col_h),(col_x,col_y)]
+    cb = batch_for_shader(shader, "LINE_STRIP", {"pos": cbv})
+    shader.bind(); shader.uniform_float("color", (0.30, 0.12, 0.08, 1.0)); cb.draw(shader)
+    ax = col_x + col_w * 0.5
+    ay = col_y + col_h * 0.5
+    arrow = [(ax-5*scale, ay-3*scale), (ax+5*scale, ay-3*scale), (ax, ay+5*scale)]
+    ab = batch_for_shader(shader, "TRIS", {"pos": arrow})
+    shader.uniform_float("color", (0.65, 0.25, 0.18, 1.0)); ab.draw(shader)
+
+    ai_type_names = dict(AI_RACK_TYPES)
+    atype     = rack.ai_type
+    aname     = ai_type_names.get(atype, atype).split("—")[0].strip()
+    badge_x   = col_x + col_w + 4*scale
+    badge_y   = ry + rh - 28*scale
+    badge_fs  = max(1, int(13 * scale))
+    badge_lbl = str(ai_idx + 1)
+    badge_w   = max(22*scale, _text_width(badge_lbl, badge_fs) + 12*scale)
+    badge_h   = 20*scale
+    _draw_rect(badge_x, badge_y, badge_w, badge_h, (0.15, 0.05, 0.03, 1.0))
+    bverts = [(badge_x,badge_y),(badge_x+badge_w,badge_y),
+              (badge_x+badge_w,badge_y+badge_h),(badge_x,badge_y+badge_h),(badge_x,badge_y)]
+    bbat = batch_for_shader(shader, "LINE_STRIP", {"pos": bverts})
+    shader.bind(); shader.uniform_float("color", (0.65, 0.22, 0.14, 0.7)); bbat.draw(shader)
+    tw_b = _text_width(badge_lbl, badge_fs)
+    _draw_text(badge_lbl, badge_x+badge_w/2-tw_b/2,
+               badge_y+badge_h/2-badge_fs/2, badge_fs, HAL_TEXT)
+    fs_name = max(1, int(11 * scale))
+    name_draw_x = badge_x + badge_w + 6*scale
+    _draw_text(aname.upper(), name_draw_x,
+               ry+rh-22*scale, fs_name, (0.75, 0.30, 0.20, 1.0))
+
+    # ── PRESET SELECTOR — in rail after name ──────────────────────────────
+    # Geometry shared with hit test — single calculation
+    _del_x_r  = rx + rw - 26*scale
+    _on_x_r   = _del_x_r - 40*scale - 4*scale
+    _ch_s_r   = 18*scale
+    _ch_g_r   = 3*scale
+    _avail_r  = _on_x_r - (name_draw_x + _text_width(aname.upper(), fs_name) + 8*scale) - 6*scale
+    _mfit_r   = max(1, int(_avail_r / (_ch_s_r + _ch_g_r)))
+    _scene_r  = bpy.context.scene
+    _high_r   = 0
+    if _scene_r and _scene_r.sequence_editor:
+        for _sr in _scene_r.sequence_editor.sequences_all:
+            if _sr.type == "SOUND" and _sr.sound:
+                _high_r = max(_high_r, _sr.channel - 1)
+    _nch_r    = min(max(9, _high_r + 1), _mfit_r)
+    _chtot_r  = _nch_r * _ch_s_r + (_nch_r - 1) * _ch_g_r
+    _chstart_r = name_draw_x + _text_width(aname.upper(), fs_name) + 8*scale + (_avail_r - _chtot_r) / 2
+    _p_right  = _chstart_r - 6*scale
+    _p_aw     = 14*scale
+    _p_bw     = min(120*scale, _p_right - name_draw_x - _text_width(aname.upper(), fs_name) - 8*scale - _p_aw*2 - 4*scale)
+
+    if _p_bw > 30*scale:
+        ai_presets_ps = AI_PRESETS.get(atype, [])
+        if ai_presets_ps:
+            p_idx    = getattr(rack, 'preset_idx', 0) % max(1, len(ai_presets_ps))
+            p_name   = ai_presets_ps[p_idx]
+            p_box_x  = _p_right - _p_bw - _p_aw - 2*scale
+            p_box_y  = ry + rh - 27*scale
+            p_box_h  = 16*scale
+
+            lax = p_box_x - _p_aw + 2*scale
+            lay = p_box_y + p_box_h / 2
+            la  = [(lax, lay), (lax+10*scale, lay+5*scale), (lax+10*scale, lay-5*scale)]
+            la_b = batch_for_shader(shader, "TRIS", {"pos": la})
+            shader.bind(); shader.uniform_float("color", (0.45, 0.18, 0.10, 1.0)); la_b.draw(shader)
+
+            _draw_rect(p_box_x, p_box_y, _p_bw, p_box_h, (0.09, 0.05, 0.04, 1.0))
+            pv = [(p_box_x,p_box_y),(p_box_x+_p_bw,p_box_y),
+                  (p_box_x+_p_bw,p_box_y+p_box_h),(p_box_x,p_box_y+p_box_h),(p_box_x,p_box_y)]
+            pb = batch_for_shader(shader, "LINE_STRIP", {"pos": pv})
+            shader.bind(); shader.uniform_float("color", (0.30, 0.12, 0.08, 0.8)); pb.draw(shader)
+            fs_pn = max(1, int(8*scale))
+            tw_pn = _text_width(p_name, fs_pn)
+            _draw_text(p_name, p_box_x + _p_bw/2 - tw_pn/2,
+                       p_box_y + p_box_h/2 - fs_pn/2 + 1, fs_pn, (0.70, 0.28, 0.16, 1.0))
+
+            rax = p_box_x + _p_bw + 2*scale
+            ray = p_box_y + p_box_h / 2
+            ra  = [(rax+10*scale, ray), (rax, ray+5*scale), (rax, ray-5*scale)]
+            ra_b = batch_for_shader(shader, "TRIS", {"pos": ra})
+            shader.bind(); shader.uniform_float("color", (0.45, 0.18, 0.10, 1.0)); ra_b.draw(shader)
+
+    # ── DELETE button (rightmost) ─────────────────────────────────────────
+    del_w = 18*scale
+    del_h = 16*scale
+    del_x = rx + rw - 26*scale
+    del_y = ry + rh - 27*scale
+    _draw_rect(del_x, del_y, del_w, del_h, (0.18, 0.04, 0.04, 1.0))
+    dvs = [(del_x,del_y),(del_x+del_w,del_y),(del_x+del_w,del_y+del_h),
+           (del_x,del_y+del_h),(del_x,del_y)]
+    dbat = batch_for_shader(shader, "LINE_STRIP", {"pos": dvs})
+    shader.bind(); shader.uniform_float("color", (0.6, 0.1, 0.1, 1.0)); dbat.draw(shader)
+    fs_del = max(1, int(9*scale))
+    tw_del = _text_width("X", fs_del)
+    _draw_text("X", del_x+del_w/2-tw_del/2, del_y+del_h/2-fs_del/2+1,
+               fs_del, (0.8, 0.15, 0.15, 1.0))
+
+    # ── ON/OFF button (left of delete) ────────────────────────────────────
+    on_w = 40*scale
+    on_h = 16*scale
+    on_x = del_x - on_w - 4*scale
+    on_y = ry + rh - 27*scale
+    if rack.enabled:
+        _draw_rect(on_x, on_y, on_w, on_h, (0.0, 0.12, 0.0, 1.0))
+        on_col = (0.0, 0.65, 0.3, 1.0); on_txt = "ON"
+    else:
+        _draw_rect(on_x, on_y, on_w, on_h, (0.12, 0.0, 0.0, 1.0))
+        on_col = (0.65, 0.0, 0.0, 1.0); on_txt = "OFF"
+    ovs = [(on_x,on_y),(on_x+on_w,on_y),(on_x+on_w,on_y+on_h),(on_x,on_y+on_h),(on_x,on_y)]
+    obat = batch_for_shader(shader, "LINE_STRIP", {"pos": ovs})
+    shader.bind(); shader.uniform_float("color", on_col); obat.draw(shader)
+    fs_on = max(1, int(9*scale))
+    tw_on = _text_width(on_txt, fs_on)
+    _draw_text(on_txt, on_x+on_w/2-tw_on/2, on_y+on_h/2-fs_on/2+1, fs_on, on_col)
+
+    # ── CHANNEL BUTTONS — in the rail, between name and ON/OFF ────────────
+    ch_btn_s   = 18*scale
+    ch_btn_gap = 3*scale
+    ch_btn_h   = 16*scale
+    ch_btn_y   = ry + rh - 27*scale
+
+    # Discover how many channels exist in the VSE
+    scene_ch   = bpy.context.scene
+    highest_ch = 0
+    if scene_ch and scene_ch.sequence_editor:
+        for _s in scene_ch.sequence_editor.sequences_all:
+            if _s.type == "SOUND" and _s.sound:
+                highest_ch = max(highest_ch, _s.channel - 1)
+    num_ch = max(9, highest_ch + 1)
+
+    # Available space: from right edge of name to left edge of ON/OFF
+    name_right  = badge_x + badge_w + 6*scale + _text_width(aname.upper(), fs_name) + 8*scale
+    avail_w     = on_x - name_right - 6*scale
+    max_fit     = max(1, int(avail_w / (ch_btn_s + ch_btn_gap)))
+    num_ch      = min(num_ch, max_fit)
+
+    # "CHANNELS" micro-label above the row
+    fs_chl  = max(1, int(7 * scale))
+    ch_total_w = num_ch * ch_btn_s + (num_ch - 1) * ch_btn_gap
+    ch_start_x = name_right + (avail_w - ch_total_w) / 2   # centre in gap
+
+    _draw_text("CHANNELS", ch_start_x,
+               ch_btn_y + ch_btn_h + 1*scale, fs_chl, (0.38, 0.12, 0.06, 1.0))
+
+    for ci in range(num_ch):
+        bx = ch_start_x + ci * (ch_btn_s + ch_btn_gap)
+        by = ch_btn_y
+        assigned_ch = getattr(rack, f'ch{ci}', False)
+        bg = (0.0, 0.18, 0.10, 1.0) if assigned_ch else (0.10, 0.05, 0.04, 1.0)
+        bc = (0.0, 0.75, 0.45, 1.0) if assigned_ch else (0.35, 0.12, 0.08, 1.0)
+        _draw_rect(bx, by, ch_btn_s, ch_btn_h, bg)
+        cverts = [(bx,by),(bx+ch_btn_s,by),(bx+ch_btn_s,by+ch_btn_h),
+                  (bx,by+ch_btn_h),(bx,by)]
+        cbat = batch_for_shader(shader, "LINE_STRIP", {"pos": cverts})
+        shader.bind(); shader.uniform_float("color", bc); cbat.draw(shader)
+        fs_ci = max(1, int(8*scale))
+        lbl_c = str(ci + 1)
+        tw_c  = _text_width(lbl_c, fs_ci)
+        _draw_text(lbl_c, bx + ch_btn_s/2 - tw_c/2,
+                   by + ch_btn_h/2 - fs_ci/2, fs_ci, bc)
+
+    if atype == "DEEPFILTERNET":
+        try:
+            from ui.racks.rack_deepfilternet import _draw_deepfilternet_body
+            _draw_deepfilternet_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] draw error rack {ai_idx}: {e}")
+
+
+def draw_ai_racks(rx, ry, scale, area_width=None):
+    """Draw the AI processing section — divider + all AI racks + add button.
+
+    rx, ry: position where the AI section starts (top edge of divider).
+    Returns total height consumed so caller can advance the layout cursor.
+    """
+    global _ai_popup_open, _ai_popup_x, _ai_popup_y
+
+    try:
+        from ui.mixer.draw_utils import (
+            draw_rect   as _draw_rect,
+            draw_text   as _draw_text,
+            text_width  as _text_width,
+            draw_circle as _draw_circle,
+        )
+    except ImportError:
+        from ui.racks.rack_base import (
+            _draw_rect, _draw_text, _text_width, _draw_circle,
+        )
+
+    rw = (area_width if area_width is not None else RACK_WIDTH) * scale
+
+    div_h = 28 * scale
+    _draw_rect(rx, ry - div_h, rw, div_h, (0.06, 0.04, 0.04, 1.0))
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    div_verts = [(rx, ry-div_h), (rx+rw, ry-div_h),
+                 (rx+rw, ry), (rx, ry), (rx, ry-div_h)]
+    div_batch = batch_for_shader(shader, "LINE_STRIP", {"pos": div_verts})
+    shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0))
+    div_batch.draw(shader)
+
+    fs_sec = max(1, int(9 * scale))
+    lbl    = "AI PROCESSING"
+    tw_lbl = _text_width(lbl, fs_sec)
+    _draw_text(lbl, rx + 12*scale, ry - div_h + div_h/2 - fs_sec/2,
+               fs_sec, (0.70, 0.18, 0.10, 1.0))
+
+    eye_dot_x = rx + 12*scale + tw_lbl + 14*scale
+    eye_dot_y = ry - div_h/2
+    _draw_circle(eye_dot_x, eye_dot_y, 4*scale, (0.75, 0.12, 0.07, 1.0))
+    _draw_circle(eye_dot_x, eye_dot_y, 2*scale, (1.0,  0.3,  0.15, 1.0))
+
+    y_cursor = ry - div_h
+    total_h  = div_h
+
+    scene = bpy.context.scene
+    if not scene:
+        return total_h
+
+    ai_racks = getattr(scene, "pb_ai_racks", [])
+
+    for ai_idx, rack in enumerate(ai_racks):
+        rack_h = _get_ai_rack_height(rack, scale)
+        rack_y = y_cursor - rack_h
+        try:
+            if rack.collapsed:
+                _draw_ai_rack_collapsed(rx, rack_y, rw, rack_h, rack, ai_idx, scale)
+            else:
+                _draw_ai_rack_expanded(rx, rack_y, rw, rack_h, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] draw error rack {ai_idx}: {e}")
+
+        y_cursor -= rack_h + RACK_GAP * scale
+        total_h  += rack_h + RACK_GAP * scale
+
+    add_h = 28 * scale
+    add_y = y_cursor - add_h
+    _draw_rect(rx, add_y, rw, add_h, (0.06, 0.04, 0.04, 1.0))
+    av = [(rx,add_y),(rx+rw,add_y),(rx+rw,add_y+add_h),(rx,add_y+add_h),(rx,add_y)]
+    ab = batch_for_shader(shader, "LINE_STRIP", {"pos": av})
+    shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0)); ab.draw(shader)
+    fs_add = max(1, int(9 * scale))
+    add_lbl = "+  ADD AI RACK"
+    tw_add  = _text_width(add_lbl, fs_add)
+    _draw_text(add_lbl, rx + rw/2 - tw_add/2,
+               add_y + add_h/2 - fs_add/2, fs_add, (0.50, 0.14, 0.08, 1.0))
+    total_h += add_h
+
+    # Popup draws downward from the bottom of the add button
+    if _ai_popup_open:
+        _draw_ai_add_popup(_ai_popup_x, add_y, scale)
+
+    return total_h
+
+
+def _draw_ai_add_popup(px, py, scale):
+    """Draw the AI type selector popup.
+
+    px, py = left edge, bottom of the add button.
+    Popup draws DOWNWARD from py (same convention as DSP popup).
+    py is the TOP of the popup (highest y), items stack downward.
+    """
+    try:
+        from ui.mixer.draw_utils import (
+            draw_rect  as _draw_rect,
+            draw_text  as _draw_text,
+            text_width as _text_width,
+        )
+    except ImportError:
+        from ui.racks.rack_base import _draw_rect, _draw_text, _text_width
+
+    popup_w = 260 * scale
+    title_h = 24 * scale
+    # Total popup height: title + one row per type + small padding
+    item_h  = 28 * scale
+    popup_h = title_h + len(AI_RACK_TYPES) * item_h + 6 * scale
+
+    # Draw downward: popup top = py, bottom = py - popup_h
+    popup_top = py
+    popup_bot = py - popup_h
+
+    # Shadow
+    _draw_rect(px + 3*scale, popup_bot - 3*scale, popup_w, popup_h,
+               (0.0, 0.0, 0.0, 0.5))
+    # Background
+    _draw_rect(px, popup_bot, popup_w, popup_h, (0.10, 0.06, 0.05, 1.0))
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    verts = [(px, popup_bot), (px+popup_w, popup_bot),
+             (px+popup_w, popup_top), (px, popup_top), (px, popup_bot)]
+    batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
+    shader.bind(); shader.uniform_float("color", (0.30, 0.12, 0.08, 1.0))
+    batch.draw(shader)
+
+    # Title bar at the top of the popup
+    _draw_rect(px, popup_top - title_h, popup_w, title_h, (0.14, 0.08, 0.06, 1.0))
+    fs_t = max(1, int(9*scale))
+    _draw_text("SELECT AI RACK TYPE", px + 8*scale,
+               popup_top - title_h + title_h/2 - fs_t/2,
+               fs_t, (0.70, 0.25, 0.16, 1.0))
+
+    # Items drawn downward from just below the title bar
+    fs_b = max(1, int(10*scale))
+    for i, (atype, aname) in enumerate(AI_RACK_TYPES):
+        # Item top = popup_top - title_h - i*item_h - padding
+        item_top = popup_top - title_h - i * item_h - 3*scale
+        item_bot = item_top - item_h + 4*scale
+        bh = item_h - 4*scale
+        bg = (0.12, 0.07, 0.05, 1.0) if i % 2 == 0 else (0.09, 0.05, 0.04, 1.0)
+        _draw_rect(px + 2*scale, item_bot, popup_w - 4*scale, bh, bg)
+        _draw_text(aname, px + 12*scale, item_bot + bh/2 - fs_b/2,
+                   fs_b, (0.75, 0.30, 0.20, 1.0))
+
+
+# ---------------------------------------------------------------------------
+# AI rack hit test and click handler
+# ---------------------------------------------------------------------------
+def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
+                      area_width=None):
+    """Return a hit dict for AI section clicks, or None if no hit.
+
+    ai_section_top_y: y at the BOTTOM of the DSP add-rack button = top of AI divider.
+    rack_x: left edge of rack area.
+
+    Layout from top downward:
+      [ai_section_top_y]
+      [  AI divider bar  28px ]
+      [  AI racks (if any)    ]
+      [  ADD AI RACK button 28px ]
+    """
+    rw    = (area_width if area_width is not None else RACK_WIDTH) * scale
+    div_h = 28 * scale
+    add_h = 28 * scale
+
+    # y_cur starts just below the divider bar
+    y_cur = ai_section_top_y - div_h
+
+    scene = bpy.context.scene
+    if not scene:
+        return None
+    ai_racks = getattr(scene, "pb_ai_racks", [])
+
+    # Walk down past AI racks to find add_y (matches draw_ai_racks exactly)
+    y_walk = y_cur
+    for rack in ai_racks:
+        rh = _get_ai_rack_height(rack, scale)
+        y_walk -= rh + RACK_GAP * scale
+    add_y = y_walk - add_h   # bottom-left of the ADD AI RACK button
+
+    # Check AI popup first — it draws downward from add_y
+    if _ai_popup_open:
+        popup_w = 260 * scale
+        title_h = 24 * scale
+        item_h  = 28 * scale
+        popup_h = title_h + len(AI_RACK_TYPES) * item_h + 6 * scale
+        popup_top = add_y        # popup top = add button bottom
+        popup_bot = add_y - popup_h
+        if (_ai_popup_x <= mouse_x <= _ai_popup_x + popup_w and
+                popup_bot <= mouse_y <= popup_top):
+            for i, (atype, _) in enumerate(AI_RACK_TYPES):
+                item_top = popup_top - title_h - i * item_h - 3*scale
+                item_bot = item_top - item_h + 4*scale
+                if item_bot <= mouse_y <= item_top:
+                    return {'zone': 'ai_add_type', 'ai_type': atype}
+            return {'zone': 'ai_popup_dismiss'}
+        return {'zone': 'ai_popup_dismiss'}
+
+    # Check ADD AI RACK button
+    if rack_x <= mouse_x <= rack_x + rw and add_y <= mouse_y <= add_y + add_h:
+        return {'zone': 'ai_add_click', 'bx': mouse_x, 'by': mouse_y}
+
+    # Check AI section divider bar
+    div_y = ai_section_top_y - div_h
+    if rack_x <= mouse_x <= rack_x + rw and div_y <= mouse_y <= div_y + div_h:
+        return {'zone': 'ai_divider'}
+
+    # Check individual AI racks
+    for ai_idx, rack in enumerate(ai_racks):
+        rack_h   = _get_ai_rack_height(rack, scale)
+        rack_y   = y_cur - rack_h
+        rack_top = rack_y + rack_h
+
+        if not (rack_x <= mouse_x <= rack_x + rw and rack_y <= mouse_y <= rack_top):
+            y_cur -= rack_h + RACK_GAP * scale
+            continue
+
+        # Collapse button
+        col_x = rack_x + 4*scale
+        col_y = rack_top - 28*scale
+        if col_x <= mouse_x <= col_x+24*scale and col_y <= mouse_y <= col_y+20*scale:
+            return {'zone': 'ai_collapse', 'ai_idx': ai_idx}
+
+        # Delete button
+        del_x = rack_x + rw - 26*scale
+        del_y = rack_top - 27*scale
+        if del_x <= mouse_x <= del_x+18*scale and del_y <= mouse_y <= del_y+16*scale:
+            return {'zone': 'ai_delete', 'ai_idx': ai_idx}
+
+        # ON/OFF button — mirrors draw: on_x = del_x - on_w - 4*scale
+        on_w_ht  = 40*scale
+        del_x_on = rack_x + rw - 26*scale
+        on_x_ht  = del_x_on - on_w_ht - 4*scale
+        on_y_ht  = rack_top - 27*scale
+        if on_x_ht <= mouse_x <= on_x_ht+on_w_ht and on_y_ht <= mouse_y <= on_y_ht+16*scale:
+            return {'zone': 'ai_on_off', 'ai_idx': ai_idx}
+
+        # PROCESS button — mirrors _draw_deepfilternet_body geometry exactly
+        if rack.ai_type == "DEEPFILTERNET" and not rack.collapsed:
+            rail_ht_p  = RACK_RAIL_H * scale
+            body_bot_p = rack_y
+            body_top_p = rack_y + rack_h - rail_ht_p
+            body_h_p   = body_top_p - body_bot_p
+            sbar_h_p   = max(18*scale, body_h_p * 0.07)
+            lower_bot_p = body_bot_p + sbar_h_p + 2*scale
+            lower_h_p   = body_h_p * 0.30
+            centre_w_p  = rw * 0.26
+            margin_p    = 8*scale
+            side_w_p    = (rw - centre_w_p - margin_p * 4) * 0.5
+            centre_x_p  = rack_x + margin_p + side_w_p + margin_p
+            p_w  = centre_w_p * 0.76
+            p_h  = min(lower_h_p * 0.52, 24*scale)
+            p_x  = centre_x_p + (centre_w_p - p_w) * 0.5
+            p_y  = lower_bot_p + (lower_h_p - p_h) * 0.5
+            if p_x <= mouse_x <= p_x+p_w and p_y <= mouse_y <= p_y+p_h:
+                return {'zone': 'ai_process', 'ai_idx': ai_idx,
+                        'ai_type': rack.ai_type}
+
+            # DeepFilterNet knob hit testing — mirrors _draw_deepfilternet_body
+            import math as _math_ht
+            wave_h_p    = body_top_p - (lower_bot_p + lower_h_p) - 4*scale
+            wave_y_p    = lower_bot_p + lower_h_p + 2*scale
+            knob_y_p    = lower_bot_p + lower_h_p * 0.55
+            knob_r_p    = min(13*scale, lower_h_p * 0.36) + 10*scale  # hit tolerance
+            kw_p        = side_w_p / 3
+            wave_in_x_p = rack_x + margin_p
+            for ki in range(3):
+                kx_p = wave_in_x_p + kw_p * (ki + 0.5)
+                dist = _math_ht.sqrt((mouse_x - kx_p)**2 + (mouse_y - knob_y_p)**2)
+                if dist < knob_r_p:
+                    return {'zone': 'ai_dnf_knob', 'ai_idx': ai_idx, 'knob_idx': ki}
+
+        # Preset arrows — exact same geometry as draw code
+        try:
+            from ui.mixer.draw_utils import text_width as _tw_ps
+        except ImportError:
+            def _tw_ps(t, s): return len(t) * s * 0.6
+        ai_type_names_ht = dict(AI_RACK_TYPES)
+        aname_ht     = ai_type_names_ht.get(rack.ai_type, rack.ai_type).split("—")[0].strip()
+        fs_name_ht   = max(1, int(11*scale))
+        col_x_ht     = rack_x + 4*scale
+        col_w_ht     = 24*scale
+        badge_x_ht   = col_x_ht + col_w_ht + 4*scale
+        fs_badge_ht  = max(1, int(13*scale))
+        badge_w_ht   = max(22*scale, _tw_ps(str(ai_idx+1), fs_badge_ht) + 12*scale)
+        name_dx_ht   = badge_x_ht + badge_w_ht + 6*scale
+        name_w_ht    = _tw_ps(aname_ht.upper(), fs_name_ht)
+
+        _del_x_ht  = rack_x + rw - 26*scale
+        _on_x_ht   = _del_x_ht - 40*scale - 4*scale
+        _ch_s_ht   = 18*scale
+        _ch_g_ht   = 3*scale
+        _avail_ht  = _on_x_ht - (name_dx_ht + name_w_ht + 8*scale) - 6*scale
+        _mfit_ht   = max(1, int(_avail_ht / (_ch_s_ht + _ch_g_ht)))
+        _scene_ht2 = bpy.context.scene
+        _high_ht   = 0
+        if _scene_ht2 and _scene_ht2.sequence_editor:
+            for _sh in _scene_ht2.sequence_editor.sequences_all:
+                if _sh.type == "SOUND" and _sh.sound:
+                    _high_ht = max(_high_ht, _sh.channel - 1)
+        _nch_ht    = min(max(9, _high_ht + 1), _mfit_ht)
+        _chtot_ht  = _nch_ht * _ch_s_ht + (_nch_ht - 1) * _ch_g_ht
+        _chst_ht   = name_dx_ht + name_w_ht + 8*scale + (_avail_ht - _chtot_ht) / 2
+        _p_right_ht = _chst_ht - 6*scale
+        _p_aw_ht    = 14*scale
+        _p_bw_ht    = min(120*scale, _p_right_ht - name_dx_ht - name_w_ht - 8*scale - _p_aw_ht*2 - 4*scale)
+
+        ai_presets_ht = AI_PRESETS.get(rack.ai_type, [])
+        if ai_presets_ht and _p_bw_ht > 30*scale:
+            p_box_x_ht = _p_right_ht - _p_bw_ht - _p_aw_ht - 2*scale
+            p_box_y_ht = rack_top - 27*scale
+            p_box_h_ht = 16*scale
+            lax_ht = p_box_x_ht - _p_aw_ht + 2*scale
+            if lax_ht <= mouse_x <= lax_ht+10*scale and p_box_y_ht <= mouse_y <= p_box_y_ht+p_box_h_ht:
+                return {'zone': 'ai_preset_prev', 'ai_idx': ai_idx}
+            rax_ht = p_box_x_ht + _p_bw_ht + 2*scale
+            if rax_ht <= mouse_x <= rax_ht+10*scale and p_box_y_ht <= mouse_y <= p_box_y_ht+p_box_h_ht:
+                return {'zone': 'ai_preset_next', 'ai_idx': ai_idx}
+
+        # Channel buttons — in the rail, mirrors _draw_ai_rack_expanded geometry
+        del_x_ht    = rack_x + rw - 26*scale
+        on_x_ht     = del_x_ht - 40*scale - 4*scale
+        ch_btn_s    = 18*scale
+        ch_btn_gap  = 3*scale
+        ch_btn_h    = 16*scale
+        ch_btn_y_ht = rack_top - 27*scale
+
+        scene_ht   = bpy.context.scene
+        highest_ht = 0
+        if scene_ht and scene_ht.sequence_editor:
+            for _s in scene_ht.sequence_editor.sequences_all:
+                if _s.type == "SOUND" and _s.sound:
+                    highest_ht = max(highest_ht, _s.channel - 1)
+        num_ch_ht = max(9, highest_ht + 1)
+
+        # Reproduce ch_start_x from draw code
+        col_x_ht    = rack_x + 4*scale
+        col_w_ht    = 24*scale
+        badge_x_ht  = col_x_ht + col_w_ht + 4*scale
+        fs_badge_ht = max(1, int(13*scale))
+        fs_name_ht  = max(1, int(11*scale))
+        ai_type_names_ht = dict(AI_RACK_TYPES)
+        aname_ht    = ai_type_names_ht.get(rack.ai_type, rack.ai_type).split("—")[0].strip()
+        try:
+            from ui.mixer.draw_utils import text_width as _tw_ht
+        except ImportError:
+            def _tw_ht(t, s): return len(t) * s * 0.6
+        badge_w_ht    = max(22*scale, _tw_ht(str(ai_idx+1), fs_badge_ht) + 12*scale)
+        name_right_ht = (badge_x_ht + badge_w_ht + 6*scale
+                         + _tw_ht(aname_ht.upper(), fs_name_ht) + 8*scale)
+        avail_w_ht    = on_x_ht - name_right_ht - 6*scale
+        max_fit_ht    = max(1, int(avail_w_ht / (ch_btn_s + ch_btn_gap)))
+        num_ch_ht     = min(num_ch_ht, max_fit_ht)
+        ch_total_w_ht = num_ch_ht * ch_btn_s + (num_ch_ht - 1) * ch_btn_gap
+        ch_start_x_ht = name_right_ht + (avail_w_ht - ch_total_w_ht) / 2
+
+        for ci in range(num_ch_ht):
+            bx = ch_start_x_ht + ci * (ch_btn_s + ch_btn_gap)
+            by = ch_btn_y_ht
+            if bx <= mouse_x <= bx + ch_btn_s and by <= mouse_y <= by + ch_btn_h:
+                return {'zone': 'ai_channel_btn', 'ai_idx': ai_idx, 'ch_idx': ci}
+
+        return {'zone': 'ai_rack_body', 'ai_idx': ai_idx}
+
+    return None
+
+
+def handle_ai_rack_click(hit, context):
+    """Handle a click that hit an AI rack zone. Returns True if consumed."""
+    global _ai_popup_open, _ai_popup_x, _ai_popup_y
+
+    zone = hit.get('zone')
+
+    if zone == 'ai_popup_dismiss':
+        _ai_popup_open = False
+        return True
+
+    if zone == 'ai_add_click':
+        _ai_popup_open = not _ai_popup_open
+        # Clamp x so popup doesn't overflow right edge — popup is 260 unscaled px
+        scale = hit.get('scale', 1.0)
+        popup_w = 260 * scale
+        raw_x   = hit.get('bx', 0.0)
+        max_x   = hit.get('region_w', 9999.0) - popup_w
+        _ai_popup_x = min(raw_x, max_x)
+        _ai_popup_y = hit.get('by', 0.0)
+        return True
+
+    if zone == 'ai_add_type':
+        atype    = hit['ai_type']
+        ai_racks = context.scene.pb_ai_racks
+        new_rack = ai_racks.add()
+        new_rack.ai_type = atype
+        _ai_popup_open   = False
+        print(f"[AI RACKS] added {atype} rack")
+        return True
+
+    if zone == 'ai_delete':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks.remove(i)
+            print(f"[AI RACKS] deleted rack {i}")
+        return True
+
+    if zone == 'ai_on_off':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack = ai_racks[i]
+            rack.enabled = not rack.enabled
+            print(f"[AI RACKS] rack {i} enabled={rack.enabled}")
+            # Toggle A/B: update both VSE strip.mute (visual) AND engine handle
+            # volume via pb_sync_tracks.mute (what the engine actually reads).
+            try:
+                out_ch = rack.get('dnf_output_channel')   # 1-based VSE channel
+                src_ch = rack.get('dnf_source_channel')   # 1-based VSE channel
+                seq    = context.scene.sequence_editor
+                tracks = getattr(context.scene, "pb_sync_tracks", [])
+
+                if out_ch and src_ch and seq:
+                    # src_ch and out_ch are 1-based VSE channels
+                    src_idx = src_ch - 1   # 0-based engine channel index
+                    out_idx = out_ch - 1
+
+                    # Update VSE strip.mute for visual correctness
+                    for s in seq.sequences_all:
+                        if s.type == "SOUND":
+                            if s.channel == src_ch:
+                                s.mute = rack.enabled       # mute original when rack ON
+                            elif s.channel == out_ch:
+                                s.mute = not rack.enabled   # mute processed when rack OFF
+
+                    # Update pb_sync_tracks.mute — this is what _pb_channel_volume reads
+                    if src_idx < len(tracks):
+                        tracks[src_idx].mute = rack.enabled
+                    if out_idx < len(tracks):
+                        tracks[out_idx].mute = not rack.enabled
+
+                    # Tell the engine to update handle volumes immediately
+                    try:
+                        from core.audio import _pb_engine_update_volume
+                        _pb_engine_update_volume(src_idx)
+                        _pb_engine_update_volume(out_idx)
+                    except Exception as _ve:
+                        print(f"[AI RACKS] volume update error: {_ve}")
+
+                    state = "processed" if rack.enabled else "original"
+                    print(f"[AI RACKS] A/B: now playing {state} "
+                          f"(src_ch={src_ch} mute={rack.enabled}, "
+                          f"out_ch={out_ch} mute={not rack.enabled})")
+                else:
+                    # No processed output yet — just toggle the source channel mute
+                    # so the button still does something useful
+                    src_idx = rack.get('dnf_source_channel', 0)
+                    if src_idx and src_idx - 1 < len(tracks):
+                        # Don't mute if no output exists yet
+                        pass
+            except Exception as _e:
+                print(f"[AI RACKS] A/B toggle error: {_e}")
+        return True
+
+    if zone == 'ai_collapse':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].collapsed = not ai_racks[i].collapsed
+            print(f"[AI RACKS] rack {i} collapsed={ai_racks[i].collapsed}")
+        return True
+
+    if zone == 'ai_channel_btn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i      = hit['ai_idx']
+        ch_idx = hit['ch_idx']
+        if i < len(ai_racks):
+            attr = f'ch{ch_idx}'
+            rack = ai_racks[i]
+            setattr(rack, attr, not getattr(rack, attr, False))
+            state = 'assigned' if getattr(rack, attr) else 'removed'
+            print(f"[AI RACKS] ch{ch_idx+1} {state} from ai rack {i}")
+        return True
+
+    if zone == 'ai_process':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack  = ai_racks[i]
+            atype = rack.ai_type
+            if atype == "DEEPFILTERNET":
+                try:
+                    from core.ai_deepfilternet import process_deepfilternet
+                    process_deepfilternet(i, context)
+                except Exception as e:
+                    print(f"[AI RACKS] DeepFilterNet launch failed: {e}")
+                    import traceback; traceback.print_exc()
+                    rack.ai_status = "ERROR"
+            else:
+                print(f"[AI RACKS] {atype} processing not yet implemented")
+        return True
+
+    # ai_dnf_knob drag is handled in interaction.py — consume here to prevent fallthrough
+    if zone == 'ai_dnf_knob':
+        return True
+
+    if zone == 'ai_preset_prev':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack = ai_racks[i]
+            presets = AI_PRESET_DATA.get(rack.ai_type, [])
+            if presets:
+                new_idx = (getattr(rack, 'preset_idx', 0) - 1) % len(presets)
+                _load_ai_preset(rack, new_idx)
+                print(f"[AI RACKS] preset → {presets[new_idx][0]}")
+        return True
+
+    if zone == 'ai_preset_next':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack = ai_racks[i]
+            presets = AI_PRESET_DATA.get(rack.ai_type, [])
+            if presets:
+                new_idx = (getattr(rack, 'preset_idx', 0) + 1) % len(presets)
+                _load_ai_preset(rack, new_idx)
+                print(f"[AI RACKS] preset → {presets[new_idx][0]}")
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# AI rack registration
+# ---------------------------------------------------------------------------
+def register_ai_racks():
+    bpy.utils.register_class(PB_AIRackSettings)
+    bpy.types.Scene.pb_ai_racks = bpy.props.CollectionProperty(
+        type=PB_AIRackSettings)
+    print("[AI RACKS] registered")
+
+
+def unregister_ai_racks():
+    try:
+        bpy.utils.unregister_class(PB_AIRackSettings)
+        del bpy.types.Scene.pb_ai_racks
+    except Exception:
+        pass
+    print("[AI RACKS] unregistered")

@@ -44,10 +44,20 @@ def _get_racks_funcs():
             def _trigger_reprocess(*a, **kw): pass
         return (rack_knob_hit_test, _racks_hit_test, _racks_handle_click,
                 get_rack_channels, set_rack_param, _trigger_reprocess)
-    except Exception as e:
-        print(f"[INTERACTION] WARNING: failed to import Racks functions: {e}")
+    except Exception:
         def _noop(*a, **kw): return None
         return (_noop, _noop, _noop, _noop, _noop, _noop)
+
+
+def _get_ai_racks_funcs():
+    """Lazy import of AI rack hit test and click handler."""
+    try:
+        from Racks import hit_test_ai_racks, handle_ai_rack_click
+        return hit_test_ai_racks, handle_ai_rack_click
+    except Exception as e:
+        print(f"[AI RACKS] WARNING: could not import AI rack funcs: {e}")
+        def _noop(*a, **kw): return None
+        return _noop, _noop
 
 # ---------------------------------------------------------------------------
 
@@ -69,6 +79,7 @@ is_zooming         = False
 active_knob_track  = -1
 active_knob_type   = ""
 active_rack_knob   = None   # (rack_idx, param_idx) or None
+active_ai_knob     = None   # (ai_idx, knob_idx) or None
 active_fader_track = -1
 
 _last_click_time   = 0.0
@@ -124,6 +135,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         global is_panning, is_zooming, \
                active_knob_track, active_knob_type, active_fader_track, \
                active_rack_knob, \
+               active_ai_knob, \
                is_dragging_h, is_dragging_v, \
                _last_click_time, _last_click_track
 
@@ -154,6 +166,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         mid_drag    = is_panning or is_zooming
         widget_drag = (active_fader_track != -1 or active_knob_track != -1
                        or active_rack_knob is not None
+                       or active_ai_knob is not None
                        or is_dragging_h or is_dragging_v)
 
         if not (is_inside or mid_drag or widget_drag):
@@ -279,6 +292,23 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         except Exception as e:
                             print(f"[WIRE] live update failed: {e}")
                     context.area.tag_redraw()
+                return {"RUNNING_MODAL"}
+
+            if active_ai_knob is not None:
+                ai_idx, knob_idx = active_ai_knob
+                try:
+                    import Racks as _rk_ai2
+                    ai_racks = getattr(context.scene, "pb_ai_racks", [])
+                    if ai_idx < len(ai_racks):
+                        rack_ai = ai_racks[ai_idx]
+                        attr    = f'p{knob_idx}'
+                        delta   = (event.mouse_y - event.mouse_prev_y) * 0.005
+                        old_v   = getattr(rack_ai, attr, 0.5)
+                        new_v   = max(0.0, min(1.0, old_v + delta))
+                        setattr(rack_ai, attr, new_v)
+                        context.area.tag_redraw()
+                except Exception as _ae:
+                    print(f"[AI RACKS] knob drag error: {_ae}")
                 return {"RUNNING_MODAL"}
 
         if event.type == "LEFTMOUSE":
@@ -431,11 +461,75 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         context.area.tag_redraw()
                     return {"RUNNING_MODAL"}
 
+                # Check AI rack clicks (below DSP rack section)
+                # Use aliased imports — NEVER import FADER_TRACK_BOTTOM or NUMBOX_H
+                # bare inside a function that already uses them as module-level names,
+                # or Python will treat the module-level reference as unbound local.
+                try:
+                    import Racks as _rk_ai
+                    _FTB  = FADER_TRACK_BOTTOM   # already in scope from module import
+                    _NBH  = NUMBOX_H             # already in scope from module import
+                    from ui.mixer.channel_strip import send_section_height as _ssh_ai
+
+                    scene_ai   = context.scene
+                    n_racks_ai = len(getattr(scene_ai, "pb_racks", []))
+                    send_h_ai  = _ssh_ai(n_racks_ai, UI_SCALE)
+
+                    base_y_ai    = region.height - 150*UI_SCALE - SCROLL_Y
+                    fader_bot_ai = base_y_ai - _FTB*UI_SCALE - send_h_ai
+                    rack_top_ai  = fader_bot_ai - (_NBH + _rk_ai.RACK_MARGIN_TOP)*UI_SCALE
+
+                    # Walk down past all DSP racks to find where AI section starts
+                    dsp_racks = getattr(scene_ai, "pb_racks", [])
+                    cur_y_ai  = rack_top_ai
+                    for _ri in dsp_racks:
+                        if _ri.collapsed:
+                            _rh = _rk_ai.RACK_COLLAPSED_H * UI_SCALE
+                        elif _ri.effect_type == "COMP_MULTI":
+                            _rh = _rk_ai.RACK_EXPANDED_H_MB * UI_SCALE
+                        elif _ri.effect_type == "EQ":
+                            _rh = _rk_ai.RACK_EXPANDED_H_EQ * UI_SCALE
+                        elif _ri.effect_type == "REVERB":
+                            _rh = _rk_ai.RACK_EXPANDED_H_RV * UI_SCALE
+                        elif _ri.effect_type == "NOISE_GATE":
+                            _rh = _rk_ai.RACK_EXPANDED_H_NG * UI_SCALE
+                        elif _ri.effect_type == "DELAY":
+                            _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
+                        else:
+                            _rh = _rk_ai.RACK_EXPANDED_H * UI_SCALE
+                        cur_y_ai -= _rh + _rk_ai.RACK_GAP * UI_SCALE
+
+                    # ai_section_top_y must match draw_racks exactly:
+                    # draw_racks passes cur_y - 28*ui_scale (bottom of DSP add button)
+                    # so we subtract the same 28px DSP add-rack button height here.
+                    ai_section_top_y = cur_y_ai - 28*UI_SCALE
+
+                    num_tracks_ai = max(9, len(getattr(scene_ai, "pb_sync_tracks", [])))
+                    rack_w_ai     = num_tracks_ai * 135 - 15
+                    rack_x_ai     = 30*UI_SCALE + SCROLL_X
+
+                    ai_hit_test, ai_handle_click = _get_ai_racks_funcs()
+                    ai_hit = ai_hit_test(rx, ry, ai_section_top_y,
+                                         rack_x_ai, UI_SCALE, rack_w_ai)
+                    if ai_hit:
+                        # Inject scale and region width so popup can clamp its x
+                        ai_hit['scale']    = UI_SCALE
+                        ai_hit['region_w'] = region.width
+                        if ai_hit.get('zone') == 'ai_dnf_knob':
+                            active_ai_knob = (ai_hit['ai_idx'], ai_hit['knob_idx'])
+                            return {"RUNNING_MODAL"}
+                        if ai_handle_click(ai_hit, context):
+                            context.area.tag_redraw()
+                        return {"RUNNING_MODAL"}
+                except Exception as _ai_e:
+                    print(f"[AI RACKS] hit test error: {_ai_e}")
+
             elif event.value == "RELEASE":
                 active_knob_track  = -1
                 active_knob_type   = ""
                 active_fader_track = -1
                 active_rack_knob   = None
+                active_ai_knob     = None
                 is_dragging_h      = False
                 is_dragging_v      = False
 
