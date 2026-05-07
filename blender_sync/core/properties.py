@@ -44,7 +44,10 @@ def register_properties():
 
 
 def unregister_properties():
-    bpy.utils.unregister_class(PB_TrackSettings)
+    try:
+        bpy.utils.unregister_class(PB_TrackSettings)
+    except Exception:
+        pass
     for attr in ("pb_sync_tracks", "pb_ui_scale",
                  "pb_ui_scroll_x", "pb_ui_scroll_y", "pb_ui_enabled"):
         try:

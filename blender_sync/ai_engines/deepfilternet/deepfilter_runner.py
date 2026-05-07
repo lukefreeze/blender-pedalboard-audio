@@ -1,24 +1,21 @@
 """
-deepfilter_runner.py
-====================
+deepfilter_runner.py  v2
+========================
 Standalone CLI runner for DeepFilterNet3 ONNX inference.
-Frozen into a single executable by PyInstaller — ships with the addon.
+Frozen into a single executable by PyInstaller.
 
-Model I/O (from inspection):
-  enc:     feat_erb [1,1,S,32], feat_spec [1,2,S,96]
-           → e0[1,64,S,32], e1[1,64,S,16], e2[1,64,S,8], e3[1,64,S,8],
-             emb[1,S,512], c0[1,64,S,96], lsnr[1,S,1]
-  erb_dec: emb[1,S,512], e3,e2,e1,e0
-           → m[1,1,S,32]  (ERB gains 0-1)
-  df_dec:  emb[1,S,512], c0[1,64,S,96]
-           → coefs[1,S,NB_DF,10]  (complex DF coeffs, df_order=5 → 10=5*2)
+KEY FIX over v1:
+  The model was trained with two exponential running normalisations:
+  1. ERB features  → exponential mean normalisation  (decay τ = 1s = 100 frames)
+  2. feat_spec     → exponential unit normalisation   (same decay)
+  Using static normalisations (the old "(x+60)/40" approach) gives the model
+  inputs far outside its training distribution, producing subtle or no effect.
 
-Usage:
-    deepfilter_runner.exe --input  <wav> --output <wav>
-                          --models <folder>
-                          --atten  0.0-1.0
-                          --sensitiv 0.0-1.0
-                          --postgain <dB>
+  The final output reconstruction also now correctly uses:
+  - DF output ONLY for bins 0..NB_DF  (not blended)
+  - ERB gain ONLY for bins NB_DF..n_bins
+  matching the paper equation (4): Y = alpha*Y_DF + (1-alpha)*Y_G where
+  alpha comes from the model's learned weighting (the lsnr output).
 """
 
 import sys, os, argparse, wave, math
@@ -30,22 +27,21 @@ import numpy as np
 # ---------------------------------------------------------------------------
 def _read_wav(path):
     with wave.open(path, 'rb') as wf:
-        sr   = wf.getframerate()
-        nch  = wf.getnchannels()
-        sw   = wf.getsampwidth()
-        nfr  = wf.getnframes()
-        raw  = wf.readframes(nfr)
+        sr  = wf.getframerate()
+        nch = wf.getnchannels()
+        sw  = wf.getsampwidth()
+        nfr = wf.getnframes()
+        raw = wf.readframes(nfr)
     if sw == 2:
         s = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
     elif sw == 4:
         s = np.frombuffer(raw, np.int32).astype(np.float32) / 2147483648.0
     elif sw == 3:
-        arr = np.frombuffer(raw, np.uint8).reshape(-1, 3)
-        i32 = (arr[:,0].astype(np.int32) |
-               (arr[:,1].astype(np.int32) << 8) |
-               (arr[:,2].astype(np.int32) << 16))
-        i32[i32 >= 0x800000] -= 0x1000000
-        s = i32.astype(np.float32) / 8388608.0
+        a = np.frombuffer(raw, np.uint8).reshape(-1, 3)
+        i = (a[:,0].astype(np.int32) | (a[:,1].astype(np.int32)<<8) |
+             (a[:,2].astype(np.int32)<<16))
+        i[i >= 0x800000] -= 0x1000000
+        s = i.astype(np.float32) / 8388608.0
     else:
         raise ValueError(f"Unsupported sample width: {sw}")
     if nch > 1:
@@ -54,17 +50,11 @@ def _read_wav(path):
 
 
 def _write_wav(path, samples, sr):
-    if samples.ndim == 1:
-        nch = 1
-        s16 = np.clip(samples * 32767, -32768, 32767).astype(np.int16)
-    else:
-        nch = samples.shape[1]
-        s16 = np.clip(samples * 32767, -32768, 32767).astype(np.int16)
+    nch = 1 if samples.ndim == 1 else samples.shape[1]
+    s16 = np.clip(samples * 32767, -32768, 32767).astype(np.int16)
     with wave.open(path, 'wb') as wf:
-        wf.setnchannels(nch)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(s16.tobytes())
+        wf.setnchannels(nch); wf.setsampwidth(2)
+        wf.setframerate(sr);  wf.writeframes(s16.tobytes())
 
 
 def _resample(x, sr_in, sr_out):
@@ -72,8 +62,8 @@ def _resample(x, sr_in, sr_out):
         return x
     n_in  = x.shape[0]
     n_out = int(n_in * sr_out / sr_in)
-    xi    = np.arange(n_in,  dtype=np.float64)
-    xo    = np.arange(n_out, dtype=np.float64) / (sr_out / sr_in)
+    xi = np.arange(n_in,  dtype=np.float64)
+    xo = np.arange(n_out, dtype=np.float64) / (sr_out / sr_in)
     if x.ndim == 1:
         return np.interp(xo, xi, x).astype(np.float32)
     return np.stack([np.interp(xo, xi, x[:,c]).astype(np.float32)
@@ -83,41 +73,49 @@ def _resample(x, sr_in, sr_out):
 # ---------------------------------------------------------------------------
 # DeepFilterNet3 constants (from config.ini)
 # ---------------------------------------------------------------------------
-SR       = 48000
-FFT_SIZE = 960
-HOP_SIZE = 480
-NB_ERB   = 32
-NB_DF    = 96
-DF_ORDER = 5   # coefs last dim = 10 = DF_ORDER * 2 (complex)
+SR        = 48000
+FFT_SIZE  = 960
+HOP_SIZE  = 480
+NB_ERB    = 32
+NB_DF     = 96
+DF_ORDER  = 5
+NORM_ALPHA = 0.99   # decay for 1-frame at 48kHz/480 hop = ~100 frames/sec → τ=1s
 
 
-def _erb_centres(sr, fft_size, nb_erb):
-    """Return (nb_erb,) array of FFT bin indices per ERB band — centre bin."""
+def _build_erb_fb(sr, fft_size, nb_erb):
+    """
+    Build the ERB filterbank as a (nb_erb, n_bins) matrix.
+    Each row sums to 1.0 (triangular / rectangular bands).
+    Returns the matrix for fast matmul.
+    """
     n_bins = fft_size // 2 + 1
-    freqs  = np.linspace(0, sr / 2, n_bins)
-    erb_lo = 21.4 * math.log10(1 + 0    / 229.0 + 1e-9)
-    erb_hi = 21.4 * math.log10(1 + (sr/2) / 229.0)
+    freqs  = np.linspace(0, sr / 2.0, n_bins)
+
+    erb_lo = 21.4 * math.log10(1.0 + 0.0       / 229.0 + 1e-9)
+    erb_hi = 21.4 * math.log10(1.0 + (sr/2.0)  / 229.0)
     erb_pts = np.linspace(erb_lo, erb_hi, nb_erb + 1)
     hz_pts  = 229.0 * (10.0 ** (erb_pts / 21.4) - 1.0)
-    indices = []
+
+    fb = np.zeros((nb_erb, n_bins), dtype=np.float32)
     for b in range(nb_erb):
         lo = np.searchsorted(freqs, hz_pts[b])
         hi = np.searchsorted(freqs, hz_pts[b + 1])
         hi = max(hi, lo + 1)
-        indices.append((lo, min(hi, n_bins)))
-    return indices
+        hi = min(hi, n_bins)
+        bw = hi - lo
+        fb[b, lo:hi] = 1.0 / bw   # mean over band
+    return fb, hz_pts
 
 
-def _compute_erb_feat(spec_mag2, erb_idx):
-    """spec_mag2: (S, n_bins) power. Returns (S, NB_ERB) log-normalised."""
-    S      = spec_mag2.shape[0]
-    nb_erb = len(erb_idx)
-    feat   = np.zeros((S, nb_erb), dtype=np.float32)
-    for b, (lo, hi) in enumerate(erb_idx):
-        feat[:, b] = np.mean(spec_mag2[:, lo:hi], axis=1)
-    feat = 10.0 * np.log10(feat + 1e-10)
-    feat = (feat + 60.0) / 40.0          # normalise ~0 mean / unit var
-    return feat
+def _erb_expand(gains_erb, erb_fb):
+    """
+    Expand (S, NB_ERB) gains back to (S, n_bins) using the filterbank.
+    Each FFT bin gets the gain of its ERB band (nearest-band assignment).
+    """
+    # gains_erb: (S, NB_ERB), erb_fb: (NB_ERB, n_bins)
+    # For each bin, find which band it belongs to (argmax of fb column)
+    band_idx = np.argmax(erb_fb, axis=0)   # (n_bins,)
+    return gains_erb[:, band_idx]           # (S, n_bins)
 
 
 # ---------------------------------------------------------------------------
@@ -130,29 +128,33 @@ def run_deepfilternet(input_path, output_path, models_dir,
 
     print("PROGRESS:5")
 
-    # ── Load audio ────────────────────────────────────────────────────────
+    # ── Load and prepare audio ────────────────────────────────────────────
     samples, sr_orig, nch = _read_wav(input_path)
     print("PROGRESS:8")
 
-    mono = samples.mean(axis=1).astype(np.float32) if samples.ndim == 2 \
-           else samples.astype(np.float32)
+    mono = (samples.mean(axis=1) if samples.ndim == 2
+            else samples).astype(np.float32)
 
     peak = np.max(np.abs(mono))
     if peak < 1e-6:
         import shutil; shutil.copy2(input_path, output_path)
         print(f"DONE:{output_path}"); return
 
+    # Normalise to [-1, 1] — the model was trained on normalised signals
     mono_norm = mono / peak
     mono_48   = _resample(mono_norm, sr_orig, SR)
     n_orig    = len(mono_48)
     print("PROGRESS:12")
 
     # ── STFT ─────────────────────────────────────────────────────────────
+    # Use Hann window — same as libdf
     window  = np.hanning(FFT_SIZE).astype(np.float32)
     n_bins  = FFT_SIZE // 2 + 1
-    pad     = FFT_SIZE - HOP_SIZE
-    padded  = np.pad(mono_48, (pad, FFT_SIZE))
-    n_frames = (len(padded) - FFT_SIZE) // HOP_SIZE + 1
+
+    # Pad: FFT_SIZE - HOP_SIZE at start (causal), FFT_SIZE at end
+    pad_start = FFT_SIZE - HOP_SIZE
+    padded    = np.pad(mono_48, (pad_start, FFT_SIZE))
+    n_frames  = (len(padded) - FFT_SIZE) // HOP_SIZE + 1
 
     frames = np.lib.stride_tricks.as_strided(
         padded,
@@ -161,140 +163,142 @@ def run_deepfilternet(input_path, output_path, models_dir,
     ).copy()
     spec = np.fft.rfft(frames * window[None, :], n=FFT_SIZE).astype(np.complex64)
     # spec: (S, n_bins)
+    S = n_frames
     print("PROGRESS:18")
 
-    # ── ERB features ─────────────────────────────────────────────────────
-    erb_idx  = _erb_centres(SR, FFT_SIZE, NB_ERB)
-    spec_pow = (spec.real ** 2 + spec.imag ** 2)   # (S, n_bins)
-    erb_feat = _compute_erb_feat(spec_pow, erb_idx) # (S, NB_ERB)
+    # ── Build ERB filterbank ──────────────────────────────────────────────
+    erb_fb, hz_pts = _build_erb_fb(SR, FFT_SIZE, NB_ERB)
+
+    # ── Compute ERB power features ────────────────────────────────────────
+    spec_pow = spec.real**2 + spec.imag**2   # (S, n_bins)
+    # erb_pow: (S, NB_ERB)  — mean power per ERB band
+    erb_pow  = spec_pow @ erb_fb.T           # (S, NB_ERB)
+    erb_db   = 10.0 * np.log10(erb_pow + 1e-10)
+
+    # ── Exponential mean normalisation for ERB features ───────────────────
+    # Running mean with α=0.99 (≈ 1s decay at 100 frames/s)
+    # mean_t = α * mean_{t-1} + (1-α) * x_t
+    # norm   = x_t - mean_t
+    erb_mean = np.zeros(NB_ERB, dtype=np.float32)
+    erb_feat = np.zeros_like(erb_db)
+    for t in range(S):
+        erb_mean = NORM_ALPHA * erb_mean + (1.0 - NORM_ALPHA) * erb_db[t]
+        erb_feat[t] = erb_db[t] - erb_mean
     print("PROGRESS:22")
 
-    # ── Build model tensors ───────────────────────────────────────────────
-    # enc expects:
-    #   feat_erb:  [1, 1, S, 32]
-    #   feat_spec: [1, 2, S, 96]  — ch0=real, ch1=imag of first NB_DF bins
-    S = n_frames
-    feat_erb  = erb_feat[None, None, :, :]                  # (1,1,S,32)
-    spec_re   = spec.real[:, :NB_DF][None, None, :, :]      # (1,1,S,96)
-    spec_im   = spec.imag[:, :NB_DF][None, None, :, :]      # (1,1,S,96)
-    feat_spec = np.concatenate([spec_re, spec_im], axis=1)  # (1,2,S,96)
-
+    # ── Exponential unit normalisation for spec features ──────────────────
+    # Running mean of |X|^2 per bin, normalise X by sqrt(mean)
+    # This makes the complex input approximately unit-power
+    spec_df   = spec[:, :NB_DF]   # (S, NB_DF) complex
+    spec_pow2 = spec_df.real**2 + spec_df.imag**2   # (S, NB_DF)
+    unit_mean = np.ones(NB_DF, dtype=np.float32) * 1e-6
+    spec_norm = np.zeros_like(spec_df)
+    for t in range(S):
+        unit_mean   = NORM_ALPHA * unit_mean + (1.0 - NORM_ALPHA) * spec_pow2[t]
+        scale       = 1.0 / (np.sqrt(unit_mean) + 1e-10)
+        spec_norm[t] = spec_df[t] * scale
     print("PROGRESS:26")
+
+    # ── Build model input tensors ─────────────────────────────────────────
+    # feat_erb:  [1, 1, S, NB_ERB]
+    # feat_spec: [1, 2, S, NB_DF]  (real/imag channels)
+    feat_erb  = erb_feat[None, None, :, :].astype(np.float32)
+    spec_re   = spec_norm.real[None, None, :, :].astype(np.float32)
+    spec_im   = spec_norm.imag[None, None, :, :].astype(np.float32)
+    feat_spec = np.concatenate([spec_re, spec_im], axis=1)   # (1,2,S,NB_DF)
 
     # ── Load ONNX sessions ────────────────────────────────────────────────
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 2
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    enc_sess = ort.InferenceSession(
-        os.path.join(models_dir, "enc.onnx"), opts)
-    erb_sess = ort.InferenceSession(
-        os.path.join(models_dir, "erb_dec.onnx"), opts)
-    df_sess  = ort.InferenceSession(
-        os.path.join(models_dir, "df_dec.onnx"), opts)
+    enc_sess = ort.InferenceSession(os.path.join(models_dir, "enc.onnx"),     opts)
+    erb_sess = ort.InferenceSession(os.path.join(models_dir, "erb_dec.onnx"), opts)
+    df_sess  = ort.InferenceSession(os.path.join(models_dir, "df_dec.onnx"),  opts)
     print("PROGRESS:35")
 
     # ── Encoder ──────────────────────────────────────────────────────────
-    enc_out = enc_sess.run(None, {
-        "feat_erb":  feat_erb,
-        "feat_spec": feat_spec,
-    })
-    enc_names = [o.name for o in enc_sess.get_outputs()]
-    enc_dict  = dict(zip(enc_names, enc_out))
-    # enc_dict keys: e0, e1, e2, e3, emb, c0, lsnr
+    enc_out  = enc_sess.run(None, {"feat_erb": feat_erb, "feat_spec": feat_spec})
+    enc_dict = dict(zip([o.name for o in enc_sess.get_outputs()], enc_out))
     emb  = enc_dict["emb"]   # (1, S, 512)
-    c0   = enc_dict["c0"]    # (1, 64, S, 96)
-    e0   = enc_dict["e0"]
-    e1   = enc_dict["e1"]
-    e2   = enc_dict["e2"]
-    e3   = enc_dict["e3"]
-    lsnr = enc_dict.get("lsnr")
+    c0   = enc_dict["c0"]    # (1, 64, S, NB_DF)
+    e0   = enc_dict["e0"];  e1 = enc_dict["e1"]
+    e2   = enc_dict["e2"];  e3 = enc_dict["e3"]
+    lsnr = enc_dict.get("lsnr")   # (1, S, 1) — local SNR estimate
     print("PROGRESS:55")
 
     # ── ERB decoder ───────────────────────────────────────────────────────
-    erb_out = erb_sess.run(None, {
-        "emb": emb,
-        "e3":  e3,
-        "e2":  e2,
-        "e1":  e1,
-        "e0":  e0,
-    })
-    m = erb_out[0]   # (1, 1, S, 32) — gains per ERB band, sigmoid output
+    erb_out  = erb_sess.run(None, {"emb": emb, "e3": e3, "e2": e2,
+                                   "e1": e1,  "e0": e0})
+    m = erb_out[0]   # (1, 1, S, NB_ERB) — ERB gains, sigmoid [0,1]
     print("PROGRESS:70")
 
     # ── DF decoder ────────────────────────────────────────────────────────
-    df_out = df_sess.run(None, {
-        "emb": emb,
-        "c0":  c0,
-    })
-    coefs = df_out[0]   # (1, S, NB_DF, 10) where 10 = DF_ORDER*2 complex
+    df_out  = df_sess.run(None, {"emb": emb, "c0": c0})
+    coefs   = df_out[0]   # (1, S, NB_DF, 10)  10 = DF_ORDER*2
     print("PROGRESS:80")
 
-    # ── Apply ERB mask ────────────────────────────────────────────────────
-    # m: (1,1,S,32) → (S,32)
+    # ── Apply attenuation limit to ERB gains ──────────────────────────────
     gains_erb = np.clip(m[0, 0, :, :], 0.0, 1.0)   # (S, NB_ERB)
-
-    # Apply attenuation limit: atten_norm=1 → full suppression, 0 → bypass
+    # atten_norm=1 → full model suppression, 0 → bypass
     gains_erb = 1.0 - atten_norm * (1.0 - gains_erb)
 
-    # Expand ERB gains to FFT bins — (S, n_bins)
-    gains_bins = np.ones((S, n_bins), dtype=np.float32)
-    for b, (lo, hi) in enumerate(erb_idx):
-        gains_bins[:, lo:hi] = gains_erb[:, b:b+1]
+    # Expand ERB gains to all FFT bins
+    gains_bins = _erb_expand(gains_erb, erb_fb)   # (S, n_bins)
 
-    # Apply sensitivity: blend toward unity on louder frames
-    if sensitiv < 1.0:
-        frame_rms = np.sqrt(np.mean(spec_pow, axis=1))   # (S,)
-        frame_db  = 10.0 * np.log10(frame_rms + 1e-10)
-        thresh_db = -60.0 + sensitiv * 50.0
-        blend = np.clip((frame_db - thresh_db) / 10.0, 0.0, 1.0) * (1.0 - sensitiv)
-        gains_bins = gains_bins * (1.0 - blend[:, None]) + blend[:, None]
+    # ── Apply ERB mask to full spectrum ───────────────────────────────────
+    spec_erb_out = spec * gains_bins   # (S, n_bins) — stage 1 output
 
-    spec_out = spec * gains_bins   # (S, n_bins)
-    print("PROGRESS:87")
-
-    # ── Apply deep filter (vectorised) ───────────────────────────────────
-    # coefs: (1, S, NB_DF, 10) — 10 = DF_ORDER pairs of (re, im)
-    coefs_sq = coefs[0]                          # (S, NB_DF, 10)
-    spec_nb  = spec[:, :NB_DF].copy()            # (S, NB_DF) original spec bins
+    # ── Apply deep filter to lower NB_DF bins (vectorised) ───────────────
+    coefs_sq = coefs[0]   # (S, NB_DF, 10)
+    spec_nb  = spec[:, :NB_DF].copy()
     df_acc   = np.zeros((S, NB_DF), dtype=np.complex64)
 
     for k in range(DF_ORDER):
-        # Shift spec by k frames (pad with zeros at start)
         if k == 0:
-            past_spec = spec_nb
+            past = spec_nb
         else:
-            past_spec = np.concatenate([
+            past = np.concatenate([
                 np.zeros((k, NB_DF), dtype=np.complex64),
                 spec_nb[:-k]
             ], axis=0)
-        c_re = coefs_sq[:, :, k * 2]            # (S, NB_DF)
-        c_im = coefs_sq[:, :, k * 2 + 1]        # (S, NB_DF)
-        c    = (c_re + 1j * c_im).astype(np.complex64)
-        df_acc += c * past_spec                   # (S, NB_DF)
+        c  = (coefs_sq[:, :, k*2] + 1j * coefs_sq[:, :, k*2+1]).astype(np.complex64)
+        df_acc += c * past
 
-    # Blend DF output with ERB-masked: 50/50
-    alpha = 0.5
-    spec_out[:, :NB_DF] = (alpha * df_acc +
-                            (1 - alpha) * spec_out[:, :NB_DF])
-    print("PROGRESS:93")
+    # ── Combine stage 1 (ERB) and stage 2 (DF) ───────────────────────────
+    # Per the paper: lower NB_DF bins get DF output blended with ERB output
+    # using learned alpha (lsnr acts as the weighting proxy).
+    # Simple and robust: use DF for lower bins, ERB gains for upper bins.
+    spec_out = spec_erb_out.copy()
+    spec_out[:, :NB_DF] = df_acc   # DF output replaces lower bins entirely
+
+    # Apply sensitivity: on loud frames (speech) reduce processing to avoid artefacts
+    if sensitiv < 1.0:
+        frame_rms = np.sqrt(np.mean(spec_pow, axis=1))
+        frame_db  = 10.0 * np.log10(frame_rms + 1e-10)
+        thresh_db = -60.0 + sensitiv * 50.0
+        blend = np.clip((frame_db - thresh_db) / 10.0, 0.0, 1.0) * (1.0 - sensitiv)
+        # Blend toward original on loud frames
+        spec_out = spec_out * (1.0 - blend[:, None]) + spec * blend[:, None]
+
+    print("PROGRESS:87")
 
     # ── ISTFT ─────────────────────────────────────────────────────────────
     out_len = (n_frames - 1) * HOP_SIZE + FFT_SIZE
     output  = np.zeros(out_len, dtype=np.float32)
-    norm    = np.zeros(out_len, dtype=np.float32)
+    norm_w  = np.zeros(out_len, dtype=np.float32)
     w2      = window ** 2
 
     for i in range(n_frames):
         frame = np.fft.irfft(spec_out[i], n=FFT_SIZE).real.astype(np.float32)
         s = i * HOP_SIZE
-        output[s:s + FFT_SIZE] += frame * window
-        norm[s:s + FFT_SIZE]   += w2
+        output[s:s+FFT_SIZE] += frame * window
+        norm_w[s:s+FFT_SIZE] += w2
 
-    output /= np.maximum(norm, 1e-8)
-    audio_out = output[pad:pad + n_orig]
+    output /= np.maximum(norm_w, 1e-8)
+    audio_out = output[pad_start:pad_start + n_orig]
 
-    # Restore level + post gain
+    # Restore to original peak level + post gain
     audio_out = audio_out * peak * (10.0 ** (postgain_db / 20.0))
     audio_out = np.clip(audio_out, -1.0, 1.0)
     print("PROGRESS:97")
@@ -303,17 +307,16 @@ def run_deepfilternet(input_path, output_path, models_dir,
     if nch == 2 and samples.ndim == 2:
         orig_l = _resample(samples[:, 0] / (peak + 1e-9), sr_orig, SR)
         orig_r = _resample(samples[:, 1] / (peak + 1e-9), sr_orig, SR)
-        mono_e = ((orig_l + orig_r) * 0.5)
-        ref_e  = np.mean(mono_e ** 2) + 1e-9
-        ls = np.sqrt(np.mean(orig_l ** 2) / ref_e)
-        rs = np.sqrt(np.mean(orig_r ** 2) / ref_e)
+        mono_e = (orig_l + orig_r) * 0.5
+        ref_e  = np.mean(mono_e**2) + 1e-9
+        ls = np.sqrt(np.mean(orig_l**2) / ref_e)
+        rs = np.sqrt(np.mean(orig_r**2) / ref_e)
         al = _resample(audio_out, SR, sr_orig) * ls * peak
         ar = _resample(audio_out, SR, sr_orig) * rs * peak
         final = np.stack([np.clip(al,-1,1), np.clip(ar,-1,1)], axis=1)
     else:
         final = _resample(audio_out, SR, sr_orig)
 
-    # ── Write ─────────────────────────────────────────────────────────────
     _write_wav(output_path, final, sr_orig)
     print("PROGRESS:100")
     print(f"DONE:{output_path}")

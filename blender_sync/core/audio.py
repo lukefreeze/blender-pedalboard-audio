@@ -144,6 +144,42 @@ def _pb_get_device():
 
 
 # ---------------------------------------------------------------------------
+# One-shot preview playback — plays a WAV file through the pedalboard engine
+# device without touching VSE or the main playback state.
+# Called by kNN-VC, Piper, and any other rack that needs audio preview.
+# ---------------------------------------------------------------------------
+_oneshot_handles = []  # keep references alive so GC doesn't kill playback
+
+def play_oneshot(filepath):
+    """Play a WAV file once through the pedalboard audio device.
+    Safe to call at any time — does not interrupt VSE playback.
+    Returns the aud.Handle so caller can stop it early if needed.
+    """
+    global _oneshot_handles
+    try:
+        import aud
+        device = _pb_get_device()
+        sound  = aud.Sound.file(filepath)
+        handle = device.play(sound)
+        # Keep a reference — trim dead handles while we're here
+        _oneshot_handles = [h for h in _oneshot_handles if h.status]
+        _oneshot_handles.append(handle)
+        return handle
+    except Exception as e:
+        print(f"[AUDIO] play_oneshot error: {e}")
+        return None
+
+
+def stop_all_oneshots():
+    """Stop any currently playing one-shot previews."""
+    global _oneshot_handles
+    for h in _oneshot_handles:
+        try: h.stop()
+        except Exception: pass
+    _oneshot_handles = []
+
+
+# ---------------------------------------------------------------------------
 # Biquad EQ coefficient calculation
 # Based on Audio EQ Cookbook by Robert Bristow-Johnson.
 # sample_rate: Hz   gain_db: dB boost/cut   freq: Hz   Q: resonance (0.7 default)

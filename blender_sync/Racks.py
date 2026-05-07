@@ -104,9 +104,11 @@ EFFECT_TYPES = [
 # AI rack type identifiers — separate namespace from DSP racks
 AI_RACK_TYPES = [
     ("DEEPFILTERNET", "DeepFilterNet — AI Noise Reduction"),
+    ("PIPER_TTS",     "Piper TTS — Text to Speech"),
+    ("RVC",           "Voice Conversion kNN-VC (Beta)"),
+    ("RESEMBLE",      "Resemble Enhance — Voice Restoration (Beta)"),
     ("WHISPER",       "Whisper — Speech to Text"),
     ("DEMUCS",        "Demucs — Source Separation"),
-    ("PIPER_TTS",     "Piper TTS — Text to Speech"),
     ("MATCHERING",    "Matchering — AI Mastering"),
 ]
 
@@ -4113,6 +4115,8 @@ def _get_ai_rack_height(rack, scale):
         "DEMUCS":        300,
         "PIPER_TTS":     320,
         "MATCHERING":    280,
+        "RVC":           360,
+        "RESEMBLE":      340,
     }
     return heights.get(rack.ai_type, 300) * scale
 
@@ -4488,6 +4492,22 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
         except Exception as e:
             print(f"[AI RACKS] Piper draw error rack {ai_idx}: {e}")
 
+    elif atype == "RVC":
+        try:
+            from ui.racks.rack_rvc import _draw_rvc_body
+            _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] RVC draw error rack {ai_idx}: {e}")
+            import traceback; traceback.print_exc()
+
+    elif atype == "RESEMBLE":
+        try:
+            from ui.racks.rack_resemble import _draw_resemble_body
+            _draw_resemble_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] Resemble draw error rack {ai_idx}: {e}")
+            import traceback; traceback.print_exc()
+
 
 def draw_ai_racks(rx, ry, scale, area_width=None):
     """Draw the AI processing section — divider + all AI racks + add button.
@@ -4831,6 +4851,149 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
                 if dist < knob_r_p:
                     return {'zone': 'ai_dnf_knob', 'ai_idx': ai_idx, 'knob_idx': ki}
 
+        # RVC: setup guide button hit test
+        if rack.ai_type == "RVC" and not rack.collapsed:
+            # Setup guide button (shown when PyTorch not found)
+            try:
+                btn_geom = rack.get('rvc_setup_btn')
+                if btn_geom:
+                    bx,by,bw,bh = btn_geom
+                    if bx <= mouse_x <= bx+bw and by <= mouse_y <= by+bh:
+                        return {'zone': 'ai_rvc_setup_guide', 'ai_idx': ai_idx}
+            except Exception:
+                pass
+            # Fallback warning button geometry
+            _rail_rvc = RACK_RAIL_H * scale
+            _bb_rvc   = rack_y
+            _bh_rvc   = rack_y + rack_h - _rail_rvc - _bb_rvc
+            _mg_rvc   = 8 * scale
+            _ww_rvc   = rw - _mg_rvc * 4
+            _wh_rvc   = min(_bh_rvc * 0.78, 160 * scale)
+            _wx_rvc   = rack_x + (rw - _ww_rvc) / 2
+            _wy_rvc   = _bb_rvc + (_bh_rvc - _wh_rvc) / 2
+            _bw_rvc   = min(140 * scale, _ww_rvc * 0.38)
+            _bh2_rvc  = max(16 * scale, 7 * scale + 8 * scale)
+            _bx_rvc   = _wx_rvc + _ww_rvc - _bw_rvc - 12 * scale
+            _by_rvc   = _wy_rvc + 8 * scale
+            if _bx_rvc <= mouse_x <= _bx_rvc+_bw_rvc and _by_rvc <= mouse_y <= _by_rvc+_bh2_rvc:
+                return {'zone': 'ai_rvc_setup_guide', 'ai_idx': ai_idx}
+
+            # ── RVC full hit test (mirrors rack_rvc.py geometry exactly) ──────
+            _mg2          = 8 * scale
+            _body_bot2    = rack_y
+            _body_top2    = rack_y + rack_h - RACK_RAIL_H * scale
+            _body_h2      = _body_top2 - _body_bot2
+            _sbar_h2      = max(16*scale, _body_h2*0.07)
+            _left_w2      = rw * 0.30
+            _right_w2     = rw * 0.24
+            _cent_w2      = rw - _left_w2 - _right_w2 - _mg2*4
+            _cent_x2      = rack_x + _mg2 + _left_w2 + _mg2
+            _lx2          = rack_x + _mg2
+            _work_bot2    = _body_bot2 + _sbar_h2 + 2*scale
+            _work_top2    = _body_top2 - 2*scale
+            _work_h2      = _work_top2 - _work_bot2
+            _fs_lbl2      = max(1, int(7*scale))
+
+            # State area + CONVERT/PREVIEW buttons
+            _state_h2     = _work_h2 * 0.44
+            _state_y2     = _work_bot2 + _work_h2 - _fs_lbl2 - 10*scale - _state_h2
+            _btn_h2b      = max(22*scale, _work_h2*0.11)
+            _btn_y2b      = _state_y2 - 2*scale - _btn_h2b
+            _conv_w2      = _cent_w2 * 0.52
+            _conv_x2      = _cent_x2 + 4*scale
+            _prev_w2      = _cent_w2 * 0.38
+            _prev_x2      = _conv_x2 + _conv_w2 + 4*scale
+            if (_conv_x2 <= mouse_x <= _conv_x2+_conv_w2 and
+                    _btn_y2b <= mouse_y <= _btn_y2b+_btn_h2b):
+                return {'zone': 'ai_rvc_convert', 'ai_idx': ai_idx}
+            if (_prev_x2 <= mouse_x <= _prev_x2+_prev_w2 and
+                    _btn_y2b <= mouse_y <= _btn_y2b+_btn_h2b):
+                return {'zone': 'ai_rvc_preview', 'ai_idx': ai_idx}
+
+            # Output channel < > arrows
+            _row2_h2      = max(16*scale, _work_h2*0.08)
+            _row2_y2      = _btn_y2b - 2*scale - _row2_h2
+            _arr_w2       = max(14*scale, _row2_h2)
+            _oc_s2        = max(22*scale, _row2_h2)
+            _minus_x2     = _cent_x2 + 4*scale + 45*scale
+            _plus_x2      = _minus_x2 + _arr_w2 + 2*scale + _oc_s2 + 2*scale
+            if (_minus_x2 <= mouse_x <= _minus_x2+_arr_w2 and
+                    _row2_y2 <= mouse_y <= _row2_y2+_row2_h2):
+                return {'zone': 'ai_rvc_outch_dec', 'ai_idx': ai_idx}
+            if (_plus_x2 <= mouse_x <= _plus_x2+_arr_w2 and
+                    _row2_y2 <= mouse_y <= _row2_y2+_row2_h2):
+                return {'zone': 'ai_rvc_outch_inc', 'ai_idx': ai_idx}
+
+            # ADD FROM TIMELINE section
+            _add_sec_h2   = min(_work_h2*0.38, 90*scale)
+            _add_sep_y2   = _work_bot2 + _add_sec_h2
+            _add_ch_s2    = min(16*scale, (_left_w2-10*scale)/9)
+            _add_ch_y2    = _work_bot2 + _add_sec_h2 - _fs_lbl2 - _add_ch_s2 - 4*scale
+            for _ci in range(9):
+                _bx_ac = _lx2 + 5*scale + 16*scale + _ci*(_add_ch_s2+1*scale)
+                if (_bx_ac <= mouse_x <= _bx_ac+_add_ch_s2 and
+                        _add_ch_y2 <= mouse_y <= _add_ch_y2+_add_ch_s2):
+                    return {'zone': 'ai_rvc_add_ch', 'ai_idx': ai_idx, 'ch_idx': _ci}
+            _nf_h2        = max(14*scale, _fs_lbl2+4*scale)
+            _nf_y2        = _add_ch_y2 - _nf_h2 - 3*scale
+            _nf_w2        = _left_w2 - 10*scale
+            if (_lx2+5*scale <= mouse_x <= _lx2+5*scale+_nf_w2 and
+                    _nf_y2 <= mouse_y <= _nf_y2+_nf_h2):
+                return {'zone': 'ai_rvc_name_field', 'ai_idx': ai_idx}
+            _ab_h2        = max(16*scale, _fs_lbl2+4*scale)
+            _ab_y2        = _nf_y2 - _ab_h2 - 3*scale
+            _ab_w2        = _left_w2 - 10*scale
+            if (_lx2+5*scale <= mouse_x <= _lx2+5*scale+_ab_w2 and
+                    _ab_y2 <= mouse_y <= _ab_y2+_ab_h2):
+                return {'zone': 'ai_rvc_add_voice', 'ai_idx': ai_idx}
+
+            # TOPK + REF SECS knob hit test
+            # Geometry mirrors rack_rvc.py right panel exactly
+            _rx2_k   = rack_x + _mg2 + _left_w2 + _mg2 + _cent_w2 + _mg2
+            _ry2_k   = _work_bot2
+            _rh2_k   = _work_h2
+            _rw2_k   = _right_w2
+            _kr_k    = min(18*scale, _rw2_k*0.28, _work_h2*0.18)
+            _ky0_k   = _ry2_k + _rh2_k * 0.72
+            _kx0_k   = _rx2_k + _rw2_k * 0.30
+            _kx1_k   = _rx2_k + _rw2_k * 0.72
+            if (_kx0_k-_kr_k <= mouse_x <= _kx0_k+_kr_k and
+                    _ky0_k-_kr_k <= mouse_y <= _ky0_k+_kr_k):
+                return {'zone': 'ai_rvc_knob', 'ai_idx': ai_idx, 'knob_idx': 0}
+            if (_kx1_k-_kr_k <= mouse_x <= _kx1_k+_kr_k and
+                    _ky0_k-_kr_k <= mouse_y <= _ky0_k+_kr_k):
+                return {'zone': 'ai_rvc_knob', 'ai_idx': ai_idx, 'knob_idx': 1}
+
+            # Voice cards + per-card preview button
+            # Geometry mirrors rack_rvc.py exactly:
+            #   cards_bot = work_top - fs_lbl - fs_ch*2 - 14*scale
+            #   hint_y    = cards_bot - fs_lbl - 2*scale
+            try:
+                from ui.racks.rack_rvc import _discover_ref_voices as _gv2
+                _vlist2 = _gv2(ai_idx)
+            except Exception:
+                _vlist2 = []
+            _work_top2    = _work_bot2 + _work_h2
+            _fs_ch2       = _fs_lbl2
+            _cards_bot2   = _work_top2 - _fs_lbl2 - _fs_ch2*2 - 14*scale
+            _hint_y2      = _cards_bot2 - _fs_lbl2 - 2*scale
+            _card_h2      = max(20*scale, _work_h2*0.11)
+            _card_gap2    = 2*scale
+            _prev_btn_w2  = max(16*scale, _card_h2*0.7)
+            _max_vis2     = max(1, int((_hint_y2 - _add_sep_y2 - 6*scale) / (_card_h2+_card_gap2)))
+            for _slot in range(_max_vis2):
+                if _slot >= len(_vlist2): break
+                _cy2 = _hint_y2 - _fs_lbl2 - 4*scale - _slot*(_card_h2+_card_gap2) - _card_h2
+                if _cy2 < _add_sep_y2 + 2*scale: break
+                _pb_x2 = _lx2 + _left_w2 - 4*scale - _prev_btn_w2
+                _pb_y2 = _cy2 + _card_h2*0.1
+                _pb_h2 = _card_h2*0.8
+                if (_pb_x2 <= mouse_x <= _pb_x2+_prev_btn_w2 and
+                        _pb_y2 <= mouse_y <= _pb_y2+_pb_h2):
+                    return {'zone': 'ai_rvc_voice_preview', 'ai_idx': ai_idx, 'voice_idx': _slot}
+                if (_lx2+4*scale <= mouse_x <= _lx2+_left_w2-4*scale and
+                        _cy2 <= mouse_y <= _cy2+_card_h2):
+                    return {'zone': 'ai_rvc_voice', 'ai_idx': ai_idx, 'voice_idx': _slot}
         # Preset arrows — exact same geometry as draw code
         try:
             from ui.mixer.draw_utils import text_width as _tw_ps
@@ -5134,6 +5297,142 @@ def handle_ai_rack_click(hit, context):
                 new_idx = (getattr(rack, 'preset_idx', 0) + 1) % len(presets)
                 _load_ai_preset(rack, new_idx)
                 print(f"[AI RACKS] preset → {presets[new_idx][0]}")
+        return True
+
+    # kNN-VC CONVERT button
+    if zone == 'ai_rvc_convert':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_knnvc import convert_knnvc
+                convert_knnvc(i, context)
+            except Exception as e:
+                print(f"[KNNVC] convert failed: {e}")
+                import traceback; traceback.print_exc()
+                ai_racks[i].ai_status = "ERROR"
+        return True
+
+    # kNN-VC output channel dec/inc
+    if zone == 'ai_rvc_outch_dec':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p3', 1.0))
+            ai_racks[i].p3 = float(max(1, cur - 1))
+        return True
+
+    if zone == 'ai_rvc_outch_inc':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p3', 1.0))
+            ai_racks[i].p3 = float(min(9, cur + 1))
+        return True
+
+    # kNN-VC PREVIEW button — plays last converted output
+    if zone == 'ai_rvc_preview':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_knnvc import preview_knnvc
+                preview_knnvc(i, context)
+            except Exception as e:
+                print(f"[KNNVC] preview failed: {e}")
+        return True
+
+    # kNN-VC voice card ▶ preview button
+    if zone == 'ai_rvc_voice_preview':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        vi = hit.get('voice_idx', 0)
+        print(f"[KNNVC] voice_preview handler: rack={i} voice={vi}")
+        if i < len(ai_racks):
+            try:
+                from core.ai_knnvc import preview_voice_card
+                preview_voice_card(i, vi, context)
+            except Exception as e:
+                import traceback
+                print(f"[KNNVC] voice preview failed: {e}")
+                traceback.print_exc()
+        return True
+
+    # kNN-VC voice card click (select reference)
+    if zone == 'ai_rvc_voice':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p4 = float(hit.get('voice_idx', 0))
+        return True
+
+    # kNN-VC add-from-timeline channel selector
+    if zone == 'ai_rvc_add_ch':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ci = hit.get('ch_idx', 0)
+            ai_racks[i].p5 = float(ci)
+            # Auto-update default name when channel changes
+            try:
+                cur_name = ai_racks[i].get('add_voice_name', '')
+                import re
+                if not cur_name or re.match(r'^CH\d+Sample$', cur_name):
+                    ai_racks[i]['add_voice_name'] = f"CH{ci+1}Sample"
+            except Exception:
+                pass
+        return True
+
+    # kNN-VC name field click — activate text input
+    if zone == 'ai_rvc_name_field':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            # Use whatever is stored — don't force a default if user cleared it
+            cur = ai_racks[i].get('add_voice_name', '')
+            if cur is None:
+                cur = ''
+            cur = str(cur)
+            try:
+                from ui.mixer import interaction as _inter
+            except ImportError:
+                try:
+                    import sys as _sys
+                    _inter = _sys.modules.get('ui.mixer.interaction') or _sys.modules.get('interaction')
+                except Exception:
+                    _inter = None
+            if _inter:
+                _inter._active_text_field = {
+                    'ai_idx': i, 'field': 'add_voice_name',
+                    'cursor': len(cur),
+                }
+                print(f"[KNNVC] name field active: '{cur}'")
+        return True
+
+    # kNN-VC ADD TO VOICES button
+    if zone == 'ai_rvc_add_voice':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            if not ai_racks[i].get('add_voice_busy', False):
+                try:
+                    from core.ai_knnvc import add_voice_from_timeline
+                    add_voice_from_timeline(i, context)
+                except Exception as e:
+                    print(f"[KNNVC] add_voice failed: {e}")
+                    import traceback; traceback.print_exc()
+        return True
+
+    # RVC setup guide button
+    if zone == 'ai_rvc_setup_guide':
+        import webbrowser
+        webbrowser.open("https://github.com/bshall/knn-vc")
+        return True
+
+    # Resemble setup guide button
+    if zone == 'ai_resemble_setup_guide':
+        import webbrowser
+        webbrowser.open("https://github.com/resemble-ai/resemble-enhance")
         return True
 
     return False

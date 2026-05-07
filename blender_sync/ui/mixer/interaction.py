@@ -526,7 +526,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         # Inject scale and region width so popup can clamp its x
                         ai_hit['scale']    = UI_SCALE
                         ai_hit['region_w'] = region.width
-                        if ai_hit.get('zone') in ('ai_dnf_knob', 'ai_piper_knob'):
+                        if ai_hit.get('zone') in ('ai_dnf_knob', 'ai_piper_knob', 'ai_rvc_knob'):
                             active_ai_knob = (ai_hit['ai_idx'], ai_hit['knob_idx'])
                             return {"RUNNING_MODAL"}
                         if ai_handle_click(ai_hit, context):
@@ -595,8 +595,12 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 _active_text_field = None
                 return {"PASS_THROUGH"}
 
-            rack     = ai_racks[ai_idx]
-            text     = getattr(rack, 'ai_text', '') or ''
+            rack      = ai_racks[ai_idx]
+            _tf_field = _active_text_field.get('field', 'ai_text')
+            if _tf_field == 'ai_text':
+                text = getattr(rack, 'ai_text', '') or ''
+            else:
+                text = str(rack.get(_tf_field, '') or '')
             cursor   = _active_text_field.get('cursor', len(text))
             sel_start = _active_text_field.get('sel_start', -1)
             sel_end   = _active_text_field.get('sel_end', -1)
@@ -674,14 +678,17 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 _active_text_field['sel_end']   = len(text)
                 cursor = len(text)
             elif event.type == "RET" or event.type == "NUMPAD_ENTER":
-                if event.shift:
+                if event.shift and _tf_field == 'ai_text':
                     if _has_sel():
                         text, cursor = _delete_sel(); _clear_sel()
                     text   = text[:cursor] + "\n" + text[cursor:]
                     cursor += 1
                 else:
                     _active_text_field = None
-                    rack.ai_text = text
+                    if _tf_field == 'ai_text':
+                        rack.ai_text = text
+                    else:
+                        rack[_tf_field] = text
                     context.area.tag_redraw()
                     return {"RUNNING_MODAL"}
             elif event.type == "ESC":
@@ -699,7 +706,10 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 consumed = False
 
             if consumed:
-                rack.ai_text = text
+                if _tf_field == 'ai_text':
+                    rack.ai_text = text
+                else:
+                    rack[_tf_field] = text
                 _active_text_field['cursor'] = cursor
                 context.area.tag_redraw()
                 return {"RUNNING_MODAL"}

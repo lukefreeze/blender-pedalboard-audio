@@ -186,6 +186,11 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
             _ensure_meter_timer()
             prebuild_envelopes()
             _pb_engine_enable()
+            # Ensure tracks exist even on blank scenes
+            try:
+                _sync_tracks_to_vse(context.scene, reset_values=False)
+            except Exception as _se:
+                print(f"[TOGGLE] track sync failed: {_se}")
         else:
             _set_hud('HUD_AREA_PTR', None)
             save_ui_state()
@@ -252,6 +257,13 @@ def _deferred_invoke():
         _ensure_meter_timer()
         prebuild_envelopes()
         _pb_engine_enable()
+        # Ensure tracks are synced even on blank scenes
+        try:
+            scene = bpy.context.scene
+            if scene:
+                _sync_tracks_to_vse(scene, reset_values=False)
+        except Exception as se:
+            print(f"[STATE] track sync failed: {se}")
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 area.tag_redraw()
@@ -266,7 +278,6 @@ def _deferred_invoke():
 from core.properties import PB_TrackSettings
 
 classes = (
-    PB_TrackSettings,
     VSE_OT_SetFaderValue,
     VSE_OT_TogglePBGui,
     VSE_OT_RefreshPBTracks,
@@ -317,7 +328,10 @@ def unregister():
     bpy.types.NODE_HT_header.remove(draw_header_buttons)
 
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
 
     unregister_properties()
     print("[UNREGISTER] Pedalboard unregistered")
