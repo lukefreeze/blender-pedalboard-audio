@@ -207,7 +207,7 @@ def preview_voice_card(ai_idx, voice_idx, context):
     _voice_preview_state.pop(ai_idx, None)
 
     try:
-        from ui.racks.rack_rvc import _discover_ref_voices
+        from ui.racks.rack_knnvc import _discover_ref_voices
         voices = _discover_ref_voices(ai_idx)
     except Exception:
         voices = []
@@ -382,7 +382,7 @@ def convert_knnvc(ai_idx, context):
         return
 
     try:
-        from ui.racks.rack_rvc import _discover_ref_voices
+        from ui.racks.rack_knnvc import _discover_ref_voices
         voices = _discover_ref_voices(ai_idx)
     except Exception:
         voices = []

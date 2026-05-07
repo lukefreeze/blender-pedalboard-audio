@@ -106,7 +106,7 @@ AI_RACK_TYPES = [
     ("DEEPFILTERNET", "DeepFilterNet — AI Noise Reduction"),
     ("PIPER_TTS",     "Piper TTS — Text to Speech"),
     ("RVC",           "Voice Conversion kNN-VC (Beta)"),
-    ("RESEMBLE",      "Resemble Enhance — Voice Restoration (Beta)"),
+    ("RESEMBLE",      "VoiceFixer — Speech Restoration (Beta)"),
     ("WHISPER",       "Whisper — Speech to Text"),
     ("DEMUCS",        "Demucs — Source Separation"),
     ("MATCHERING",    "Matchering — AI Mastering"),
@@ -4494,7 +4494,7 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
 
     elif atype == "RVC":
         try:
-            from ui.racks.rack_rvc import _draw_rvc_body
+            from ui.racks.rack_knnvc import _draw_rvc_body
             _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale)
         except Exception as e:
             print(f"[AI RACKS] RVC draw error rack {ai_idx}: {e}")
@@ -4502,10 +4502,10 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
 
     elif atype == "RESEMBLE":
         try:
-            from ui.racks.rack_resemble import _draw_resemble_body
-            _draw_resemble_body(rx, ry, rw, rh, rack, ai_idx, scale)
+            from ui.racks.rack_voicefixer import _draw_voicefixer_body
+            _draw_voicefixer_body(rx, ry, rw, rh, rack, ai_idx, scale)
         except Exception as e:
-            print(f"[AI RACKS] Resemble draw error rack {ai_idx}: {e}")
+            print(f"[AI RACKS] VoiceFixer draw error rack {ai_idx}: {e}")
             import traceback; traceback.print_exc()
 
 
@@ -4969,7 +4969,7 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             #   cards_bot = work_top - fs_lbl - fs_ch*2 - 14*scale
             #   hint_y    = cards_bot - fs_lbl - 2*scale
             try:
-                from ui.racks.rack_rvc import _discover_ref_voices as _gv2
+                from ui.racks.rack_knnvc import _discover_ref_voices as _gv2
                 _vlist2 = _gv2(ai_idx)
             except Exception:
                 _vlist2 = []
@@ -4994,6 +4994,76 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
                 if (_lx2+4*scale <= mouse_x <= _lx2+_left_w2-4*scale and
                         _cy2 <= mouse_y <= _cy2+_card_h2):
                     return {'zone': 'ai_rvc_voice', 'ai_idx': ai_idx, 'voice_idx': _slot}
+        # VoiceFixer hit test (RESEMBLE rack type)
+        if rack.ai_type == "RESEMBLE" and not rack.collapsed:
+            _mg_vf      = 8 * scale
+            _rail_h_vf  = 32 * scale
+            _body_bot_vf = rack_y
+            _body_top_vf = rack_y + rack_h - _rail_h_vf
+            _body_h_vf  = _body_top_vf - _body_bot_vf
+            _sbar_h_vf  = max(16*scale, _body_h_vf*0.07)
+            _left_w_vf  = rw * 0.30
+            _right_w_vf = rw * 0.24
+            _cent_w_vf  = rw - _left_w_vf - _right_w_vf - _mg_vf*4
+            _cent_x_vf  = rack_x + _mg_vf + _left_w_vf + _mg_vf
+            _lx_vf      = rack_x + _mg_vf
+            _work_bot_vf = _body_bot_vf + _sbar_h_vf + 2*scale
+            _work_top_vf = _body_top_vf - 2*scale
+            _work_h_vf  = _work_top_vf - _work_bot_vf
+            _fs_lbl_vf  = max(1, int(7*scale))
+
+            # Mode selector buttons (3 stacked in left panel)
+            _mode_sec_h = _work_h_vf * 0.62
+            _mode_sep_y = _work_bot_vf + _work_h_vf - _fs_lbl_vf*2 - 18*scale
+            _btn_h_m    = min(_mode_sec_h/3 - 3*scale, 28*scale)
+            for _mi in range(3):
+                _btn_y_m = _mode_sep_y - (_mi+1)*(_btn_h_m+3*scale)
+                if _btn_y_m < _work_bot_vf + 2*scale: break
+                if (_lx_vf+4*scale <= mouse_x <= _lx_vf+_left_w_vf-4*scale and
+                        _btn_y_m <= mouse_y <= _btn_y_m+_btn_h_m):
+                    return {'zone': 'ai_vf_mode', 'ai_idx': ai_idx, 'mode_idx': _mi}
+
+            # ENHANCE + PREVIEW buttons
+            _state_h_vf = _work_h_vf * 0.44
+            _state_y_vf = _work_bot_vf + _work_h_vf - _fs_lbl_vf - 10*scale - _state_h_vf
+            _btn_h_vf   = max(22*scale, _work_h_vf*0.11)
+            _btn_y_vf   = _state_y_vf - 2*scale - _btn_h_vf
+            _enh_w_vf   = _cent_w_vf * 0.52
+            _enh_x_vf   = _cent_x_vf + 4*scale
+            _prv_w_vf   = _cent_w_vf * 0.38
+            _prv_x_vf   = _enh_x_vf + _enh_w_vf + 4*scale
+            if (_enh_x_vf <= mouse_x <= _enh_x_vf+_enh_w_vf and
+                    _btn_y_vf <= mouse_y <= _btn_y_vf+_btn_h_vf):
+                return {'zone': 'ai_vf_enhance', 'ai_idx': ai_idx}
+            if (_prv_x_vf <= mouse_x <= _prv_x_vf+_prv_w_vf and
+                    _btn_y_vf <= mouse_y <= _btn_y_vf+_btn_h_vf):
+                return {'zone': 'ai_vf_preview', 'ai_idx': ai_idx}
+
+            # Output channel < > arrows
+            _row2_h_vf  = max(16*scale, _work_h_vf*0.08)
+            _row2_y_vf  = _btn_y_vf - 2*scale - _row2_h_vf
+            _lbl_tw_vf  = max(1,int(7*scale)) * 6 * 0.6
+            _arr_w_vf   = max(14*scale, _row2_h_vf)
+            _oc_s_vf    = max(22*scale, _row2_h_vf)
+            _minus_x_vf = _cent_x_vf + 4*scale + _lbl_tw_vf
+            _plus_x_vf  = _minus_x_vf + _arr_w_vf + 2*scale + _oc_s_vf + 2*scale
+            if (_minus_x_vf <= mouse_x <= _minus_x_vf+_arr_w_vf and
+                    _row2_y_vf <= mouse_y <= _row2_y_vf+_row2_h_vf):
+                return {'zone': 'ai_vf_outch_dec', 'ai_idx': ai_idx}
+            if (_plus_x_vf <= mouse_x <= _plus_x_vf+_arr_w_vf and
+                    _row2_y_vf <= mouse_y <= _row2_y_vf+_row2_h_vf):
+                return {'zone': 'ai_vf_outch_inc', 'ai_idx': ai_idx}
+
+            # Setup guide button
+            try:
+                btn_geom = rack.get('vf_setup_btn')
+                if btn_geom:
+                    bx,by,bw,bh = btn_geom
+                    if bx <= mouse_x <= bx+bw and by <= mouse_y <= by+bh:
+                        return {'zone': 'ai_resemble_setup_guide', 'ai_idx': ai_idx}
+            except Exception:
+                pass
+
         # Preset arrows — exact same geometry as draw code
         try:
             from ui.mixer.draw_utils import text_width as _tw_ps
@@ -5430,9 +5500,61 @@ def handle_ai_rack_click(hit, context):
         return True
 
     # Resemble setup guide button
+    # VoiceFixer setup guide
     if zone == 'ai_resemble_setup_guide':
         import webbrowser
-        webbrowser.open("https://github.com/resemble-ai/resemble-enhance")
+        webbrowser.open("https://github.com/haoheliu/voicefixer")
+        return True
+
+    # VoiceFixer ENHANCE button
+    if zone == 'ai_vf_enhance':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_voicefixer import enhance_voicefixer
+                enhance_voicefixer(i, context)
+            except Exception as e:
+                import traceback
+                print(f"[VOICEFIXER] enhance failed: {e}")
+                traceback.print_exc()
+        return True
+
+    # VoiceFixer PREVIEW button
+    if zone == 'ai_vf_preview':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_voicefixer import preview_voicefixer
+                preview_voicefixer(i, context)
+            except Exception as e:
+                print(f"[VOICEFIXER] preview failed: {e}")
+        return True
+
+    # VoiceFixer mode selector
+    if zone == 'ai_vf_mode':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p0 = float(hit.get('mode_idx', 0))
+        return True
+
+    # VoiceFixer output channel dec/inc
+    if zone == 'ai_vf_outch_dec':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p3', 1.0))
+            ai_racks[i].p3 = float(max(1, cur-1))
+        return True
+
+    if zone == 'ai_vf_outch_inc':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p3', 1.0))
+            ai_racks[i].p3 = float(min(9, cur+1))
         return True
 
     return False
