@@ -1,0 +1,11 @@
+# Piper binary and dependencies — large files, set up manually per platform
+win_x64/
+macos_arm/
+macos_x64/
+linux_x64/
+
+# Voice model binaries — large, add manually from HuggingFace
+voices/*.onnx
+
+# Voice configs are small JSON — these ARE tracked in git
+!voices/*.json
