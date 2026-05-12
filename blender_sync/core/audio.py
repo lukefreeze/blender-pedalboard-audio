@@ -1445,6 +1445,11 @@ def _pb_start_all_from_frame(scene, frame):
     if frame < effective_start or frame >= effective_end:
         frame = effective_start
         print(f"[ENGINE] cursor outside sequence, snapping to frame {frame}")
+        # Also move Blender's timeline cursor so it matches the audio position
+        try:
+            scene.frame_set(frame)
+        except Exception:
+            pass
     else:
         frame = max(effective_start, min(effective_end, frame))
 
@@ -1577,28 +1582,15 @@ def _pb_do_eq_rebuild(channel_idx):
 @bpy.app.handlers.persistent
 def _pb_on_play_start(scene, depsgraph=None):
     """Fired by Blender exactly once when animation playback begins.
-    On a loop restart, use scene.frame_start directly — Blender hasn't
-    updated frame_current yet when this handler fires after a loop.
+    Always starts from scene.frame_current — _pb_loop_detect handles
+    loop restarts independently via frame_change_post.
     """
     global _pb_is_loop_restart
     if not _pb_engine_active:
         return
     try:
-        # If play fires within 200ms of stop, it's a loop restart.
-        # Use frame_start directly — frame_current is unreliable at this moment.
-        time_since_stop = _time.time() - _pb_stop_time
-        is_loop = (time_since_stop < 0.20)
-
-        if is_loop:
-            effective_start = int(scene.frame_preview_start
-                                  if scene.use_preview_range
-                                  else scene.frame_start)
-            print(f"[ENGINE] loop restart from frame {effective_start} "
-                  f"({time_since_stop*1000:.0f}ms after stop)")
-            _pb_start_all_from_frame(scene, effective_start)
-        else:
-            print(f"[ENGINE] play start at frame {scene.frame_current}")
-            _pb_start_all(scene)
+        print(f"[ENGINE] play start at frame {scene.frame_current}")
+        _pb_start_all(scene)
     except Exception as e:
         print(f"[ENGINE] play start error: {e}")
 
@@ -1617,41 +1609,72 @@ def _pb_on_play_stop(scene, depsgraph=None):
 
 @bpy.app.handlers.persistent
 def _pb_loop_detect(scene, depsgraph=None):
-    """Watches frame_change_post for the loop jump that Blender does silently.
-    Blender does NOT fire animation_playback_post/pre at loop points —
-    the frame simply jumps backwards. We detect this and restart audio.
-    1 second cooldown prevents multiple restarts from duplicate frame events.
+    """Watches frame_change_post for:
+    1. Genuine loop restarts (Blender jumps back to frame_start silently)
+    2. Mid-playback cursor seeks (user clicks timeline during playback)
+    Both require restarting audio from the new position.
     """
-    global _pb_last_frame, _pb_last_loop_time
-    if not _pb_engine_active or not _pb_channels:
+    global _pb_last_frame, _pb_last_loop_time, _pb_start_frame, _pb_start_wall
+    if not _pb_engine_active:
         _pb_last_frame = scene.frame_current
         return
 
     current = scene.frame_current
 
-    # Cooldown: ignore loop detection for 1 second after last restart
-    if _time.time() - _pb_last_loop_time < 1.0:
+    # Not playing — just track the frame, no audio action needed
+    try:
+        is_playing = bpy.context.screen.is_animation_playing
+    except Exception:
+        is_playing = False
+
+    if not is_playing:
         _pb_last_frame = current
         return
 
-    # A loop jump is a large backward jump during playback.
-    # Threshold of 10 frames avoids false positives from scrubbing.
-    if _pb_last_frame > 0 and (current < _pb_last_frame - 10):
-        effective_start = int(scene.frame_preview_start
-                              if scene.use_preview_range
-                              else scene.frame_start)
+    # Normal playback: frame advances by 1 (or small amount at varying fps).
+    # delta=0 means Blender fired twice on same frame (happens after restarts) — ignore.
+    frame_delta = current - _pb_last_frame
+
+    if frame_delta == 0 or (0 < frame_delta <= 5):
+        _pb_last_frame = current
+        return
+
+    # If channels are empty, playback just stopped (stop fired before this).
+    # _pb_on_play_start will handle the restart with correct position.
+    # Don't double-restart here.
+    if not _pb_channels:
+        _pb_last_frame = current
+        return
+
+    # Cooldown logic: only skip if destination is within 3 frames of where
+    # we last restarted (user clicking the same spot — audio is already there).
+    # Any seek to a new position always goes through immediately.
+    # Out-of-bounds seeks always go through (snap to frame 1).
+    effective_start = int(scene.frame_preview_start
+                          if scene.use_preview_range
+                          else scene.frame_start)
+    effective_end   = int(scene.frame_preview_end
+                          if scene.use_preview_range
+                          else scene.frame_end)
+    out_of_bounds = (current < effective_start or current >= effective_end)
+
+    # _pb_start_frame is set to the frame we last restarted from
+    already_there = (abs(current - _pb_start_frame) <= 3)
+    time_since_last = _time.time() - _pb_last_loop_time
+
+    if not out_of_bounds and already_there and time_since_last < 0.5:
+        _pb_last_frame = current
+        return
+
+    if frame_delta < 0 and abs(current - effective_start) <= 2:
+        # Genuine loop: large backward jump landing exactly on frame_start
         print(f"[ENGINE] loop jump detected: {_pb_last_frame}→{current}, "
               f"restarting from frame {effective_start}")
         _pb_last_loop_time = _time.time()
-
-        # CRITICAL: reset position tracking globals BEFORE replaying cache
-        # so that _pb_reprocess_channel uses correct position after loop
         fps_loop        = scene.render.fps / scene.render.fps_base
         _pb_start_frame = effective_start
         _pb_start_wall  = _time.time()
 
-        # Reset timeline start_frame to loop start.
-        # Swap to full-track timelines where available so bars cover full sequence.
         _loop_start_s = effective_start / fps_loop
         for _ch_k in set(list(_fft_timeline.keys()) +
                           list(_fft_timeline_full.keys())):
@@ -1666,15 +1689,12 @@ def _pb_loop_detect(scene, depsgraph=None):
                 _gt['start_frame'] = _loop_start_s * _gt['fps']
                 _gr_timeline[_ch_k] = _gt
 
-        # Stop existing handles
         channels_snapshot = dict(_pb_channels)
         _pb_channels.clear()
         for ch_data in channels_snapshot.values():
             try: ch_data['handle'].stop()
             except Exception: pass
 
-        # Replay full-track cached wav (from frame_start) for clean loop.
-        # Falls back to trimmed cache if full-track not available.
         device = _pb_get_device()
         all_ch = set(list(_pb_full_wav_cache.keys()) +
                      list(_pb_proc_wav_cache.keys()))
@@ -1698,29 +1718,19 @@ def _pb_loop_detect(scene, depsgraph=None):
                         'channel_idx': ch_idx,
                         'proc_wav'   : replay_wav,
                     }
-                    src = ("full-track" if replay_wav == full_wav
-                           else "trimmed fallback")
-                    wav_kb = os.path.getsize(replay_wav) // 1024
-                    print(f"[ENGINE] ch{ch_idx+1} loop: replay from {src} cache "
-                          f"({wav_kb}KB) from frame {effective_start}")
-                else:
-                    print(f"[ENGINE] ch{ch_idx+1} loop: no cache available — "
-                          f"will restart on next play")
+                    print(f"[ENGINE] ch{ch_idx+1} loop: restart from frame {effective_start}")
             except Exception as _le:
                 print(f"[ENGINE] ch{ch_idx+1} loop cache replay failed: {_le}")
 
-        # Restart any channels that had no cached wav (EQ-only, no rack assigned).
-        # These play directly from aud.Sound so we just re-call _pb_start_channel.
         try:
             from Racks import get_rack_channels as _grc_loop
             scene_loop = bpy.context.scene
             racks_loop = getattr(scene_loop, "pb_racks", []) if scene_loop else []
             cached_channels = set(list(_pb_full_wav_cache.keys()) +
                                   list(_pb_proc_wav_cache.keys()))
-            # Find channels that were playing but have no rack and no cache
             for _ch_idx in list(channels_snapshot.keys()):
                 if _ch_idx in cached_channels:
-                    continue  # already handled above
+                    continue
                 has_rack_loop = any(
                     r.enabled and _ch_idx in _grc_loop(r)
                     for r in racks_loop
@@ -1732,6 +1742,14 @@ def _pb_loop_detect(scene, depsgraph=None):
                     _pb_start_channel(_ch_idx, loop_pos_s)
         except Exception as _nrl:
             print(f"[ENGINE] loop no-rack restart failed: {_nrl}")
+
+    else:
+        # Mid-playback cursor seek — forward or backward jump that isn't a loop.
+        # Restart audio from the new cursor position.
+        print(f"[ENGINE] mid-playback seek: {_pb_last_frame}→{current}, "
+              f"restarting audio from frame {current}")
+        _pb_last_loop_time = _time.time()
+        _pb_start_all_from_frame(scene, current)
 
     _pb_last_frame = current
 

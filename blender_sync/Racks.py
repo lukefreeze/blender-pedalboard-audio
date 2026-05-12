@@ -465,21 +465,25 @@ class PB_AIRackSettings(bpy.types.PropertyGroup):
     # p1 = Sensitivity / voice activity threshold (0-1)
     # p2 = Post gain (norm 0-1, maps -12..+12 dB)
     # p3-p7 reserved for Whisper/Demucs/Piper/Matchering
-    p0: bpy.props.FloatProperty(default=0.5)   # Attenuation default = -20dB
+    p0: bpy.props.FloatProperty(default=1.0)   # Whisper model default = Base (index 1)
     p1: bpy.props.FloatProperty(default=0.75)  # Sensitivity default = 0.75
     p2: bpy.props.FloatProperty(default=0.5)   # Post gain default = 0dB
     p3: bpy.props.FloatProperty(default=0.0)
-    p4: bpy.props.FloatProperty(default=0.0)
+    p4: bpy.props.FloatProperty(default=40.0)  # Whisper font size default = 40
     p5: bpy.props.FloatProperty(default=0.0)
-    p6: bpy.props.FloatProperty(default=0.0)
-    p7: bpy.props.FloatProperty(default=0.0)
+    p6: bpy.props.FloatProperty(default=2.0)   # Whisper position default = BOT
+    p7: bpy.props.FloatProperty(default=1.0)   # Whisper VAD default = on
     # Processing state — updated by the processing thread
     ai_status: bpy.props.StringProperty(default="READY")
     # Text field for Piper TTS script input
     ai_text: bpy.props.StringProperty(default="", maxlen=4096)
     # Path to last processed output file (for reload/bypass)
-    ai_output_path: bpy.props.StringProperty(default="", subtype='FILE_PATH')
-    preset_idx:     bpy.props.IntProperty(default=0)
+    ai_output_path:    bpy.props.StringProperty(default="", subtype='FILE_PATH')
+    preset_idx:        bpy.props.IntProperty(default=0)
+    # Whisper-specific properties
+    wsp_font_path:     bpy.props.StringProperty(default="", subtype='FILE_PATH')
+    wsp_srt_path:      bpy.props.StringProperty(default="")
+    wsp_chunk_length:  bpy.props.IntProperty(default=10, min=5, max=30)
 
 
 # ---------------------------------------------------------------------------
@@ -4508,6 +4512,14 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
             print(f"[AI RACKS] VoiceFixer draw error rack {ai_idx}: {e}")
             import traceback; traceback.print_exc()
 
+    elif atype == "WHISPER":
+        try:
+            from ui.racks.rack_whisper import _draw_whisper_body
+            _draw_whisper_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] Whisper draw error rack {ai_idx}: {e}")
+            import traceback; traceback.print_exc()
+
 
 def draw_ai_racks(rx, ry, scale, area_width=None):
     """Draw the AI processing section — divider + all AI racks + add button.
@@ -5154,6 +5166,163 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             if bx <= mouse_x <= bx + ch_btn_s and by <= mouse_y <= by + ch_btn_h:
                 return {'zone': 'ai_channel_btn', 'ai_idx': ai_idx, 'ch_idx': ci}
 
+        # ── Whisper hit test ───────────────────────────────────────────────────
+        if rack.ai_type == "WHISPER" and not rack.collapsed:
+            _rail_wsp   = RACK_RAIL_H * scale
+            _body_bot_w = rack_y
+            _body_top_w = rack_y + rack_h - _rail_wsp
+            _body_h_w   = _body_top_w - _body_bot_w
+            _mg_w       = 8 * scale
+            _sbar_h_w   = max(22 * scale, _body_h_w * 0.07)
+            _work_bot_w = _body_bot_w + _sbar_h_w + 2 * scale
+            _work_top_w = _body_top_w - 2 * scale
+            _work_h_w   = _work_top_w - _work_bot_w
+
+            _col_w   = (rw - _mg_w * 4) / 3
+            _col1_x  = rack_x + _mg_w
+            _col2_x  = _col1_x + _col_w + _mg_w
+            _col3_x  = _col2_x + _col_w + _mg_w
+
+            _row_h_w = max(18 * scale, _work_h_w * 0.105)
+            _arr_w_w = max(14 * scale, _row_h_w * 0.9)
+            _fs_l_w  = max(1, int(8 * scale))
+            _fs_sm_w = max(1, int(7 * scale))
+            _btn_gap = 3 * scale
+            _ch_s    = min(20 * scale, (_col_w - _btn_gap * 8) / 9)
+            _fitem_h = max(12 * scale, _fs_sm_w + 4 * scale)
+
+            # ── COL 1: Input channel buttons ──────────────────────────────
+            _in_lbl_y  = _work_top_w - _fs_l_w - 4 * scale
+            _in_ch_y   = _in_lbl_y - _ch_s - 4 * scale
+            for ci in range(9):
+                _bx = _col1_x + ci * (_ch_s + _btn_gap)
+                if _bx <= mouse_x <= _bx + _ch_s and _in_ch_y <= mouse_y <= _in_ch_y + _ch_s:
+                    return {'zone': 'ai_wsp_inch_btn', 'ai_idx': ai_idx, 'ch_idx': ci}
+
+            # ── COL 1: Output channel buttons ─────────────────────────────
+            _out_lbl_y = _in_ch_y - _fs_l_w - 10 * scale
+            _out_ch_y  = _out_lbl_y - _ch_s - 4 * scale
+            for ci in range(9):
+                _bx = _col1_x + ci * (_ch_s + _btn_gap)
+                if _bx <= mouse_x <= _bx + _ch_s and _out_ch_y <= mouse_y <= _out_ch_y + _ch_s:
+                    return {'zone': 'ai_wsp_outch_btn', 'ai_idx': ai_idx, 'ch_idx': ci}
+
+            # ── COL 1: Model selector ‹ › ─────────────────────────────────
+            _mdl_lbl_y = _out_ch_y - _fs_l_w - 10 * scale - 8 * scale  # divider gap
+            _mdl_sel_y = _mdl_lbl_y - _row_h_w - 2 * scale
+            _mdl_nbw   = _col_w - _arr_w_w * 2 - 4 * scale
+            _mdl_nbx   = _col1_x + _arr_w_w + 2 * scale
+            _mdl_ra_x  = _mdl_nbx + _mdl_nbw + 2 * scale
+            if _col1_x <= mouse_x <= _col1_x + _arr_w_w and _mdl_sel_y <= mouse_y <= _mdl_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_model_prev', 'ai_idx': ai_idx}
+            if _mdl_ra_x <= mouse_x <= _mdl_ra_x + _arr_w_w and _mdl_sel_y <= mouse_y <= _mdl_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_model_next', 'ai_idx': ai_idx}
+
+            # ── COL 1: Max segment length (chunk) ‹ › ─────────────────────
+            _chk_lbl_y = _mdl_sel_y - _fs_sm_w - 4 * scale - _fs_l_w - 8 * scale
+            _chk_sel_y = _chk_lbl_y - _row_h_w - 2 * scale
+            _chk_nbw   = _col_w - _arr_w_w * 2 - 4 * scale
+            _chk_nbx   = _col1_x + _arr_w_w + 2 * scale
+            _chk_ra_x  = _chk_nbx + _chk_nbw + 2 * scale
+            if _col1_x <= mouse_x <= _col1_x + _arr_w_w and _chk_sel_y <= mouse_y <= _chk_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_chunk_dec', 'ai_idx': ai_idx}
+            if _chk_ra_x <= mouse_x <= _chk_ra_x + _arr_w_w and _chk_sel_y <= mouse_y <= _chk_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_chunk_inc', 'ai_idx': ai_idx}
+
+            # ── COL 2: Font scroll list + scroll buttons ───────────────────
+            _flist_h      = min(_work_h_w * 0.30, _fitem_h * 7)
+            _scroll_btn_w = max(14 * scale, _fitem_h * 0.9)
+            _flist_w      = _col_w - _scroll_btn_w - 2 * scale
+            _flist_y      = _work_top_w - _fs_l_w - 4 * scale - _flist_h - 2 * scale
+            _sbtn_x       = _col2_x + _flist_w + 2 * scale
+            _sbtn_h       = _flist_h / 2 - 1 * scale
+            # Click on list items
+            if _col2_x <= mouse_x <= _col2_x + _flist_w and _flist_y <= mouse_y <= _flist_y + _flist_h:
+                _slot = int((_flist_y + _flist_h - mouse_y) / _fitem_h)
+                return {'zone': 'ai_wsp_font_pick', 'ai_idx': ai_idx, 'row': _slot}
+            # ▲ scroll up
+            if (_sbtn_x <= mouse_x <= _sbtn_x + _scroll_btn_w and
+                    _flist_y + _sbtn_h + 2 * scale <= mouse_y <= _flist_y + _flist_h):
+                return {'zone': 'ai_wsp_font_scroll_up', 'ai_idx': ai_idx}
+            # ▼ scroll down
+            if (_sbtn_x <= mouse_x <= _sbtn_x + _scroll_btn_w and
+                    _flist_y <= mouse_y <= _flist_y + _sbtn_h):
+                return {'zone': 'ai_wsp_font_scroll_dn', 'ai_idx': ai_idx}
+
+            # ── COL 2: Font size − + ──────────────────────────────────────
+            _sz_lbl_y  = _flist_y - _fs_l_w - 8 * scale
+            _sz_y      = _sz_lbl_y - _row_h_w - 2 * scale
+            _sz_aw     = max(14 * scale, _row_h_w * 0.9)
+            _sz_vw     = _col_w - _sz_aw * 2 - 4 * scale
+            # − button
+            if _col2_x <= mouse_x <= _col2_x + _sz_aw and _sz_y <= mouse_y <= _sz_y + _row_h_w:
+                return {'zone': 'ai_wsp_size_dec', 'ai_idx': ai_idx}
+            # + button
+            _sz_ra_x = _col2_x + _sz_aw + 2 * scale + _sz_vw + 2 * scale
+            if _sz_ra_x <= mouse_x <= _sz_ra_x + _sz_aw and _sz_y <= mouse_y <= _sz_y + _row_h_w:
+                return {'zone': 'ai_wsp_size_inc', 'ai_idx': ai_idx}
+
+            # ── COL 2: Style buttons B I U SH BOX ─────────────────────────
+            _sty_lbl_y = _sz_y - _fs_l_w - 8 * scale
+            _sty_y     = _sty_lbl_y - _row_h_w - 2 * scale
+            _sty_bw    = (_col_w - 4 * _btn_gap) / 5
+            for si in range(5):
+                _sbx = _col2_x + si * (_sty_bw + _btn_gap)
+                if _sbx <= mouse_x <= _sbx + _sty_bw and _sty_y <= mouse_y <= _sty_y + _row_h_w:
+                    return {'zone': 'ai_wsp_style_btn', 'ai_idx': ai_idx, 'style_idx': si}
+
+            # ── COL 2: Position buttons TOP MID BOT ───────────────────────
+            _pos_lbl_y = _sty_y - _fs_l_w - 8 * scale
+            _pos_y     = _pos_lbl_y - _row_h_w - 2 * scale
+            _pos_bw    = (_col_w - 2 * _btn_gap) / 3
+            for pi in range(3):
+                _pbx = _col2_x + pi * (_pos_bw + _btn_gap)
+                if _pbx <= mouse_x <= _pbx + _pos_bw and _pos_y <= mouse_y <= _pos_y + _row_h_w:
+                    return {'zone': 'ai_wsp_pos_btn', 'ai_idx': ai_idx, 'pos_idx': pi}
+
+            # ── COL 3: Language selector ‹ › ──────────────────────────────
+            _lng_lbl_y = _work_top_w - _fs_l_w - 4 * scale
+            _lng_sel_y = _lng_lbl_y - _row_h_w - 2 * scale
+            _lng_nbw   = _col_w - _arr_w_w * 2 - 4 * scale
+            _lng_nbx   = _col3_x + _arr_w_w + 2 * scale
+            _lng_ra_x  = _lng_nbx + _lng_nbw + 2 * scale
+            if _col3_x <= mouse_x <= _col3_x + _arr_w_w and _lng_sel_y <= mouse_y <= _lng_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_lang_prev', 'ai_idx': ai_idx}
+            if _lng_ra_x <= mouse_x <= _lng_ra_x + _arr_w_w and _lng_sel_y <= mouse_y <= _lng_sel_y + _row_h_w:
+                return {'zone': 'ai_wsp_lang_next', 'ai_idx': ai_idx}
+
+            # ── COL 3: Mode buttons TRANSCRIBE / TRANSLATE→EN ─────────────
+            _mode_lbl_y = _lng_sel_y - _fs_sm_w - 3 * scale - _fs_l_w - 8 * scale
+            _mode_y     = _mode_lbl_y - _row_h_w - 2 * scale
+            _mbw        = (_col_w - _btn_gap) / 2
+            if _col3_x <= mouse_x <= _col3_x + _mbw and _mode_y <= mouse_y <= _mode_y + _row_h_w:
+                return {'zone': 'ai_wsp_mode_btn', 'ai_idx': ai_idx, 'mode_idx': 0}
+            if _col3_x + _mbw + _btn_gap <= mouse_x <= _col3_x + _col_w and _mode_y <= mouse_y <= _mode_y + _row_h_w:
+                return {'zone': 'ai_wsp_mode_btn', 'ai_idx': ai_idx, 'mode_idx': 1}
+
+            # ── COL 3: VAD toggle pill ────────────────────────────────────
+            _pill_w    = 30 * scale
+            _pill_h    = 14 * scale
+            _pill_x    = _col3_x + _col_w - _pill_w
+            _vad_lbl_y = _mode_y - _fs_sm_w - 3 * scale - 8 * scale - 6 * scale  # note + divider
+            _vad_y     = _vad_lbl_y - 1 * scale
+            if _pill_x <= mouse_x <= _pill_x + _pill_w and _vad_y <= mouse_y <= _vad_y + _pill_h:
+                return {'zone': 'ai_wsp_vad_toggle', 'ai_idx': ai_idx}
+
+            # ── COL 3: SRT toggle pill ────────────────────────────────────
+            _srt_lbl_y = _vad_y - _pill_h - 2 * scale - _fs_l_w - 10 * scale
+            _srt_y     = _srt_lbl_y - 1 * scale
+            if _pill_x <= mouse_x <= _pill_x + _pill_w and _srt_y <= mouse_y <= _srt_y + _pill_h:
+                return {'zone': 'ai_wsp_srt_toggle', 'ai_idx': ai_idx}
+
+            # ── Status bar TRANSCRIBE button ──────────────────────────────
+            _tbtn_w = min(rw * 0.22, 150 * scale)
+            _tbtn_x = rack_x + rw - _tbtn_w - _mg_w
+            _tbtn_y = _body_bot_w + 2 * scale
+            _tbtn_h = _sbar_h_w - 4 * scale
+            if _tbtn_x <= mouse_x <= _tbtn_x + _tbtn_w and _tbtn_y <= mouse_y <= _tbtn_y + _tbtn_h:
+                return {'zone': 'ai_wsp_transcribe', 'ai_idx': ai_idx}
+
         return {'zone': 'ai_rack_body', 'ai_idx': ai_idx}
 
     return None
@@ -5555,6 +5724,200 @@ def handle_ai_rack_click(hit, context):
         if i < len(ai_racks):
             cur = int(getattr(ai_racks[i], 'p3', 1.0))
             ai_racks[i].p3 = float(min(9, cur+1))
+        return True
+
+    # ── Whisper handlers ──────────────────────────────────────────────────────
+    if zone == 'ai_wsp_inch_btn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']; ci = hit['ch_idx']
+        if i < len(ai_racks):
+            rack = ai_racks[i]
+            already = all(getattr(rack, f'ch{j}', False) == (j == ci) for j in range(9))
+            for j in range(9):
+                setattr(rack, f'ch{j}', False)
+            if not already:
+                setattr(rack, f'ch{ci}', True)
+        return True
+
+    if zone == 'ai_wsp_outch_btn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p3 = float(hit['ch_idx'] + 1)
+        return True
+
+    if zone == 'ai_wsp_model_prev':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p0', 1.0))
+            ai_racks[i].p0 = float(max(0, cur - 1))
+        return True
+
+    if zone == 'ai_wsp_model_next':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_whisper import MODEL_SIZES
+                max_idx = len(MODEL_SIZES) - 1
+            except ImportError:
+                max_idx = 4
+            cur = int(getattr(ai_racks[i], 'p0', 1.0))
+            ai_racks[i].p0 = float(min(max_idx, cur + 1))
+        return True
+
+    if zone == 'ai_wsp_lang_prev':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p1', 0.0))
+            ai_racks[i].p1 = float(max(0, cur - 1))
+        return True
+
+    if zone == 'ai_wsp_lang_next':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_whisper import LANGUAGES
+                max_idx = len(LANGUAGES) - 1
+            except ImportError:
+                max_idx = 15
+            cur = int(getattr(ai_racks[i], 'p1', 0.0))
+            ai_racks[i].p1 = float(min(max_idx, cur + 1))
+        return True
+
+    if zone == 'ai_wsp_mode_btn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p2 = float(hit.get('mode_idx', 0))
+        return True
+
+    if zone == 'ai_wsp_font_pick':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from ui.racks.rack_whisper import get_system_fonts, _font_scroll
+                fonts = get_system_fonts()
+                row   = hit.get('row', 0)
+                scroll = _font_scroll.get(i, 0)
+                idx = scroll + row
+                if 0 <= idx < len(fonts):
+                    ai_racks[i].wsp_font_path = fonts[idx][1]
+                    ai_racks[i].ai_text       = fonts[idx][0]
+            except Exception as e:
+                print(f"[WHISPER] font pick error: {e}")
+        return True
+
+    if zone == 'ai_wsp_font_scroll_up':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from ui.racks.rack_whisper import get_system_fonts, _font_scroll
+                fonts = get_system_fonts()
+                cur   = _font_scroll.get(i, 0)
+                _font_scroll[i] = max(0, cur - 3)
+            except Exception as e:
+                print(f"[WHISPER] font scroll error: {e}")
+        return True
+
+    if zone == 'ai_wsp_font_scroll_dn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from ui.racks.rack_whisper import get_system_fonts, _font_scroll
+                fonts = get_system_fonts()
+                cur   = _font_scroll.get(i, 0)
+                _font_scroll[i] = min(max(0, len(fonts) - 1), cur + 3)
+            except Exception as e:
+                print(f"[WHISPER] font scroll error: {e}")
+        return True
+
+    if zone == 'ai_wsp_size_dec':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p4', 40.0))
+            ai_racks[i].p4 = float(max(12, cur - 2))
+        return True
+
+    if zone == 'ai_wsp_size_inc':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = int(getattr(ai_racks[i], 'p4', 40.0))
+            ai_racks[i].p4 = float(min(200, cur + 2))
+        return True
+
+    if zone == 'ai_wsp_chunk_dec':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = getattr(ai_racks[i], 'wsp_chunk_length', 10)
+            ai_racks[i].wsp_chunk_length = max(5, cur - 1)
+        return True
+
+    if zone == 'ai_wsp_chunk_inc':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = getattr(ai_racks[i], 'wsp_chunk_length', 10)
+            ai_racks[i].wsp_chunk_length = min(30, cur + 1)
+        return True
+
+    if zone == 'ai_wsp_style_btn':
+        flags = [1, 2, 4, 8, 16]
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']; si = hit.get('style_idx', 0)
+        if i < len(ai_racks) and si < len(flags):
+            cur = int(getattr(ai_racks[i], 'p5', 0.0))
+            ai_racks[i].p5 = float(cur ^ flags[si])
+        return True
+
+    if zone == 'ai_wsp_pos_btn':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p6 = float(hit.get('pos_idx', 2))
+        return True
+
+    if zone == 'ai_wsp_vad_toggle':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = float(getattr(ai_racks[i], 'p7', 1.0))
+            ai_racks[i].p7 = 0.0 if cur > 0.5 else 1.0
+        return True
+
+    if zone == 'ai_wsp_srt_toggle':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = ai_racks[i].get('wsp_srt_enabled', True)
+            ai_racks[i]['wsp_srt_enabled'] = not cur
+        return True
+
+    if zone == 'ai_wsp_transcribe':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_whisper import transcribe_whisper
+                transcribe_whisper(i, context)
+            except Exception as e:
+                print(f"[WHISPER] transcribe launch failed: {e}")
+                import traceback; traceback.print_exc()
+                ai_racks[i].ai_status = "ERROR"
+        return True
+
+    if zone == 'ai_wsp_setup_guide':
+        import webbrowser
+        webbrowser.open("https://github.com/SYSTRAN/faster-whisper")
         return True
 
     return False
