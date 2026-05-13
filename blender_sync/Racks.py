@@ -99,6 +99,7 @@ EFFECT_TYPES = [
     ("REVERB",      "Reverb"),
     ("NOISE_GATE",  "Noise Gate"),
     ("DELAY",       "Delay"),
+    ("BOOSTER",     "The BOOSTER!!"),
 ]
 
 # AI rack type identifiers — separate namespace from DSP racks
@@ -178,6 +179,10 @@ EFFECT_PARAMS = {
         ("MIX",       "Mix",          0.0,  1.0,  0.3, "{:.0%}"),
         ("SPREAD",    "Spread",       0.0,  1.0,  0.5, "{:.0%}"),
         ("FILTER",    "Filter",       0.0,  1.0,  0.5, "{:.0%}"),
+    ],
+    "BOOSTER": [
+        ("BOOST",   "Boost",   0.0, 40.0, 12.0, "+{:.1f}dB"),
+        ("LIMITER", "Limiter", 0.0,  1.0,  1.0, "on/off"),
     ],
 }
 
@@ -276,6 +281,16 @@ PRESET_DATA['DELAY'] = [
     ('Long Ambient',   [0.249, 0.60,  0.25, 0.80,  0.40]),
 ]
 
+PRESET_DATA['BOOSTER'] = [
+    # name,       [boost_norm (0-1 → 0-40dB), limiter_on (0 or 1)]
+    ('+6 dB',  [6/40,  1.0]),
+    ('+12 dB', [12/40, 1.0]),
+    ('+18 dB', [18/40, 1.0]),
+    ('+24 dB', [24/40, 1.0]),
+    ('+6 Raw',  [6/40,  0.0]),
+    ('+12 Raw', [12/40, 0.0]),
+]
+
 # AI rack presets — keyed by ai_type
 # DeepFilterNet params: [p0=atten(0-1), p1=sensitiv(0-1), p2=postgain_norm(0-1)]
 # p0: 0=no attenuation, 1=max attenuation (-40dB limit)
@@ -345,6 +360,7 @@ PRESETS = {
     "REVERB":      [p[0] for p in PRESET_DATA["REVERB"]],
     "NOISE_GATE":  [p[0] for p in PRESET_DATA["NOISE_GATE"]],
     "DELAY":       [p[0] for p in PRESET_DATA["DELAY"]],
+    "BOOSTER":     [p[0] for p in PRESET_DATA["BOOSTER"]],
 }
 
 # ---------------------------------------------------------------------------
@@ -417,6 +433,8 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     p21: bpy.props.FloatProperty(default=0.14)
     p22: bpy.props.FloatProperty(default=0.14)
     p23: bpy.props.FloatProperty(default=0.14)
+    # Processing state — used by BOOSTER and any future offline DSP racks
+    ai_status: bpy.props.StringProperty(default="READY")
 
 
 # ---------------------------------------------------------------------------
@@ -2880,6 +2898,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
            else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
            else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
            else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
+           else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -3044,6 +3063,19 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
     elif etype == "DELAY":
         _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "BOOSTER":
+        try:
+            from ui.racks.rack_booster import _draw_booster_body
+            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.15, 0.02, 0.02, 1.0))
+            _draw_text("MISSING: blender_sync/ui/racks/rack_booster.py",
+                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
+                       max(1, int(10*scale)), (1.0, 0.3, 0.3, 1.0))
+            print(f"[BOOSTER] ImportError — rack_booster.py not found: {e}")
+        except Exception as e:
+            print(f"[BOOSTER] draw error: {e}")
+            import traceback; traceback.print_exc()
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
         params  = EFFECT_PARAMS.get(etype, [])
@@ -3343,6 +3375,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_NG * ui_scale
         elif rack.effect_type == "DELAY":
             rh = RACK_EXPANDED_H_DL * ui_scale
+        elif rack.effect_type == "BOOSTER":
+            rh = RACK_EXPANDED_H_DL * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -3481,6 +3515,7 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
               else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
               else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
               else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
+              else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
               else RACK_EXPANDED_H) * ui_scale
         rack_y = cur_y - rh
 
@@ -3637,6 +3672,21 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     if math.dist((rx, ry), (cx_dl, row_knob_dl)) < kr_dl + 8*ui_scale:
                         return (i, ki)
 
+            elif rack.effect_type == "BOOSTER":
+                # Geometry mirrors _draw_booster_body exactly:
+                #   left_x  = rack_x  (column starts at rack edge)
+                #   left_w  = rw * 0.25
+                #   knob_cx = left_x + left_w * 0.5  (centred in column)
+                #   knob_cy = body_bot + body_h * 0.52
+                #   knob_r  = min(left_w * 0.30, body_h * 0.35)
+                body_h_bo = rh - RACK_RAIL_H * ui_scale
+                left_w_bo = rw * 0.25
+                knob_cx   = rack_x + left_w_bo * 0.5
+                knob_cy   = rack_y + body_h_bo * 0.52
+                knob_r_bo = min(left_w_bo * 0.30, body_h_bo * 0.35)
+                if math.dist((rx, ry), (knob_cx, knob_cy)) < knob_r_bo + 6*ui_scale:
+                    return (i, 0)  # p0 = boost
+
             else:
                 # Single band 2x3 knob grid — must mirror draw geometry exactly
                 # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
@@ -3746,6 +3796,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_NG * ui_scale
         elif rack.effect_type == "DELAY":
             rh = RACK_EXPANDED_H_DL * ui_scale
+        elif rack.effect_type == "BOOSTER":
+            rh = RACK_EXPANDED_H_DL * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -3842,6 +3894,67 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     if bx <= rx <= bx+btn_w and btn_y <= ry <= btn_y+btn_h:
                         return {'zone': 'channel_btn',
                                 'rack_idx': i, 'ch_idx': ch_idx}
+
+            # BOOSTER rack — APPLY, LIMITER, presets, channel stepper
+            if not rack.collapsed and rack.effect_type == "BOOSTER":
+                body_h_bo   = rh - RACK_RAIL_H * ui_scale
+                left_w_bo   = rw * 0.25
+                centre_w_bo = rw * 0.50
+                centre_x_bo = rack_x + left_w_bo
+
+                # Bar geometry — mirrors _draw_booster_body
+                bar_pad_bo  = 8 * ui_scale
+                bar_x_bo    = centre_x_bo + bar_pad_bo
+                bar_w_bo    = centre_w_bo - bar_pad_bo * 2
+
+                # Apply / Limiter buttons at bottom of centre column
+                ctrl_h_bo   = min(body_h_bo * 0.26, 26 * ui_scale)
+                apply_y_bo  = rack_y + 4 * ui_scale
+                lim_w_bo    = 88 * ui_scale
+                apply_w_bo  = bar_w_bo - lim_w_bo - 6 * ui_scale
+                apply_x_bo  = bar_x_bo
+                lim_x_bo    = apply_x_bo + apply_w_bo + 6 * ui_scale
+
+                if (apply_x_bo <= rx <= apply_x_bo + apply_w_bo and
+                        apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+                    return {'zone': 'booster_apply', 'rack_idx': i}
+
+                if (lim_x_bo <= rx <= lim_x_bo + lim_w_bo and
+                        apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+                    return {'zone': 'booster_limiter', 'rack_idx': i}
+
+                # Preset buttons — between apply row and separator (~68% body height)
+                grid_bot_bo = apply_y_bo + ctrl_h_bo + 4 * ui_scale
+                grid_top_bo = rack_y + body_h_bo * 0.68
+                grid_h_bo   = grid_top_bo - grid_bot_bo
+                cols_bo, rows_bo = 3, 2
+                btn_w_bo = (bar_w_bo - (cols_bo-1)*3*ui_scale) / cols_bo
+                btn_h_bo = max(ui_scale, (grid_h_bo - (rows_bo-1)*3*ui_scale) / rows_bo)
+                presets_bo = [6/40, 12/40, 18/40, 24/40, 30/40, 1.0]
+                for pi, norm in enumerate(presets_bo):
+                    col_i = pi % cols_bo
+                    row_i = pi // cols_bo
+                    bx    = bar_x_bo + col_i * (btn_w_bo + 3*ui_scale)
+                    by    = grid_bot_bo + row_i * (btn_h_bo + 3*ui_scale)
+                    if bx <= rx <= bx + btn_w_bo and by <= ry <= by + btn_h_bo:
+                        return {'zone': 'booster_preset', 'rack_idx': i,
+                                'boost_norm': norm}
+
+                # Channel stepper — right column, just above apply button
+                right_x_bo  = rack_x + left_w_bo + centre_w_bo
+                rpad_bo     = 6 * ui_scale
+                rx2_bo      = right_x_bo + rpad_bo
+                rw2_bo      = left_w_bo - rpad_bo * 2
+                stepper_h   = 18 * ui_scale
+                stepper_y   = apply_y_bo + ctrl_h_bo + 6 * ui_scale
+
+                if (rx2_bo <= rx <= rx2_bo + rw2_bo and
+                        stepper_y <= ry <= stepper_y + stepper_h):
+                    third = rw2_bo / 3.0
+                    if rx <= rx2_bo + third:
+                        return {'zone': 'booster_ch_minus', 'rack_idx': i}
+                    elif rx >= rx2_bo + rw2_bo - third:
+                        return {'zone': 'booster_ch_plus', 'rack_idx': i}
 
             return {'zone': 'rack_body', 'rack_idx': i}
 
@@ -3963,7 +4076,48 @@ def handle_click(hit, context):
             _trigger_reprocess(i, racks[i], context)
         return True
 
-    if zone == 'rack_badge':
+    if zone == 'booster_apply':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            rack = racks[i]
+            if rack.ai_status != 'PROCESSING':
+                from core.booster import process_booster
+                process_booster(i, context)
+        return True
+
+    if zone == 'booster_limiter':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            cur = getattr(racks[i], 'p1', 1.0)
+            racks[i].p1 = 0.0 if cur > 0.5 else 1.0
+        return True
+
+    if zone == 'booster_preset':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            racks[i].p0 = hit['boost_norm']
+            if racks[i].ai_status == 'DONE':
+                racks[i].ai_status = 'READY'
+        return True
+
+    if zone == 'booster_ch_minus':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            cur = int(getattr(racks[i], 'p2', 0))
+            racks[i].p2 = float(max(0, cur - 1))
+        return True
+
+    if zone == 'booster_ch_plus':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            cur = int(getattr(racks[i], 'p2', 0))
+            racks[i].p2 = float(min(32, cur + 1))
+        return True
         i = hit['rack_idx']
         if _reorder_open and _reorder_rack_idx == i:
             # Already open for this rack — close it

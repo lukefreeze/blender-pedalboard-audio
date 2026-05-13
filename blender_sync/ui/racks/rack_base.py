@@ -7,6 +7,7 @@
 # │ Change any of these to resize the rack chassis globally.               │
 # └────────────────────────────────────────────────────────────────────────┘
 # =============================================================================
+print("[RACK_BASE] loading rack_base.py")
 
 import math
 import bpy
@@ -435,6 +436,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
            else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
            else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
            else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
+           else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -617,6 +619,15 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
     elif etype == "DELAY":
         _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "BOOSTER":
+        try:
+            from ui.racks.rack_booster import _draw_booster_body
+            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            print(f"[BOOSTER] ImportError: {e}")
+        except Exception as e:
+            print(f"[BOOSTER] draw error: {e}")
+            import traceback; traceback.print_exc()
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
         params  = EFFECT_PARAMS.get(etype, [])

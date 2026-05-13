@@ -752,6 +752,11 @@ def _pb_wire_rack_to_engine(channel_idx):
             except Exception as e:
                 print(f"[WIRE] DELAY wiring failed: {e}")
 
+        elif etype == "BOOSTER":
+            # BOOSTER is an offline export/reimport processor — no real-time DSP slot.
+            # Acknowledge it so the wire loop doesn't print "no rack assigned".
+            print(f"[WIRE] ch{channel_idx+1} BOOSTER — offline only, no DSP slot")
+
         if slot_idx >= 8:
             break
 

@@ -33,19 +33,64 @@ def _build_envelope(filepath, fps):
     Returns (rms_list, peak_list).
     RMS varies much more than peak across a track, giving the
     jumping-up-and-down behaviour you see in professional meters.
-    """
-    import aud, math as _math
-    try:
-        raw      = aud.Sound.file(filepath).data()
-        n_floats = len(raw) // 4
-        if n_floats == 0:
-            return [], []
 
-        samples     = struct.unpack_from(f'{n_floats}f', raw)
-        specs       = aud.Sound.file(filepath).specs
-        sample_rate = int(specs[0])
-        num_ch      = max(1, int(specs[1]))
-        spf         = max(1, int(sample_rate * num_ch / fps))
+    WAV files (including float32 from the BOOSTER) are read directly with
+    Python's wave module to avoid aud misinterpreting the sample format.
+    All other formats go through aud.
+    """
+    import math as _math
+    try:
+        fp_lower = filepath.lower()
+        if fp_lower.endswith('.wav'):
+            # Read WAV directly — handles int16, int32, and float32 correctly
+            import wave as _wave
+            try:
+                with _wave.open(filepath, 'r') as wf:
+                    n_ch     = wf.getnchannels()
+                    samp_w   = wf.getsampwidth()
+                    sample_rate = wf.getframerate()
+                    n_frames = wf.getnframes()
+                    raw      = wf.readframes(n_frames)
+            except Exception as e:
+                print(f"[ENVELOPE] WAV read failed: {e}")
+                return [], []
+
+            n_ch  = max(1, n_ch)
+            if samp_w == 2:
+                n_samp  = len(raw) // 2
+                samples = struct.unpack_from(f'{n_samp}h', raw)
+                samples = [s / 32768.0 for s in samples]
+            elif samp_w == 4:
+                n_samp = len(raw) // 4
+                # Try float32 first (used by BOOSTER output)
+                try:
+                    candidate = struct.unpack_from(f'{n_samp}f', raw)
+                    # float32 audio is in [-1, 1]; int32 values would be huge
+                    if n_samp > 0 and max(abs(candidate[0]), abs(candidate[min(100, n_samp-1)])) <= 2.0:
+                        samples = list(candidate)
+                    else:
+                        samples = [s / 2147483648.0 for s in struct.unpack_from(f'{n_samp}i', raw)]
+                except Exception:
+                    samples = [s / 2147483648.0 for s in struct.unpack_from(f'{n_samp}i', raw)]
+            elif samp_w == 1:
+                samples = [(b - 128) / 128.0 for b in raw]
+            else:
+                print(f"[ENVELOPE] unsupported WAV sampwidth {samp_w}")
+                return [], []
+            num_ch = n_ch
+        else:
+            # Non-WAV: use aud (handles MP3, FLAC, OGG, etc.)
+            import aud
+            raw      = aud.Sound.file(filepath).data()
+            n_floats = len(raw) // 4
+            if n_floats == 0:
+                return [], []
+            samples     = struct.unpack_from(f'{n_floats}f', raw)
+            specs       = aud.Sound.file(filepath).specs
+            sample_rate = int(specs[0])
+            num_ch      = max(1, int(specs[1]))
+
+        spf = max(1, int(sample_rate * num_ch / fps))
 
         rms_env  = []
         peak_env = []
@@ -72,6 +117,7 @@ def _build_envelope(filepath, fps):
         return rms_env, peak_env
     except Exception as e:
         print(f"[ENVELOPE] failed: {e}")
+        import traceback; traceback.print_exc()
         return [], []
 
 
@@ -167,8 +213,14 @@ def _meter_timer():
             frame_offset = int(current_frame - actual_start_frame)
             if not (0 <= frame_offset < len(rms_env)): continue
 
-            # Scale by strip volume (has fader already baked in)
-            vol = strip.volume
+            # Scale by the pedalboard fader volume, not strip.volume.
+            # strip.volume is no longer updated by the fader — the engine
+            # manages playback volume through its own handle. Read the fader
+            # value from pb_sync_tracks instead.
+            if idx < len(tracks):
+                vol = tracks[idx].volume
+            else:
+                vol = strip.volume   # fallback for channels outside pb range
             scaled_rms  = rms_env[frame_offset]  * vol
             scaled_peak = peak_env[frame_offset] * vol if peak_env else scaled_rms
 
