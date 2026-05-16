@@ -1,23 +1,28 @@
-// ---------------------------------------------------------------------------
-// wrapper.cpp
-// Place in: C:\Users\lukeb\Documents\BlenderTool\src\
-// ---------------------------------------------------------------------------
+// =============================================================================
+// wrapper.cpp — The Hijacker pybind11 Python bindings
+// =============================================================================
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include "mixer_ui.h"
-#include "pedalboard_processor.h"
-#include "ISound.h"
+#include "hijacker_processor.h"
+#include "hijacker_audio_engine.h"
 
 namespace py = pybind11;
+
+// g_state — global EngineState shared between wrapper.cpp and
+// hijacker_processor.cpp (declared there as: extern "C" { extern EngineState g_state; })
+// HijackerEngine::get_state() returns &g_state so DSP state is centralised.
 extern "C" { EngineState g_state; }
-EngineState* get_state() { return &g_state; }
+
+// Spectrum compute function — defined in hijacker_processor.cpp.
+// Declared at file scope (extern "C" must be at global scope, not inside a function).
+// Called from Python meter timer to run Goertzel analysis off the audio thread.
+extern "C" void compute_spec_bins_all(float sample_rate);
 
 // ---------------------------------------------------------------------------
-// process_buffer — batch DSP entry point.
-// NOTE: delay state is NOT reset here — DelayChannelState must persist across
-// chunks so the tail rings through between batch calls. All other state IS
-// reset so batch processing starts clean for comp/eq/reverb/gate.
+// Legacy batch DSP entry point — kept for offline processing
+// (AI rack outputs, BOOSTER, DeepFilterNet etc. still use this)
 // ---------------------------------------------------------------------------
 py::array_t<float> process_buffer(int channel_idx,
                                    py::array_t<float, py::array::c_style> samples,
@@ -42,44 +47,89 @@ py::array_t<float> process_buffer(int channel_idx,
     int total = n_frames * n_channels;
     for (int i = 0; i < total; ++i) out_ptr[i] = in_ptr[i];
 
-    // Reset stateful DSP — but NOT delay_state, which must persist across
-    // batch calls so delay tails carry through between audio chunks.
-    g_state.comp_state[channel_idx]   = CompressorChannelState{};
-    g_state.eq_state[channel_idx]     = EqChannelState{};
-    g_state.reverb_state[channel_idx] = ReverbChannelState{};
-    g_state.gate_state[channel_idx]   = GateChannelState{};
-    for (int b = 0; b < PB_MB_BANDS; ++b)
-        g_state.fft_state[channel_idx][b] = FFTBandState{};
-
-    float saved_vol = g_state.volumes[channel_idx];
-    g_state.volumes[channel_idx] = 1.0f;
-
-    const int CHUNK = 1024;
-    for (int offset = 0; offset < n_frames; offset += CHUNK) {
-        int chunk_frames = std::min(CHUNK, n_frames - offset);
-        float* chunk_ptr = out_ptr + offset * n_channels;
-        apply_effect_chain_batch(channel_idx, chunk_ptr,
-                                  chunk_frames, n_channels, sr);
+    // Require engine to be initialised before batch processing
+    if (!g_hijacker_engine) {
+        printf("[HIJACKER] process_buffer called before engine_init — returning unchanged\n");
+        return output;
     }
 
-    g_state.volumes[channel_idx] = saved_vol;
+    {
+        EngineState* st = g_hijacker_engine->get_state();
+        st->comp_state[channel_idx]   = CompressorChannelState{};
+        st->eq_state[channel_idx]     = EqChannelState{};
+        st->reverb_state[channel_idx] = ReverbChannelState{};
+        st->gate_state[channel_idx]   = GateChannelState{};
+        for (int b = 0; b < PB_MB_BANDS; ++b)
+            st->fft_state[channel_idx][b] = FFTBandState{};
 
-    printf("[ENGINE] ch%d batch processed %d frames @ %dHz\n",
+        float saved_vol = st->volumes[channel_idx];
+        st->volumes[channel_idx] = 1.0f;
+
+        const int CHUNK = 1024;
+        for (int offset = 0; offset < n_frames; offset += CHUNK) {
+            int chunk_frames = std::min(CHUNK, n_frames - offset);
+            float* chunk_ptr = out_ptr + offset * n_channels;
+            apply_effect_chain_batch(channel_idx, chunk_ptr,
+                                      chunk_frames, n_channels, sr);
+        }
+
+        st->volumes[channel_idx] = saved_vol;
+    }
+
+    printf("[HIJACKER] ch%d batch processed %d frames @ %dHz\n",
            channel_idx, n_frames, sample_rate);
-
     return output;
 }
 
-PYBIND11_MODULE(pedalboard_engine, m)
-{
-    m.doc() = "Pedalboard audio engine";
-    m.def("get_state",      &get_state, py::return_value_policy::reference);
-    m.def("process_buffer", &process_buffer,
-          py::arg("channel_idx"), py::arg("samples"), py::arg("sample_rate"),
-          "Batch process a (n_frames, n_channels) float32 array through the "
-          "effect chain. Returns processed array. Updates fft_bins/gr_levels.");
+// ---------------------------------------------------------------------------
+// Engine lifecycle helpers
+// ---------------------------------------------------------------------------
+static bool engine_init(int sample_rate) {
+    if (!g_hijacker_engine)
+        g_hijacker_engine = new HijackerEngine();
+    return g_hijacker_engine->init(sample_rate);
+}
 
-    // Effect type constants
+static void engine_shutdown() {
+    if (g_hijacker_engine) {
+        g_hijacker_engine->shutdown();
+        delete g_hijacker_engine;
+        g_hijacker_engine = nullptr;
+    }
+}
+
+static HijackerEngine* get_engine() {
+    if (!g_hijacker_engine)
+        g_hijacker_engine = new HijackerEngine();
+    return g_hijacker_engine;
+}
+
+PYBIND11_MODULE(hijacker_engine, m)
+{
+    m.doc() = "The Hijacker — audio engine for Blender";
+
+    // ── Engine lifecycle ──────────────────────────────────────────────────
+    m.def("engine_init",     &engine_init,     py::arg("sample_rate") = 44100,
+          "Initialise PortAudio and start the audio thread");
+    m.def("engine_shutdown", &engine_shutdown,
+          "Stop the audio thread and release PortAudio");
+    m.def("get_engine",      &get_engine,
+          py::return_value_policy::reference,
+          "Return the global HijackerEngine instance");
+
+    // ── Spectrum compute (call from Python timer, NOT audio thread) ──────
+    m.def("compute_spec_bins_all",
+          [](float sr){ compute_spec_bins_all(sr); },
+          py::arg("sample_rate") = 48000.0f,
+          "Run Goertzel spectrum analysis for all channels. "
+          "Call from Python meter timer, not from the audio callback.");
+
+    // ── Legacy batch DSP (offline processing) ────────────────────────────
+    m.def("process_buffer", &process_buffer,
+        py::arg("channel_idx"), py::arg("samples"), py::arg("sample_rate"),
+        "Offline batch DSP — used by BOOSTER, DeepFilterNet etc.");
+
+    // ── Effect type constants ─────────────────────────────────────────────
     m.attr("FX_NONE")         = (int)EffectType::NONE;
     m.attr("FX_GAIN")         = (int)EffectType::GAIN;
     m.attr("FX_EQ_3BAND")     = (int)EffectType::EQ_3BAND;
@@ -93,6 +143,55 @@ PYBIND11_MODULE(pedalboard_engine, m)
     m.attr("MB_BANDS")        = PB_MB_BANDS;
     m.attr("FFT_BINS")        = PB_FFT_BINS;
 
+    // ── HijackerSegment ───────────────────────────────────────────────────
+    py::class_<HijackerSegment>(m, "Segment")
+        .def(py::init<>())
+        .def_property("filepath",
+            [](const HijackerSegment& s){ return std::string(s.filepath); },
+            [](HijackerSegment& s, const std::string& p){
+                strncpy(s.filepath, p.c_str(), 511); s.filepath[511] = 0; })
+        .def_readwrite("file_offset_s",  &HijackerSegment::file_offset_s)
+        .def_readwrite("duration_s",     &HijackerSegment::duration_s)
+        .def_readwrite("timeline_pos_s", &HijackerSegment::timeline_pos_s);
+
+    // ── HijackerEngine ────────────────────────────────────────────────────
+    py::class_<HijackerEngine>(m, "Engine")
+        // Transport
+        .def("play",  &HijackerEngine::play,  py::arg("timeline_pos_s"))
+        .def("stop",  &HijackerEngine::stop)
+        .def("seek",  &HijackerEngine::seek,  py::arg("timeline_pos_s"))
+        // Channel setup
+        .def("set_channel_playlist", &HijackerEngine::set_channel_playlist,
+             py::arg("channel"), py::arg("segments"))
+        .def("clear_channel",     &HijackerEngine::clear_channel,
+             py::arg("channel"))
+        .def("clear_all_channels",&HijackerEngine::clear_all_channels)
+        // Mixer
+        .def("set_volume", &HijackerEngine::set_volume,
+             py::arg("channel"), py::arg("volume"))
+        .def("set_mute",   &HijackerEngine::set_mute,
+             py::arg("channel"), py::arg("muted"))
+        .def("set_solo",   &HijackerEngine::set_solo,
+             py::arg("channel"), py::arg("soloed"))
+        .def("set_pan",    &HijackerEngine::set_pan,
+             py::arg("channel"), py::arg("pan"))
+        // Effects
+        .def("set_effect_slot", &HijackerEngine::set_effect_slot,
+             py::arg("channel"), py::arg("slot"),
+             py::arg("type"), py::arg("params"))
+        .def("clear_effect_slot", &HijackerEngine::clear_effect_slot,
+             py::arg("channel"), py::arg("slot"))
+        // Metering
+        .def("get_meter_rms",  &HijackerEngine::get_meter_rms,
+             py::arg("channel"))
+        .def("get_meter_peak", &HijackerEngine::get_meter_peak,
+             py::arg("channel"))
+        .def("get_playhead_s", &HijackerEngine::get_playhead_s)
+        .def("get_state",      &HijackerEngine::get_state,
+             py::return_value_policy::reference)
+        .def("is_running",     &HijackerEngine::is_running);
+
+    // ── EffectSlot (for legacy batch DSP compatibility) ───────────────────
     py::class_<EffectSlot>(m, "EffectSlot")
         .def_readwrite("enabled", &EffectSlot::enabled)
         .def_property("type",
@@ -104,6 +203,7 @@ PYBIND11_MODULE(pedalboard_engine, m)
             [](EffectSlot& s, std::vector<float> v){
                 for(int i=0;i<24&&i<(int)v.size();i++) s.params[i]=v[i]; });
 
+    // ── EngineState (for GR levels, FFT bins, rack UI display) ───────────
     py::class_<EngineState>(m, "EngineState")
         .def_readwrite("active_track_id", &EngineState::active_track_id)
         .def_readwrite("current_frame",   &EngineState::current_frame)
@@ -147,6 +247,13 @@ PYBIND11_MODULE(pedalboard_engine, m)
                 return std::vector<float>(s.fft_bins[ch][band],
                                           s.fft_bins[ch][band]+PB_FFT_BINS); },
             py::arg("channel"), py::arg("band"))
+        .def("get_spec_bins",
+            [](EngineState& s, int ch) -> std::vector<float> {
+                if(ch<0||ch>=PB_MAX_CHANNELS)
+                    throw std::out_of_range("ch");
+                return std::vector<float>(s.spec_bins[ch],
+                                          s.spec_bins[ch]+PB_SPEC_BINS); },
+            py::arg("channel"))
         .def("get_effect_slot",
             [](EngineState& s, int ch, int slot) -> EffectSlot& {
                 if(ch<0||ch>=PB_MAX_CHANNELS||slot<0||slot>=PB_MAX_EFFECTS)

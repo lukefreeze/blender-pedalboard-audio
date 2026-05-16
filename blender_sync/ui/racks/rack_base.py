@@ -108,30 +108,25 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
 
     if _rack_on:
         try:
-            from Loader import _fft_timeline
+            from Loader import get_engine as _get_eng_spec
             import bpy as _bpys
-            scene_s   = _bpys.context.scene
-            racks_s   = getattr(scene_s, "pb_racks", [])
+            import numpy as _np
+            scene_s = _bpys.context.scene
+            racks_s = getattr(scene_s, "pb_racks", [])
             if rack_idx < len(racks_s):
                 assigned_s = get_rack_channels(racks_s[rack_idx])
                 if assigned_s:
                     ch_s = list(assigned_s)[0]
-                    tl   = _fft_timeline.get(ch_s)
-                    if tl is not None and len(tl['snapshots']) > 0:
-                        cur_f    = scene_s.frame_current if scene_s else 0
-                        snap_sec = tl['snap_frames'] / tl['sr']
-                        elap_sec = (cur_f - tl['start_frame']) / tl['fps']
-                        snap_f   = elap_sec / snap_sec
-                        snap_idx = int(snap_f)
-                        frac     = snap_f - snap_idx
-                        snap_idx = max(0, min(len(tl['snapshots'])-1, snap_idx))
-                        import numpy as _np
-                        frame_d  = tl['snapshots'][snap_idx]
-                        # Interpolate toward next snapshot for smooth bar motion
-                        if frac > 0.0 and snap_idx + 1 < len(tl['snapshots']):
-                            next_d  = tl['snapshots'][snap_idx + 1]
-                            frame_d = frame_d * (1.0 - frac) + next_d * frac
-                        fft_flat = _np.concatenate([frame_d[b] for b in range(4)])
+                    _eng_spec = _get_eng_spec()
+                    if _eng_spec:
+                        _hj_spec = _eng_spec.get_engine()
+                        if _hj_spec and 0 <= ch_s < 32:
+                            _s_spec = _hj_spec.get_state()
+                            all_bins = []
+                            for b in range(4):
+                                all_bins.extend(_s_spec.get_fft_bins(ch_s, b))
+                            if any(v > 0 for v in all_bins):
+                                fft_flat = _np.array(all_bins, dtype=float)
         except Exception:
             fft_flat = None
 
@@ -276,44 +271,21 @@ def _draw_gr_meters(rx, ry, rh, rack_idx, assigned_channels, scale):
         gr_db_val = 0.0
         if is_enabled:
             try:
-                import math as _sgm
-                from Loader import _gr_timeline, _fft_timeline
-                cur_f = scene_gr.frame_current if scene_gr else 0
-
-                # Signal level — average across all bands
-                tl_f  = _fft_timeline.get(ch_idx)
-                if tl_f is not None and len(tl_f['snapshots']) > 0:
-                    sec_f  = tl_f['snap_frames'] / tl_f['sr']
-                    elap_f = (cur_f - tl_f['start_frame']) / tl_f['fps']
-                    idx_f  = max(0, min(len(tl_f['snapshots'])-1, int(elap_f/sec_f)))
-                    sig_norm = float(tl_f['snapshots'][idx_f].mean())
-
-                # GR: try timeline first (COMP_MULTI populates it)
-                tl_g  = _gr_timeline.get(ch_idx)
-                if tl_g is not None and len(tl_g['snapshots']) > 0:
-                    sec_g  = tl_g['snap_frames'] / tl_g['sr']
-                    elap_g = (cur_f - tl_g['start_frame']) / tl_g['fps']
-                    idx_g  = max(0, min(len(tl_g['snapshots'])-1, int(elap_g/sec_g)))
-                    gr_db_val = float(tl_g['snapshots'][idx_g].mean())
-                elif rack_gr and rack_gr.effect_type == "COMP_SINGLE":
-                    # Read GR directly from C++ engine — most accurate source.
-                    # gr_levels[ch][0] is updated each process_buffer call.
-                    # Value is positive dB of gain reduction (e.g. 3.5 = 3.5dB GR).
-                    try:
-                        from Loader import get_engine as _get_eng_sb
-                        _eng_sb = _get_eng_sb()
-                        if _eng_sb and assigned_gr2:
-                            _ch_sb = list(assigned_gr2)[0]
-                            _gv_sb = _eng_sb.get_state().get_gr_levels(_ch_sb)
-                            gr_db_val = min(12.0, max(0.0, float(_gv_sb[0])))
-                    except Exception:
-                        gr_db_val = 0.0
+                from Loader import get_engine as _get_eng_sb
+                _eng_sb = _get_eng_sb()
+                if _eng_sb:
+                    _hj_sb = _eng_sb.get_engine()
+                    if _hj_sb and 0 <= ch_idx < 32:
+                        _st_sb = _hj_sb.get_state()
+                        _gv_sb = _st_sb.get_gr_levels(ch_idx)
+                        gr_db_val = min(12.0, max(0.0, float(_gv_sb[0]))) if _gv_sb else 0.0
+                        sig_norm  = min(1.0, _hj_sb.get_meter_rms(ch_idx) * 4.0)
             except Exception:
                 pass
 
         sig_h   = max(0.0, min(1.0, sig_norm)) * rh
         if sig_h > 0.5:
-            gr_h    = max(0.0, min(1.0, gr_db_val/12.0)) * sig_h
+            gr_h    = max(0.0, min(1.0, gr_db_val / 24.0)) * sig_h  # 24dB full scale
             green_h = sig_h - gr_h
             if green_h > 0.5:
                 _draw_rect(bx, ry, bar_w, green_h, (0.05, 0.55, 0.25, 0.85))

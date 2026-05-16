@@ -238,7 +238,14 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     _meter_timer()
                 elif active_knob_type == "PAN":
                     track.pan = max(0.0, min(1.0, track.pan + delta))
-                    if _engine_active(): _pb_reprocess_channel(active_knob_track)
+                    if _engine_active():
+                        try:
+                            from core.engine import get_engine as _get_eng
+                            _eng = _get_eng()
+                            if _eng:
+                                _hj = _eng.get_engine()
+                                if _hj: _hj.set_pan(active_knob_track, track.pan)
+                        except Exception: pass
                 elif active_knob_type == "HIGH":
                     track.eq_high = max(-24.0, min(24.0, track.eq_high+delta*100))
                     if _engine_active(): _pb_rebuild_eq(active_knob_track)
@@ -287,14 +294,15 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                                 old_v = getattr(rack, f'p{param_idx}', 0.0)
                                 new_v = max(0.0, min(1.0, old_v + delta))
                                 set_rack_param(rack, param_idx, new_v)
-                    # Reprocess audio with new settings
+                    # Update engine with new params — takes effect next buffer
                     if _engine_active():
                         try:
                             from Racks import get_rack_channels
+                            from core.audio import _hj_wire_effects
                             assigned = get_rack_channels(rack)
+                            scene = context.scene
                             for ch in assigned:
-                                _pb_wire_rack_to_engine(ch)
-                                _pb_reprocess_channel(ch)
+                                _hj_wire_effects(ch, scene)
                         except Exception as e:
                             print(f"[WIRE] live update failed: {e}")
                     context.area.tag_redraw()

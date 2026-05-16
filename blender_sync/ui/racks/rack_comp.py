@@ -29,6 +29,65 @@ except ImportError:
     pass
 
 
+# ---------------------------------------------------------------------------
+# Module-level cache for multiband spectrum display.
+# Weight arrays and hz-to-bin mapping are constant — computed once at import.
+# Only vertex positions depend on live spec_bins and are rebuilt per frame.
+# ---------------------------------------------------------------------------
+import math as _math_mb
+
+_MB_N_SPEC    = 128
+_MB_HZ_BINS   = [20.0 * (1000.0 ** (i / (_MB_N_SPEC - 1))) for i in range(_MB_N_SPEC)]
+_MB_LOG_HZ    = [_math_mb.log10(hz) for hz in _MB_HZ_BINS]
+_MB_LOG_MIN   = _math_mb.log10(20.0)
+_MB_LOG_RNG   = _math_mb.log10(20000.0) - _MB_LOG_MIN
+_MB_CROSS_HZ  = [120.0, 800.0, 5000.0]
+_MB_CROSS_LOG = [_math_mb.log10(f) for f in _MB_CROSS_HZ]
+
+def _mb_band_weight_precomp(f_lo, f_hi, fade_oct=0.15):
+    log_lo = _math_mb.log10(f_lo);  log_hi = _math_mb.log10(f_hi)
+    out = []
+    for lhz in _MB_LOG_HZ:
+        if lhz < log_lo - fade_oct or lhz > log_hi + fade_oct:
+            out.append(0.0); continue
+        w_lo = 1.0
+        if lhz < log_lo + fade_oct:
+            t = (lhz - (log_lo - fade_oct)) / (2.0 * fade_oct)
+            w_lo = 0.5 - 0.5 * _math_mb.cos(_math_mb.pi * t)
+        w_hi = 1.0
+        if lhz > log_hi - fade_oct:
+            t = ((log_hi + fade_oct) - lhz) / (2.0 * fade_oct)
+            w_hi = 0.5 - 0.5 * _math_mb.cos(_math_mb.pi * t)
+        out.append(w_lo * w_hi)
+    return out
+
+def _mb_cross_weight_precomp(f_cross, half_oct=0.25):
+    log_c = _math_mb.log10(f_cross)
+    out = []
+    for lhz in _MB_LOG_HZ:
+        dist = abs(lhz - log_c)
+        out.append(0.0 if dist >= half_oct else 0.5 + 0.5 * _math_mb.cos(_math_mb.pi * dist / half_oct))
+    return out
+
+# All 7 weight arrays computed ONCE at module load — never rebuilt
+_MB_WEIGHTS = [
+    _mb_band_weight_precomp(20.0,    120.0),
+    _mb_cross_weight_precomp(120.0),
+    _mb_band_weight_precomp(120.0,   800.0),
+    _mb_cross_weight_precomp(800.0),
+    _mb_band_weight_precomp(800.0,   5000.0),
+    _mb_cross_weight_precomp(5000.0),
+    _mb_band_weight_precomp(5000.0, 20000.0),
+]
+_MB_GR_BAND  = [0, None, 1, None, 2, None, 3]
+_MB_SHADER   = None
+def _get_mb_shader():
+    global _MB_SHADER
+    if _MB_SHADER is None:
+        _MB_SHADER = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _MB_SHADER
+
+
 def _rp(rack, idx, default=0.0):
     """Safely get rack param by index. Mirrors Racks._rp to avoid import."""
     try:
@@ -55,7 +114,7 @@ def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
     _draw_rect(bx, by, bw, bh, (0.04, 0.04, 0.04, 1.0))
     sig_h = max(0.0, min(1.0, signal_norm)) * bh
     if sig_h > 0.5:
-        gr_h    = max(0.0, min(1.0, gr_db / 12.0)) * sig_h
+        gr_h    = max(0.0, min(1.0, gr_db / 24.0)) * sig_h  # 24dB full scale
         green_h = sig_h - gr_h
         if green_h > 0.5:
             _draw_rect(bx, by, bw, green_h, (0.05, 0.55, 0.25, 0.85))
@@ -106,7 +165,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     band_w      = content_w / 4
     content_x   = rx + side_margin / 2
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_mb_shader()  # cached — never recreated per frame
 
     # ----------------------------------------------------------------
     # SPECTRUM DISPLAY — FabFilter style full-width GR curve
@@ -125,236 +184,282 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     bb = batch_for_shader(shader,"LINE_STRIP",{"pos":bv})
     shader.bind(); shader.uniform_float("color",(0.15,0.15,0.15,1.0)); bb.draw(shader)
 
-    # Horizontal grid lines (dB scale)
-    for gi in range(1, 5):
-        gy = spec_y + gi/5 * spec_h
-        _draw_rect(spec_x, gy, spec_w, max(0.5,scale*0.5), (0.09,0.09,0.09,1.0))
+    # (dB grid lines drawn later with correct _db_to_y mapping)
 
-    # dB scale labels on left
-    fs_db = max(1, int(7*scale))
-    for label, frac in [("+6",0.1),("0",0.3),("-6",0.5),("-12",0.7),("-24",0.9)]:
-        ly = spec_y + frac * spec_h
-        tw = _text_width(label, fs_db)
-        _draw_text(label, spec_x - tw - 3*scale, ly - fs_db/2,
-                   fs_db, (0.3,0.3,0.3,1.0))
-
-    # Get FFT data — clear when rack is bypassed
-    fft_data = None
-    gr_data  = [0.0, 0.0, 0.0, 0.0]
-    if not rack.enabled:
-        pass
-    else:
-     try:
-        from Loader import _fft_timeline
-        import bpy as _bpy2
-        assigned = get_rack_channels(rack)
-        if assigned:
-            ch = list(assigned)[0]
-            tl = _fft_timeline.get(ch)
-            if tl is not None and len(tl['snapshots']) > 0:
-                scene2      = _bpy2.context.scene
-                cur_frame   = scene2.frame_current if scene2 else 0
-                start_frame = tl['start_frame']
-                fps         = tl['fps']
-                snap_sec    = tl['snap_frames'] / tl['sr']
-                elapsed_sec = (cur_frame - start_frame) / fps
-                snap_f      = elapsed_sec / snap_sec
-                snap_idx    = int(snap_f)
-                frac        = snap_f - snap_idx
-                snaps       = tl['snapshots']
-                snap_idx    = max(0, min(len(snaps)-1, snap_idx))
-                # snaps is (n_snaps, 4, 8) numpy array — interpolate for smooth motion
-                import numpy as _np2
-                frame_data  = snaps[snap_idx]
-                if frac > 0.0 and snap_idx + 1 < len(snaps):
-                    next_data  = snaps[snap_idx + 1]
-                    frame_data = frame_data * (1.0 - frac) + next_data * frac
-                fft_data    = [frame_data[b].tolist() for b in range(4)]
-     except Exception as _fe:
-        import traceback as _tb
-        _tb.print_exc()
-        fft_data = None
-
-    # Also get GR levels for the GR bar
-    try:
-        from Loader import get_engine
-        engine = get_engine()
-        assigned2 = get_rack_channels(rack)
-        if engine and assigned2:
-            ch2 = list(assigned2)[0]
-            if 0 <= ch2 < 32:
-                gr_data = engine.get_state().get_gr_levels(ch2)
-    except Exception:
-        pass
-
-    # --- Background: grey FFT bars (full width, all bands combined) ---
-    FFT_BINS = 32
-    total_bars = FFT_BINS * 4
-    bar_w_full = spec_w / total_bars
-    for band in range(4):
-        col = BAND_COLORS[band]
-        if fft_data and fft_data[band]:
-            base_bins = list(fft_data[band])
-        else:
-            base_bins = [0.04] * FFT_BINS
-
-        # Use real FFT timeline data — no fake animation
-        for bi, base_val in enumerate(base_bins):
-            val     = max(0.0, min(1.0, base_val))
-            bar_idx = band * FFT_BINS + bi
-            bar_h   = val * spec_h * 0.85
-            bx      = spec_x + bar_idx * bar_w_full
-            r,g,b_c,a = col
-            _draw_rect(bx, spec_y, max(bar_w_full-0.5, 0.5), bar_h,
-                       (r*0.2+0.04, g*0.2+0.04, b_c*0.2+0.04, 0.9))
-
-    # --- Band divider lines ---
-    for b in range(1, 4):
-        dx = spec_x + b * band_w
-        _draw_rect(dx, spec_y, max(0.5,scale*0.5), spec_h, (0.2,0.2,0.2,1.0))
-        # Crossover frequency labels
-        cross_labels = ["120hz", "800hz", "5khz"]
-        fs_cr = max(1, int(7*scale))
-        tw_cr = _text_width(cross_labels[b-1], fs_cr)
-        _draw_text(cross_labels[b-1], dx - tw_cr/2,
-                   spec_y + spec_h + 2*scale,
-                   fs_cr, (0.35,0.35,0.35,1.0))
-
-    # --- Settings-driven frequency response curve ---
-    # Shows the effect of current knob settings on the frequency spectrum.
-    # Each band's gain setting + compression depth shapes the curve.
-    # Updates instantly as knobs move — no animation, pure representation.
+    # ----------------------------------------------------------------
+    # 7-LAYER OVERLAPPING SPECTRUM — Premiere Pro multiband style
     #
-    # Curve logic per band:
-    #   - At 0dB gain with no threshold hit: flat at 0dB
-    #   - Gain knob shifts band up/down
-    #   - Threshold + ratio creates a soft-knee dip based on a nominal
-    #     input level (we use -18dB RMS as the reference signal level)
-    #     This shows how much the compressor would affect a typical signal
-    #
-    # Y axis: -12dB (bottom) to +12dB (top), 0dB = centre
-    # X axis: full spectrum left to right across all 4 bands
+    # Y AXIS CONVENTION (Blender GPU: y=0 at BOTTOM, increases upward):
+    #   spec_y           = bottom of rect = -80dB
+    #   spec_y + spec_h  = top of rect    =   0dB
+    #   amp = (dB + 80) / 80  →  0.0 at bottom, 1.0 at top
+    #   _amp_to_y(amp) = spec_y + amp * spec_h   ← bottom-origin
+    #   floor of fill  = spec_y  (the bottom, not spec_y+spec_h)
+    # ----------------------------------------------------------------
+    import math as _mspec
 
-    zero_db_y  = spec_y + spec_h * 0.5      # 0dB at vertical centre
-    db_per_px  = 12.0 / (spec_h * 0.5)      # 12dB maps to half height
-    scale_px   = (spec_h * 0.5) / 12.0      # pixels per dB
+    LOG_MIN  = _mspec.log10(20.0)
+    LOG_RNG  = _mspec.log10(20000.0) - LOG_MIN
+    CROSS_HZ = [120.0, 800.0, 5000.0]
 
-    # Draw 0dB reference line
-    _draw_rect(spec_x, zero_db_y, spec_w, max(0.5, scale*0.5),
-               (0.35, 0.35, 0.35, 0.6))
+    def _freq_to_x(hz):
+        return spec_x + (_mspec.log10(max(hz, 20.0)) - LOG_MIN) / LOG_RNG * spec_w
 
-    # dB grid lines and labels
+    def _amp_to_y(amp):
+        # amp 0.0 → spec_y (bottom = -80dB), amp 1.0 → spec_y+spec_h (top = 0dB)
+        return spec_y + max(0.0, min(1.0, amp)) * spec_h
+
+    def _db_to_y(db):
+        return _amp_to_y((db + 80.0) / 80.0)
+
+    # --- Fetch 128-bin full-spectrum + GR from engine ---
+    # Average across ALL assigned channels so multi-channel racks show
+    # a merged spectrum and the graph doesn't go blank.
+    # Muted channels still have spec_bins data (the engine updates them
+    # even when muted) so we include them for display — the graph should
+    # show what's playing through the rack regardless of mute state.
+    spec_bins = None
+    gr_data   = [0.0, 0.0, 0.0, 0.0]
+    if rack.enabled:
+        try:
+            from Loader import get_engine as _get_eng_mb
+            _eng_mb  = _get_eng_mb()
+            assigned = get_rack_channels(rack)
+            if _eng_mb and assigned:
+                _hj_mb = _eng_mb.get_engine()
+                if _hj_mb:
+                    _s_mb       = _hj_mb.get_state()
+                    bin_acc     = [0.0] * 128
+                    gr_acc      = [0.0, 0.0, 0.0, 0.0]
+                    valid_count = 0
+                    for ch in assigned:
+                        if not (0 <= ch < 32): continue
+                        _raw = list(_s_mb.get_spec_bins(ch))
+                        # Include channel if it has any signal at all —
+                        # use a very low threshold so muted-but-assigned
+                        # channels don't block display from active channels.
+                        if max(_raw) > 0.001:
+                            for i in range(128):
+                                bin_acc[i] += _raw[i]
+                            gr_vals = _s_mb.get_gr_levels(ch)
+                            if gr_vals:
+                                for b in range(4):
+                                    gr_acc[b] += gr_vals[b]
+                            valid_count += 1
+                    if valid_count > 0:
+                        spec_bins = [v / valid_count for v in bin_acc]
+                        gr_data   = [v / valid_count for v in gr_acc]
+        except Exception:
+            spec_bins = None
+
+    # ----------------------------------------------------------------
+    # 7-LAYER SPECTRUM — uses pre-computed module-level weight arrays.
+    # No trig, no log10, no lambda, no shader construction per frame.
+    # Only the vertex positions are recomputed (128 muls per layer).
+    # ----------------------------------------------------------------
+    bc = BAND_COLORS
+    layer_colors = [
+        ((bc[0][0]*0.5, bc[0][1]*0.5, bc[0][2]*0.5, 0.80),
+         (bc[0][0]*0.9+0.05, bc[0][1]*0.9+0.05, bc[0][2]*0.9+0.05, 1.0)),
+        ((0.05, 0.55, 0.65, 0.75), (0.1, 0.75, 0.85, 1.0)),
+        ((bc[1][0]*0.5, bc[1][1]*0.5, bc[1][2]*0.5, 0.80),
+         (bc[1][0]*0.9+0.05, bc[1][1]*0.9+0.05, bc[1][2]*0.9+0.05, 1.0)),
+        ((0.65, 0.58, 0.05, 0.75), (0.85, 0.78, 0.1, 1.0)),
+        ((bc[2][0]*0.5, bc[2][1]*0.5, bc[2][2]*0.5, 0.80),
+         (bc[2][0]*0.9+0.05, bc[2][1]*0.9+0.05, bc[2][2]*0.9+0.05, 1.0)),
+        ((0.55, 0.1, 0.65, 0.75), (0.75, 0.2, 0.85, 1.0)),
+        ((bc[3][0]*0.5, bc[3][1]*0.5, bc[3][2]*0.5, 0.80),
+         (bc[3][0]*0.9+0.05, bc[3][1]*0.9+0.05, bc[3][2]*0.9+0.05, 1.0)),
+    ]
+
+    # x positions are constant for a given spec_w — precompute once per draw
+    x_positions = [spec_x + ((_MB_LOG_HZ[i] - _MB_LOG_MIN) / _MB_LOG_RNG) * spec_w
+                   for i in range(_MB_N_SPEC)]
+    floor_y = spec_y
+
+    if spec_bins is not None:
+        # GR linear multipliers — one per main band
+        gr_muls = [10.0 ** (-max(0.0, float(gr_data[b])) / 20.0) for b in range(4)]
+
+        _sh = _get_mb_shader()  # cached shader — never recreated
+        _sh.bind()
+        gpu.state.line_width_set(max(1.2, scale * 1.2))
+
+        for layer_idx in range(7):
+            weights  = _MB_WEIGHTS[layer_idx]
+            gr_band  = _MB_GR_BAND[layer_idx]
+            mul      = gr_muls[gr_band] if gr_band is not None else 1.0
+            fill_col, edge_col = layer_colors[layer_idx]
+
+            # Build vertex arrays — pure arithmetic, no trig
+            verts_fill = []
+            pts        = []
+            for i in range(_MB_N_SPEC):
+                w   = weights[i]
+                amp = float(spec_bins[i]) * mul * w
+                if amp > 1.0: amp = 1.0
+                px  = x_positions[i]
+                py  = spec_y + amp * spec_h
+                verts_fill.append((px, floor_y))
+                verts_fill.append((px, py))
+                pts.append((px, py))
+
+            _b = batch_for_shader(_sh, "TRI_STRIP", {"pos": verts_fill})
+            _sh.uniform_float("color", fill_col)
+            _b.draw(_sh)
+
+            _be = batch_for_shader(_sh, "LINE_STRIP", {"pos": pts})
+            _sh.uniform_float("color", edge_col)
+            _be.draw(_sh)
+
+        gpu.state.line_width_set(1.0)
+
+    # ----------------------------------------------------------------
+    # dB GRID + AXIS LABELS  (drawn over waveforms)
+    # 0dB at top (spec_y+spec_h), -80dB at bottom (spec_y)
+    # ----------------------------------------------------------------
     fs_db = max(1, int(7*scale))
-    for db_val, label in [(12,"+12"),(6,"+6"),(0,"0"),(-6,"-6"),(-12,"-12")]:
-        gy = zero_db_y - db_val * scale_px
-        if spec_y <= gy <= spec_y + spec_h:
-            _draw_rect(spec_x, gy, spec_w, max(0.5,scale*0.3),
-                       (0.12,0.12,0.12,1.0))
+    for db_val, label in [(0,"0dB"),(-10,"-10"),(-20,"-20"),(-40,"-40"),(-60,"-60"),(-80,"-80")]:
+        gy = _db_to_y(db_val)
+        if spec_y - 1 <= gy <= spec_y + spec_h + 1:
+            bright = 0.22 if db_val == 0 else 0.10
+            _draw_rect(spec_x, gy, spec_w, max(0.5, scale*0.5),
+                       (bright, bright, bright, 1.0))
             tw = _text_width(label, fs_db)
             _draw_text(label, spec_x - tw - 3*scale, gy - fs_db*0.5,
-                       fs_db, (0.3,0.3,0.3,1.0))
+                       fs_db, (0.35, 0.35, 0.35, 1.0))
 
-    # Compute per-band gain offset from knob settings
-    # Reference input: -18dB RMS — represents typical programme level
+    # ----------------------------------------------------------------
+    # CROSSOVER DIVIDERS + Hz LABELS
+    # ----------------------------------------------------------------
+    cross_labels = ["120Hz", "800Hz", "5kHz"]
+    for f_c, lbl in zip(CROSS_HZ, cross_labels):
+        dx    = _freq_to_x(f_c)
+        _draw_rect(dx, spec_y, max(0.5, scale*0.5), spec_h, (0.4, 0.4, 0.4, 0.5))
+        fs_cr = max(1, int(7*scale))
+        tw_cr = _text_width(lbl, fs_cr)
+        _draw_text(lbl, dx - tw_cr/2, spec_y + spec_h + 2*scale,
+                   fs_cr, (0.4, 0.4, 0.4, 1.0))
+
+    for hz_mark, lbl_mark in [(20,"20"),(50,"50"),(100,"100"),(200,"200"),
+                               (500,"500"),(1000,"1k"),(2000,"2k"),
+                               (5000,"5k"),(10000,"10k"),(20000,"20k")]:
+        mx   = _freq_to_x(hz_mark)
+        fs_m = max(1, int(6*scale))
+        tw_m = _text_width(lbl_mark, fs_m)
+        if spec_x + 4*scale <= mx <= spec_x + spec_w - 4*scale:
+            _draw_text(lbl_mark, mx - tw_m/2, spec_y + spec_h + 10*scale,
+                       fs_m, (0.28, 0.28, 0.28, 1.0))
+
+    # ----------------------------------------------------------------
+    # SETTINGS-DRIVEN RESPONSE CURVE OVERLAY
+    #
+    # Uses the SAME _db_to_y axis as the spectrum (0dB top, -80dB bottom).
+    # The curve shows actual output level: REF_IN + gain_db + gr_db.
+    # With defaults (0dB gain, threshold not hit) it sits at -18dB.
+    # Heavy compression pushes it toward -60 or -70dB — a large visible drop
+    # that maps directly to the spectrum scale the eye is already reading.
+    # ----------------------------------------------------------------
+    # REF_INPUT_DB: typical voice programme at -18dBFS.
+    # PCM is normalised to -1..+1, same as the old engine — no sidechain offset needed.
     REF_INPUT_DB = -18.0
 
-    def band_output_db(b):
-        """Net dB change this band applies to the reference signal."""
-        thr_db  = -40.0 + _rp(rack, b)    * 40.0   # threshold
-        ratio   =  1.0  + _rp(rack, b+4)  * 19.0   # ratio
-        knee_db =  0.5  + _rp(rack, b+20) * 23.5   # knee
-        gain_db = (_rp(rack, b+16, 0.5) - 0.5) * 24.0  # band gain
-
-        # Soft knee gain reduction at reference input
-        half_k = knee_db * 0.5
-        in_db  = REF_INPUT_DB
+    def _band_output_db(b):
+        """Actual output dB for this band at the reference input level."""
+        thr_db  = -40.0 + _rp(rack, b)       * 40.0   # -40..0 dB
+        ratio   =  1.0  + _rp(rack, b + 4)   * 19.0   # 1..20
+        knee_db =  0.5  + _rp(rack, b + 20)  * 23.5   # 0.5..24 dB
+        gain_db = (_rp(rack, b + 16, 0.5) - 0.5) * 24.0  # -12..+12 dB
+        half_k  = knee_db * 0.5
+        in_db   = REF_INPUT_DB
         if in_db <= thr_db - half_k:
             gr_db = 0.0
-        elif in_db <= thr_db + half_k and knee_db > 0:
+        elif in_db <= thr_db + half_k and knee_db > 0.0:
             x     = in_db - thr_db + half_k
-            gr_db = (1.0/ratio - 1.0) * (x*x) / (2.0*knee_db)
+            gr_db = (1.0 / ratio - 1.0) * (x * x) / (2.0 * knee_db)
         else:
-            gr_db = (in_db - thr_db) * (1.0/ratio - 1.0)
+            gr_db = (in_db - thr_db) * (1.0 / ratio - 1.0)
+        return REF_INPUT_DB + gain_db + gr_db  # output dB, same scale as spectrum
 
-        return gain_db + gr_db  # total net effect on signal
+    band_out_db = [_band_output_db(b) for b in range(4)]
 
-    # Calculate net dB per band
-    band_db = [band_output_db(b) for b in range(4)]
+    # Reference line at -18dB (where curve sits with no processing)
+    ref_y = _db_to_y(REF_INPUT_DB)
+    _draw_rect(spec_x, ref_y, spec_w, max(0.8, scale * 0.6),
+               (0.5, 0.5, 0.5, 0.55))
 
-    # Build smooth curve — cubic smooth-step between band centres
-    # with flat regions within each band and smooth transitions at crossovers
-    N_PTS = 200
+    # Map crossover Hz to fractional x positions
+    cross_frac = [(_mspec.log10(f) - LOG_MIN) / LOG_RNG for f in CROSS_HZ]
+
+    N_CURVE   = 200
     curve_pts = []
-    for i in range(N_PTS + 1):
-        fx     = i / N_PTS
-        band_f = fx * 4.0
-        band_i = min(3, int(band_f))
-        band_t = band_f - band_i
-
-        # Smooth blend at band boundaries
-        db_this = band_db[band_i]
-        db_next = band_db[min(3, band_i + 1)]
-        # Sigmoid transition — flat in band centre, smooth at edges
-        s       = band_t * band_t * (3.0 - 2.0 * band_t)
-        db_here = db_this + (db_next - db_this) * s
-
+    for i in range(N_CURVE + 1):
+        fx = i / N_CURVE
+        if   fx <= cross_frac[0]:
+            bi = 0; bt = fx / max(cross_frac[0], 1e-9)
+        elif fx <= cross_frac[1]:
+            bi = 1; bt = (fx - cross_frac[0]) / max(cross_frac[1] - cross_frac[0], 1e-9)
+        elif fx <= cross_frac[2]:
+            bi = 2; bt = (fx - cross_frac[1]) / max(cross_frac[2] - cross_frac[1], 1e-9)
+        else:
+            bi = 3; bt = (fx - cross_frac[2]) / max(1.0 - cross_frac[2], 1e-9)
+        bt       = max(0.0, min(1.0, bt))
+        s        = bt * bt * (3.0 - 2.0 * bt)
+        db_here  = band_out_db[bi] + (band_out_db[min(3, bi+1)] - band_out_db[bi]) * s
+        # Clamp to display range so curve never leaves the graph
+        db_here  = max(-79.0, min(0.0, db_here))
         px = spec_x + fx * spec_w
-        py = zero_db_y - db_here * scale_px
-        py = max(spec_y + 2*scale, min(spec_y + spec_h - 2*scale, py))
-        curve_pts.append((px, py))
+        py = _db_to_y(db_here)
+        curve_pts.append((px, py, bi))
 
-    # Draw filled area between curve and 0dB line
+    # Fill between curve and the -18dB reference line
     for i in range(len(curve_pts) - 1):
-        px1, py1 = curve_pts[i]
-        px2, py2 = curve_pts[i+1]
-        band_here = min(3, int((px1 - spec_x) / band_w))
-        col       = BAND_COLORS[band_here]
-        r,g,b_c,a = col
-        y_top  = min(py1, zero_db_y)
-        y_bot  = max(py1, zero_db_y)
-        fill_h = y_bot - y_top
-        if fill_h > 0.5:
-            _draw_rect(px1, y_top, max(px2-px1, 0.5), fill_h,
-                       (r*0.35, g*0.35, b_c*0.35, 0.4))
+        px1, py1, bi = curve_pts[i]
+        px2, py2, _  = curve_pts[i + 1]
+        col           = BAND_COLORS[bi]
+        r, g, b_c, _a = col
+        y_lo = min(py1, ref_y);  y_hi = max(py1, ref_y)
+        fh   = y_hi - y_lo
+        if fh > 0.5:
+            _draw_rect(px1, y_lo, max(px2 - px1, 0.5), fh,
+                       (r * 0.45, g * 0.45, b_c * 0.45, 0.45))
 
-    # Draw the curve line
+    # Curve line — coloured by band
     for i in range(len(curve_pts) - 1):
-        px1, py1 = curve_pts[i]
-        px2, py2 = curve_pts[i+1]
-        band_here = min(3, int((px1 - spec_x) / band_w))
-        col       = BAND_COLORS[band_here]
-        r,g,b_c,a = col
+        px1, py1, bi = curve_pts[i]
+        px2, py2, _  = curve_pts[i + 1]
+        col           = BAND_COLORS[bi]
+        r, g, b_c, _a = col
         _draw_line(px1, py1, px2, py2,
-                   (min(1,r*1.4), min(1,g*1.4), min(1,b_c*1.4), 1.0),
-                   max(2.0, scale*2.0))
+                   (min(1.0, r*1.4), min(1.0, g*1.4), min(1.0, b_c*1.4), 1.0),
+                   max(2.0, scale * 2.0))
 
-    # Band centre dots (like IK Quad Comp)
+    # Band-centre dots + output dB labels
+    band_centres_hz = [60.0, 350.0, 2000.0, 12000.0]
     for band in range(4):
-        bx_c = spec_x + (band + 0.5) * band_w
-        db_b = band_db[band]
-        py_c = zero_db_y - db_b * scale_px
-        py_c = max(spec_y + 4*scale, min(spec_y + spec_h - 4*scale, py_c))
-        col  = BAND_COLORS[band]
-        r,g,b_c,a = col
+        bx_c  = _freq_to_x(band_centres_hz[band])
+        py_c  = _db_to_y(band_out_db[band])
+        py_c  = max(spec_y + 4*scale, min(spec_y + spec_h - 4*scale, py_c))
+        col   = BAND_COLORS[band]
+        r, g, b_c, _a = col
         _draw_circle(bx_c, py_c, 5*scale,
-                     (min(1,r*1.5), min(1,g*1.5), min(1,b_c*1.5), 1.0))
-        _draw_circle(bx_c, py_c, 5*scale, (0.1,0.1,0.1,0.6), filled=False)
-        # Value label
+                     (min(1.0, r*1.5), min(1.0, g*1.5), min(1.0, b_c*1.5), 1.0))
+        _draw_circle(bx_c, py_c, 5*scale, (0.08, 0.08, 0.08, 0.7), filled=False)
         fs_lbl = max(1, int(7*scale))
-        lbl    = f"{db_b:+.1f}dB"
+        lbl    = f"{band_out_db[band]:.1f}dB"
         tw_lbl = _text_width(lbl, fs_lbl)
-        _draw_text(lbl, bx_c - tw_lbl/2, py_c + 8*scale,
+        _draw_text(lbl, bx_c - tw_lbl/2, py_c + 7*scale,
                    fs_lbl, (r, g, b_c, 0.9))
 
-    # Band name labels
+    # Band name labels at bottom of spectrum
     for band in range(4):
-        col   = BAND_COLORS[band]
-        bx_c  = spec_x + (band + 0.5) * band_w
+        col  = BAND_COLORS[band]
+        bx_c = _freq_to_x(band_centres_hz[band])
         fs_bn = max(1, int(8*scale))
         tw_bn = _text_width(BAND_NAMES[band], fs_bn)
         _draw_text(BAND_NAMES[band], bx_c - tw_bn/2,
-                   spec_y + spec_h - 14*scale,
-                   fs_bn, (col[0]*0.8, col[1]*0.8, col[2]*0.8, 0.8))
+                   spec_y + 2*scale,
+                   fs_bn, (col[0]*0.8, col[1]*0.8, col[2]*0.8, 0.85))
 
     # ----------------------------------------------------------------
     # FADER + KNOB ZONE — bottom portion, 4 equal columns
@@ -442,32 +547,28 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         gr_meter_y = fdr_y
         gr_meter_h = fdr_h
 
-        # Read GR + signal from timelines — zero when rack is bypassed
-        gr_db_band = 0.0
+        # Reuse gr_data already fetched at the top of this function —
+        # avoids calling get_engine() 4 more times per frame per rack.
+        gr_db_band = float(gr_data[band]) if band < len(gr_data) else 0.0
         sig_norm   = 0.0
-        if rack.enabled:
+        if spec_bins is not None and rack.enabled:
             try:
-                from Loader import _gr_timeline, _fft_timeline
-                import bpy as _grbpy2
-                scene_gr2    = _grbpy2.context.scene
+                from Loader import get_engine as _get_eng_gr
+                _eng_gr = _get_eng_gr()
                 assigned_gr2 = get_rack_channels(rack)
-                if assigned_gr2 and scene_gr2:
-                    ch_gr2 = list(assigned_gr2)[0]
-                    cur_f2 = scene_gr2.frame_current
-                    tl_gr2 = _gr_timeline.get(ch_gr2)
-                    if tl_gr2 is not None and len(tl_gr2['snapshots']) > 0:
-                        snap_sec2 = tl_gr2['snap_frames'] / tl_gr2['sr']
-                        elap_sec2 = (cur_f2 - tl_gr2['start_frame']) / tl_gr2['fps']
-                        snap_idx2 = max(0, min(len(tl_gr2['snapshots'])-1,
-                                              int(elap_sec2 / snap_sec2)))
-                        gr_db_band = float(tl_gr2['snapshots'][snap_idx2][band])
-                    tl_fft2 = _fft_timeline.get(ch_gr2)
-                    if tl_fft2 is not None and len(tl_fft2['snapshots']) > 0:
-                        snap_sec3 = tl_fft2['snap_frames'] / tl_fft2['sr']
-                        elap_sec3 = (cur_f2 - tl_fft2['start_frame']) / tl_fft2['fps']
-                        snap_idx3 = max(0, min(len(tl_fft2['snapshots'])-1,
-                                              int(elap_sec3 / snap_sec3)))
-                        sig_norm  = float(tl_fft2['snapshots'][snap_idx3][band].mean())
+                if _eng_gr and assigned_gr2:
+                    _hj_gr = _eng_gr.get_engine()
+                    if _hj_gr:
+                        # Average band level across assigned channels
+                        lvl_acc = 0.0; lvl_cnt = 0
+                        _s_gr = _hj_gr.get_state()
+                        for ch_gr2 in assigned_gr2:
+                            if 0 <= ch_gr2 < 32:
+                                bl = _s_gr.get_band_levels(ch_gr2)
+                                if bl and band < len(bl):
+                                    lvl_acc += float(bl[band]); lvl_cnt += 1
+                        if lvl_cnt > 0:
+                            sig_norm = min(1.0, (lvl_acc / lvl_cnt) * 6.0)
             except Exception:
                 pass
 

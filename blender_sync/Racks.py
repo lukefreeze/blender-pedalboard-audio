@@ -3974,39 +3974,34 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
 def _trigger_reprocess(rack_idx, rack, context):
     """Reprocess all channels affected by a rack change.
     Handles: preset change, ON/OFF toggle, channel assign/deassign.
-    When a channel is deassigned or rack is bypassed, that channel
-    reverts to unprocessed audio.
+    With the Hijacker engine, just rewires effect slots — no restart needed.
     """
     try:
-        from Loader import (_pb_reprocess_channel, _pb_wire_rack_to_engine,
-                            _pb_channels, _pb_proc_wav_cache)
-        import os, tempfile
+        from core.audio import _hj_wire_effects, _pb_rebuild_eq
+        import bpy as _bpy
+        scene = _bpy.context.scene
+        if not scene: return
 
-        # Invalidate cached wavs for affected channels so stale pre-rack audio
-        # is never replayed — forces a fresh reprocess on next play
         assigned = get_rack_channels(rack)
-        all_affected = set(assigned) | set(_pb_channels.keys())
-        for ch in all_affected:
-            # Delete the cached processed wav so _pb_start_channel rewrites it
-            cached = _pb_proc_wav_cache.get(ch)
-            if cached:
-                try:
-                    if os.path.exists(cached):
-                        os.remove(cached)
-                except Exception:
-                    pass
-                _pb_proc_wav_cache.pop(ch, None)
 
-        # Reprocess currently assigned channels (new settings)
+        # Rewire effects for assigned channels (new settings take effect ~5ms)
         for ch in assigned:
-            _pb_wire_rack_to_engine(ch)
-            _pb_reprocess_channel(ch)
+            _pb_rebuild_eq(ch)
 
-        # Also reprocess any channels that are playing but not assigned
-        for ch in list(_pb_channels.keys()):
-            if ch not in assigned:
-                _pb_wire_rack_to_engine(ch)
-                _pb_reprocess_channel(ch)
+        # Also rewire channels that are active but no longer assigned
+        # so they revert to clean audio without this rack's DSP
+        try:
+            from core.engine import get_engine as _get_eng
+            _eng = _get_eng()
+            if _eng:
+                _hj = _eng.get_engine()
+                if _hj:
+                    for ch in range(32):
+                        if ch not in assigned and _hj.get_meter_rms(ch) > 0:
+                            _pb_rebuild_eq(ch)
+        except Exception:
+            pass
+
     except Exception as e:
         print(f"[RACKS] reprocess failed: {e}")
         import traceback; traceback.print_exc()
@@ -4672,6 +4667,14 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
             _draw_whisper_body(rx, ry, rw, rh, rack, ai_idx, scale)
         except Exception as e:
             print(f"[AI RACKS] Whisper draw error rack {ai_idx}: {e}")
+            import traceback; traceback.print_exc()
+
+    elif atype == "DEMUCS":
+        try:
+            from ui.racks.rack_demucs import _draw_demucs_body
+            _draw_demucs_body(rx, ry, rw, rh, rack, ai_idx, scale)
+        except Exception as e:
+            print(f"[AI RACKS] Demucs draw error rack {ai_idx}: {e}")
             import traceback; traceback.print_exc()
 
 
@@ -5477,6 +5480,94 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             if _tbtn_x <= mouse_x <= _tbtn_x + _tbtn_w and _tbtn_y <= mouse_y <= _tbtn_y + _tbtn_h:
                 return {'zone': 'ai_wsp_transcribe', 'ai_idx': ai_idx}
 
+        # ── Demucs hit test ────────────────────────────────────────────────────
+        if rack.ai_type == "DEMUCS" and not rack.collapsed:
+            from ui.racks.rack_demucs import MODELS, MODEL_STEMS, STEM_BITS, STEM_CH_PROPS
+            _rail_d     = RACK_RAIL_H * scale
+            _body_bot_d = rack_y
+            _body_top_d = rack_y + rack_h - _rail_d
+            _body_h_d   = _body_top_d - _body_bot_d
+
+            content_w_d = rw - 100 * scale
+            left_w_d    = content_w_d * 0.24
+            right_w_d   = content_w_d * 0.22
+            centre_w_d  = content_w_d - left_w_d - right_w_d
+            centre_x_d  = rack_x + left_w_d
+            right_x_d   = centre_x_d + centre_w_d
+
+            # Model buttons (left column)
+            mx_d = rack_x + 5 * scale
+            mw_d = left_w_d - 10 * scale
+            model_btn_h = max(13 * scale, (_body_h_d * 0.60 / len(MODELS)) - 3 * scale)
+            models_top_d = _body_top_d - max(1, int(7 * scale)) - 8 * scale
+            for mi in range(len(MODELS)):
+                by_m = models_top_d - (mi + 1) * (model_btn_h + 3 * scale)
+                if mx_d <= mouse_x <= mx_d + mw_d and by_m <= mouse_y <= by_m + model_btn_h:
+                    return {'zone': 'demucs_model', 'ai_idx': ai_idx, 'model_idx': mi}
+
+            # Preview / Full buttons
+            mode_h_d = min(18 * scale, _body_h_d * 0.12)
+            mode_y_d = _body_bot_d + 24 * scale
+            half_w_d = (mw_d - 3 * scale) / 2
+            if mx_d <= mouse_x <= mx_d + half_w_d and mode_y_d <= mouse_y <= mode_y_d + mode_h_d:
+                return {'zone': 'demucs_preview', 'ai_idx': ai_idx, 'val': True}
+            if (mx_d + half_w_d + 3 * scale <= mouse_x <= mx_d + mw_d and
+                    mode_y_d <= mouse_y <= mode_y_d + mode_h_d):
+                return {'zone': 'demucs_preview', 'ai_idx': ai_idx, 'val': False}
+
+            # Stem rows (centre column)
+            model_idx_d = max(0, min(int(getattr(rack, 'p0', 1.0)), len(MODELS) - 1))
+            all_stems_d = MODEL_STEMS[MODELS[model_idx_d]]
+            cx_d        = centre_x_d + 5 * scale
+            cw_d        = centre_w_d - 10 * scale
+            n_stems_d   = len(all_stems_d)
+            fs_lbl_d    = max(1, int(7 * scale))
+            stems_area_h_d = _body_h_d - fs_lbl_d - 12 * scale - 5 * scale
+            row_h_d     = min(22 * scale, (stems_area_h_d - (n_stems_d - 1) * 3 * scale) / n_stems_d)
+            stems_top_d = _body_top_d - fs_lbl_d - 8 * scale
+
+            for si, stem in enumerate(all_stems_d):
+                row_y_d = stems_top_d - (si + 1) * (row_h_d + 3 * scale)
+                if not (row_y_d <= mouse_y <= row_y_d + row_h_d):
+                    continue
+                is_6s_only = stem in ("piano", "guitar")
+                available  = not (is_6s_only and MODELS[model_idx_d] != "htdemucs_6s")
+                if not available:
+                    continue
+
+                # Checkbox (left ~15px)
+                chk_s_d = min(row_h_d - 4 * scale, 10 * scale)
+                chk_x_d = cx_d + 3 * scale
+                if cx_d <= mouse_x <= cx_d + chk_s_d + 6 * scale:
+                    return {'zone': 'demucs_stem_toggle', 'ai_idx': ai_idx,
+                            'stem': stem, 'bit': STEM_BITS[stem]}
+
+                # Channel stepper (right ~54px)
+                st_w_d = 50 * scale
+                st_x_d = cx_d + cw_d - st_w_d
+                if st_x_d <= mouse_x <= cx_d + cw_d:
+                    third_d = st_w_d / 3.0
+                    if mouse_x <= st_x_d + third_d:
+                        return {'zone': 'demucs_stem_ch_minus', 'ai_idx': ai_idx,
+                                'stem': stem}
+                    elif mouse_x >= st_x_d + st_w_d - third_d:
+                        return {'zone': 'demucs_stem_ch_plus', 'ai_idx': ai_idx,
+                                'stem': stem}
+
+            # Mute original toggle (right column)
+            rx2_d   = right_x_d + 4 * scale
+            rw2_d   = right_w_d - 8 * scale
+            opt_y_d = _body_top_d - fs_lbl_d - 10 * scale - 14 * scale
+            opt_h_d = 13 * scale
+            if rx2_d <= mouse_x <= rx2_d + rw2_d and opt_y_d <= mouse_y <= opt_y_d + opt_h_d:
+                return {'zone': 'demucs_mute_toggle', 'ai_idx': ai_idx}
+
+            # Run button (right column, bottom)
+            run_h_d = min(22 * scale, _body_h_d * 0.16)
+            run_y_d = _body_bot_d + 4 * scale
+            if rx2_d <= mouse_x <= rx2_d + rw2_d and run_y_d <= mouse_y <= run_y_d + run_h_d:
+                return {'zone': 'demucs_split', 'ai_idx': ai_idx}
+
         return {'zone': 'ai_rack_body', 'ai_idx': ai_idx}
 
     return None
@@ -5619,8 +5710,86 @@ def handle_ai_rack_click(hit, context):
                     print(f"[AI RACKS] Piper launch failed: {e}")
                     import traceback; traceback.print_exc()
                     rack.ai_status = "ERROR"
+            elif atype == "DEMUCS":
+                try:
+                    from core.ai_demucs import separate_demucs
+                    separate_demucs(i, context)
+                except Exception as e:
+                    print(f"[AI RACKS] Demucs launch failed: {e}")
+                    import traceback; traceback.print_exc()
+                    rack.ai_status = "ERROR"
             else:
                 print(f"[AI RACKS] {atype} processing not yet implemented")
+        return True
+
+    # ── Demucs click handlers ─────────────────────────────────────────────────
+    if zone == 'demucs_split':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_demucs import separate_demucs
+                separate_demucs(i, context)
+            except Exception as e:
+                print(f"[DEMUCS] launch failed: {e}")
+                ai_racks[i].ai_status = "ERROR"
+        return True
+
+    if zone == 'demucs_model':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p0 = float(hit['model_idx'])
+            ai_racks[i].ai_status = 'READY'
+        return True
+
+    if zone == 'demucs_preview':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            ai_racks[i].p1 = 1.0 if hit['val'] else 0.0
+        return True
+
+    if zone == 'demucs_mute_toggle':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            cur = float(getattr(ai_racks[i], 'p2', 1.0))
+            ai_racks[i].p2 = 0.0 if cur > 0.5 else 1.0
+        return True
+
+    if zone == 'demucs_stem_toggle':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i   = hit['ai_idx']
+        bit = hit['bit']
+        if i < len(ai_racks):
+            cur  = int(getattr(ai_racks[i], 'p3', 15.0))
+            mask = 1 << bit
+            ai_racks[i].p3 = float(cur ^ mask)
+        return True
+
+    if zone == 'demucs_stem_ch_minus':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i    = hit['ai_idx']
+        stem = hit['stem']
+        if i < len(ai_racks):
+            from ui.racks.rack_demucs import STEM_CH_PROPS
+            prop = STEM_CH_PROPS.get(stem)
+            if prop:
+                cur = int(getattr(ai_racks[i], prop, 0.0))
+                setattr(ai_racks[i], prop, float(max(0, cur - 1)))
+        return True
+
+    if zone == 'demucs_stem_ch_plus':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i    = hit['ai_idx']
+        stem = hit['stem']
+        if i < len(ai_racks):
+            from ui.racks.rack_demucs import STEM_CH_PROPS
+            prop = STEM_CH_PROPS.get(stem)
+            if prop:
+                cur = int(getattr(ai_racks[i], prop, 0.0))
+                setattr(ai_racks[i], prop, float(min(32, cur + 1)))
         return True
 
     # ai_dnf_knob drag is handled in interaction.py — consume here

@@ -60,6 +60,16 @@ def _build_envelope(filepath, fps):
                 n_samp  = len(raw) // 2
                 samples = struct.unpack_from(f'{n_samp}h', raw)
                 samples = [s / 32768.0 for s in samples]
+            elif samp_w == 3:
+                # 24-bit PCM — 3 bytes per sample, little-endian signed
+                n_samp  = len(raw) // 3
+                samples = []
+                for si in range(n_samp):
+                    b0, b1, b2 = raw[si*3], raw[si*3+1], raw[si*3+2]
+                    val = b0 | (b1 << 8) | (b2 << 16)
+                    if val >= 0x800000:   # sign-extend
+                        val -= 0x1000000
+                    samples.append(val / 8388608.0)
             elif samp_w == 4:
                 n_samp = len(raw) // 4
                 # Try float32 first (used by BOOSTER output)
@@ -252,11 +262,13 @@ def _meter_timer():
             _engine_levels[i] = (rms if rms > _engine_levels[i]
                                   else max(0.0, _engine_levels[i] - decay))
 
-        # Mirror meter levels to C++ engine state
+        # Mirror meter levels to C++ engine state and read GR levels
         engine = get_engine()
         if engine:
             try:
-                s  = engine.get_state()
+                hj = engine.get_engine()
+                if not hj: raise Exception("no engine instance")
+                s  = hj.get_state()
                 ml = list(s.meter_levels)
                 for i in range(min(MAX_CHANNELS, len(ml))):
                     ml[i] = _engine_levels[i]
@@ -275,8 +287,6 @@ def _meter_timer():
                             if ch < 0 or ch >= MAX_CHANNELS: continue
                             try:
                                 gr_vals = s.get_gr_levels(ch)
-                                # For single band use band 0,
-                                # for multiband use max across bands
                                 if rack.effect_type == "COMP_SINGLE":
                                     _gr_levels.setdefault(ri, {})[ch] = (
                                         gr_vals[0] / 24.0 if gr_vals else 0.0)

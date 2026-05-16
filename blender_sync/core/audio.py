@@ -47,33 +47,34 @@ _pb_start_frame    = 0
 _pb_last_frame     = 0
 _pb_last_loop_time = 0.0
 
+
 def apply_fader_to_channel(channel_idx, old_fader, new_fader):
-    """Apply proportional fader change to all strips on this VSE channel."""
+    """Apply fader change — multiplies strip.volume by new/old ratio.
+    Both fader and gain have a minimum of 0.001 so the ratio never
+    reaches zero and the original strip volume is always recoverable."""
     scene = bpy.context.scene
     if not scene or not scene.sequence_editor: return
     if abs(new_fader - old_fader) < 1e-6: return
+    old_fader = max(old_fader, 0.001)
     ratio = new_fader / old_fader
     for strip in scene.sequence_editor.sequences_all:
         if strip.type != "SOUND": continue
         if (strip.channel - 1) != channel_idx: continue
-        if strip.volume == 0.0: strip.volume = 0.001
         strip.volume = max(0.001, strip.volume * ratio)
-    # Sync to audio engine handle if playing
     _pb_engine_update_volume(channel_idx)
 
 
 def apply_gain_to_channel(channel_idx, old_gain, new_gain):
-    """Apply proportional gain change to all strips on this VSE channel."""
+    """Apply gain change — multiplies strip.volume by new/old ratio."""
     scene = bpy.context.scene
     if not scene or not scene.sequence_editor: return
     if abs(new_gain - old_gain) < 1e-6: return
+    old_gain = max(old_gain, 0.001)
     ratio = new_gain / old_gain
     for strip in scene.sequence_editor.sequences_all:
         if strip.type != "SOUND": continue
         if (strip.channel - 1) != channel_idx: continue
-        if strip.volume == 0.0: strip.volume = 0.001
         strip.volume = max(0.001, strip.volume * ratio)
-    # Sync to audio engine handle if playing
     _pb_engine_update_volume(channel_idx)
 
 
@@ -596,17 +597,15 @@ def _pb_build_channel_sound(channel_idx, start_seconds):
 
 
 def _pb_channel_volume(channel_idx):
-    """Calculate handle.volume for a channel.
-    Returns 0 if muted or if another channel is soloed.
-    Volume is read from strip.volume which has fader and gain baked in."""
+    """Calculate the engine volume for a channel.
+    strip.volume already has fader and gain baked in via apply_fader/gain_to_channel.
+    Values above 1.0 are valid — the engine passes them through for amplification."""
     scene  = bpy.context.scene
     tracks = getattr(scene, "pb_sync_tracks", []) if scene else []
 
-    # Muted channel — silent
     if channel_idx < len(tracks) and tracks[channel_idx].mute:
         return 0.0
 
-    # Solo: if any channel is soloed and this one isn't, silent
     soloed = {i for i, t in enumerate(tracks) if t.solo}
     if soloed and channel_idx not in soloed:
         return 0.0
@@ -615,7 +614,7 @@ def _pb_channel_volume(channel_idx):
     strips = [s for s in scene.sequence_editor.sequences_all
               if s.type == "SOUND" and (s.channel - 1) == channel_idx]
     if not strips: return 1.0
-    return sum(s.volume for s in strips) / len(strips)
+    return max(s.volume for s in strips)
 
 
 def _pb_wire_rack_to_engine(channel_idx):
@@ -992,641 +991,387 @@ def _build_timelines(channel_idx, proc_np, sr, scene_fps,
         pass  # gate timeline is decorative — never block playback
 
 
-def _pb_start_channel(channel_idx, position_seconds):
-    """Start or restart a channel handle from position_seconds."""
-    global _pb_channels
-    import aud
 
-    # Keep existing handle alive until new sound is ready — prevents audio gap
-    existing = _pb_channels.get(channel_idx)
+# =============================================================================
+# TRANSPORT — The Hijacker engine
+# =============================================================================
+# All playback is now handled by hijacker_engine (C++ PortAudio).
+# Python's role:
+#   1. At play-start: build segment playlists from VSE strips, send to engine
+#   2. Wire rack DSP params into engine effect slots
+#   3. Handle seek by calling engine.seek()
+#   4. Handle stop by calling engine.stop()
+#   5. Mute/solo/volume: call engine.set_volume/mute/solo() — instant, no restart
+#   6. EQ/rack changes: call engine.set_effect_slot() — heard next buffer (~5ms)
+# =============================================================================
 
-    sound, base_vol = _pb_build_channel_sound(channel_idx, position_seconds)
-    if sound is None:
-        # Nothing to play — stop existing and clear
-        if existing:
-            try: existing['handle'].stop()
-            except Exception: pass
-        _pb_channels.pop(channel_idx, None)
+
+def _hj_build_segment_playlist(channel_idx, scene):
+    """
+    Build a list of HijackerSegment objects for one VSE channel.
+    Pre-decodes any non-WAV strips to temp WAV so the engine
+    only ever sees raw PCM files.
+    Returns list of segment dicts ready to convert to engine.Segment objects.
+    """
+    import aud, os, tempfile, wave as _wave
+
+    if not scene or not scene.sequence_editor:
+        return []
+
+    fps       = scene.render.fps / scene.render.fps_base
+    seq_start = scene.frame_start / fps
+    seq_end   = scene.frame_end   / fps
+
+    strips = sorted(
+        [s for s in scene.sequence_editor.sequences_all
+         if s.type == "SOUND" and s.sound
+         and (s.channel - 1) == channel_idx],
+        key=lambda s: s.frame_final_start
+    )
+    if not strips:
+        return []
+
+    segments = []
+    for strip in strips:
+        actual_start_frame = strip.frame_final_end - strip.frame_final_duration
+        timeline_pos_s     = actual_start_frame / fps
+        duration_s         = strip.frame_final_duration / fps
+        file_offset_s      = getattr(strip, 'frame_offset_start', 0) / fps
+
+        # Skip entirely outside sequence
+        if timeline_pos_s + duration_s <= seq_start: continue
+        if timeline_pos_s >= seq_end:                continue
+
+        # Clamp to sequence
+        if timeline_pos_s < seq_start:
+            file_offset_s += (seq_start - timeline_pos_s)
+            duration_s    -= (seq_start - timeline_pos_s)
+            timeline_pos_s = seq_start
+        if timeline_pos_s + duration_s > seq_end:
+            duration_s = seq_end - timeline_pos_s
+
+        if duration_s <= 0.001:
+            continue
+
+        filepath = bpy.path.abspath(strip.sound.filepath)
+        if not os.path.exists(filepath):
+            print(f"[HIJACKER] ch{channel_idx+1} missing file: {filepath}")
+            continue
+
+        # Ensure it's a WAV — decode if needed
+        wav_path = filepath
+        if not filepath.lower().endswith('.wav'):
+            cache_key = f"hj_decoded_{channel_idx}_{os.path.basename(filepath)}.wav"
+            wav_path  = os.path.join(tempfile.gettempdir(), cache_key)
+            if not os.path.exists(wav_path):
+                try:
+                    snd  = aud.Sound.file(filepath)
+                    spec = snd.specs
+                    sr   = int(spec[0])
+                    nch  = int(spec[1])
+                    data = snd.data()
+                    import numpy as np, struct
+                    if data is not None and data.size > 0:
+                        i16 = (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16)
+                        with _wave.open(wav_path, 'wb') as wf:
+                            wf.setnchannels(nch)
+                            wf.setsampwidth(2)
+                            wf.setframerate(sr)
+                            wf.writeframes(i16.tobytes())
+                        print(f"[HIJACKER] decoded {os.path.basename(filepath)} → WAV")
+                    else:
+                        wav_path = None
+                except Exception as e:
+                    print(f"[HIJACKER] decode failed {filepath}: {e}")
+                    wav_path = None
+
+        if not wav_path or not os.path.exists(wav_path):
+            continue
+
+        segments.append({
+            'filepath':       wav_path,
+            'file_offset_s':  file_offset_s,
+            'duration_s':     duration_s,
+            'timeline_pos_s': timeline_pos_s,
+        })
+
+    return segments
+
+
+def _hj_wire_effects(channel_idx, scene):
+    """
+    Write current rack parameters into the engine's effect slots for a channel.
+    These take effect on the next audio buffer (~5ms) — no restart needed.
+    """
+    engine = get_engine()
+    if not engine: return
+
+    hj = engine.get_engine()
+    if not hj: return
+
+    # Clear all slots first
+    for slot in range(8):
+        hj.clear_effect_slot(channel_idx, slot)
+
+    racks = getattr(scene, "pb_racks", []) if scene else []
+    slot_idx = 0
+
+    try:
+        from Racks import get_rack_channels
+    except Exception:
         return
 
-    # Wire rack params into C++ effect chain before playback starts
-    _pb_wire_rack_to_engine(channel_idx)
-
-    # Batch DSP processing via C++ engine.
-    # Blender 4.5 does not expose ISound* pointers so we cannot intercept
-    # the audio thread. Instead we process offline:
-    #   1. Extract raw samples from the aud.Sound via .data()
-    #   2. Pass numpy array to C++ process_buffer() — full DSP runs here
-    #   3. Write processed samples to temp wav
-    #   4. Play the temp wav via aud.Device
-    engine  = get_engine()
-    pb_sound = sound   # fallback
-
-    if engine:
-        # Only process through DSP if a rack is actually assigned to this channel
-        has_rack = False
+    for rack in racks:
+        if not rack.enabled: continue
         try:
-            from Racks import get_rack_channels
-            scene = bpy.context.scene
-            racks = getattr(scene, "pb_racks", []) if scene else []
-            for rack in racks:
-                if rack.enabled and channel_idx in get_rack_channels(rack):
-                    has_rack = True
-                    break
+            assigned = get_rack_channels(rack)
         except Exception:
-            pass
+            continue
+        if channel_idx not in assigned: continue
 
-        if has_rack:
-            try:
-                import tempfile, os, aud as _aud
-                import numpy as np
-                import wave, struct
+        etype = rack.effect_type
+        params = [0.0] * 24
 
-                # Get specs
-                try:
-                    sr  = int(sound.specs[0])
-                    nch = int(sound.specs[1])
-                except Exception:
-                    sr, nch = 44100, 2
+        if etype == "COMP_SINGLE":
+            params[:6] = [rack.p0, rack.p1, rack.p2, rack.p3, rack.p4, rack.p5]
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_COMP_SINGLE, params)
+            slot_idx += 1
+        elif etype == "COMP_MULTI":
+            params = [rack.p0, rack.p1, rack.p2, rack.p3,
+                      rack.p4, rack.p5, rack.p6, rack.p7,
+                      rack.p8, rack.p9, rack.p10, rack.p11,
+                      rack.p12, rack.p13, rack.p14, rack.p15,
+                      rack.p16, rack.p17, rack.p18, rack.p19,
+                      rack.p20, rack.p21, rack.p22, rack.p23]
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_COMP_MULTI, params)
+            slot_idx += 1
+        elif etype == "EQ":
+            for bi in range(7):
+                p = getattr(rack, f'p{bi}', 0.5)
+                params[bi]      = p
+                params[bi + 7]  = getattr(rack, f'p{bi+7}',  0.5)
+                params[bi + 14] = getattr(rack, f'p{bi+14}', 0.5)
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_EQ_PARAM, params)
+            slot_idx += 1
+        elif etype == "REVERB":
+            params[:5] = [rack.p0, rack.p1, rack.p2, rack.p3, rack.p4]
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_REVERB_PARAM, params)
+            slot_idx += 1
+        elif etype == "NOISE_GATE":
+            params[:5] = [rack.p0, rack.p1, rack.p2, rack.p3, rack.p4]
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_GATE_PARAM, params)
+            slot_idx += 1
+        elif etype == "DELAY":
+            params[:5] = [rack.p0, rack.p1, rack.p2, rack.p3, rack.p4]
+            hj.set_effect_slot(channel_idx, slot_idx, engine.FX_DELAY_PARAM, params)
+            slot_idx += 1
 
-                # Extract raw samples — returns (n_frames, n_channels) float32
-                samples = sound.data()
-                if samples is None or samples.size == 0:
-                    raise RuntimeError("sound.data() returned empty array")
-
-                if samples.ndim == 1:
-                    samples = samples.reshape(-1, 1)
-                samples = np.ascontiguousarray(samples, dtype=np.float32)
-
-                print(f"[ENGINE] ch{channel_idx+1} processing "
-                      f"{samples.shape[0]} frames × {samples.shape[1]}ch "
-                      f"@ {sr}Hz — effect chain")
-
-                # Run effect chain in UI rack order (EQ + compressors, order-aware)
-                processed, raw_for_gr = _apply_effect_chain(
-                    samples, channel_idx, sr)
-
-                # Build FFT timeline from processed audio
-                # Compute FFT every ~100ms = one snapshot per 100ms of audio
-                # Stored as list of 4-band × 32-bin arrays for Racks.py to read
-                try:
-                    proc_for_fft = np.asarray(processed, dtype=np.float32)
-                    if proc_for_fft.ndim == 2:
-                        mono_fft = proc_for_fft[:, 0]  # use left channel
-                    else:
-                        mono_fft = proc_for_fft.flatten()
-
-                    snap_frames   = int(sr * 0.08)  # snapshot every 80ms
-                    n_snaps       = max(1, len(mono_fft) // snap_frames)
-                    fft_snaps     = []
-                    BINS_PER_BAND = 32  # 32 bins per band → 128 total
-                    TOTAL_BINS    = BINS_PER_BAND * 4
-
-                    # Crossover frequencies matching C++ Linkwitz-Riley
-                    # Low: 20-120Hz, L-Mid: 120-800Hz,
-                    # H-Mid: 800-5000Hz, High: 5000-20000Hz
-                    CROSSOVERS = [20, 120, 800, 5000, 20000]
-
-                    for snap_i in range(n_snaps):
-                        start = snap_i * snap_frames
-                        chunk = mono_fft[start:start + snap_frames]
-                        if len(chunk) < 128:
-                            break
-                        win   = np.hanning(len(chunk)).astype(np.float32)
-                        fft_c = np.abs(np.fft.rfft(chunk * win))
-                        fft_c = fft_c / (len(chunk) * 0.5 + 1e-9)
-
-                        # Frequency resolution per bin
-                        freq_res  = sr / len(chunk)
-                        n_bins_fft = len(fft_c)
-
-                        # Map each band's frequency range to FFT bins
-                        # using logarithmic spacing within each band
-                        band_snap_list = []
-                        for b in range(4):
-                            f_lo = CROSSOVERS[b]
-                            f_hi = CROSSOVERS[b + 1]
-                            # Log-spaced frequency points within this band
-                            freqs  = np.logspace(
-                                np.log10(max(f_lo, 1)),
-                                np.log10(f_hi),
-                                BINS_PER_BAND)
-                            # Map frequencies to FFT bin indices
-                            idxs   = np.clip(
-                                (freqs / freq_res).astype(int),
-                                0, n_bins_fft - 1)
-                            band_vals = fft_c[idxs]
-                            band_db   = np.clip(
-                                (20*np.log10(band_vals+1e-9)+80)/80,
-                                0.0, 1.0).astype(np.float32)
-                            band_snap_list.append(band_db)
-
-                        band_snap = np.stack(band_snap_list)
-                        fft_snaps.append(band_snap)
-
-                    # Stack into (n_snaps, 4, 32)
-                    fft_array = np.stack(fft_snaps)
-                    scene_fps = (bpy.context.scene.render.fps /
-                                 bpy.context.scene.render.fps_base
-                                 if bpy.context.scene else 24.0)
-                    _scene_sf = bpy.context.scene
-                    _sf_frames = ((_scene_sf.frame_preview_start
-                                   if _scene_sf and _scene_sf.use_preview_range
-                                   else (_scene_sf.frame_start if _scene_sf else 1)))
-                    _fft_timeline[channel_idx] = {
-                        'snapshots'  : fft_array,
-                        'snap_frames': snap_frames,
-                        'start_frame': float(_sf_frames),
-                        'sr'         : sr,
-                        'fps'        : scene_fps,
-                    }
-                    print(f"[ENGINE] ch{channel_idx+1} FFT timeline: "
-                          f"{len(fft_snaps)} snapshots")
-
-                    # Build a separate FFT timeline for the EQ input signal.
-                    # _fft_timeline_eq_input[ch] is set by _apply_effect_chain
-                    # to the pre-EQ audio (post any upstream compressors).
-                    # If no EQ rack is assigned, it won't be set and the EQ
-                    # display just uses the main _fft_timeline (same result).
-                    eq_input_sig = _fft_timeline_eq_input.get(channel_idx)
-                    if eq_input_sig is not None:
-                        try:
-                            eq_mono = (eq_input_sig[:, 0]
-                                       if eq_input_sig.ndim == 2
-                                       else eq_input_sig.flatten())
-                            eq_snaps = []
-                            for snap_i in range(n_snaps):
-                                start_eq = snap_i * snap_frames
-                                chunk_eq = eq_mono[start_eq:start_eq + snap_frames]
-                                if len(chunk_eq) < 128:
-                                    break
-                                win_eq = np.hanning(len(chunk_eq)).astype(np.float32)
-                                fft_eq = np.abs(np.fft.rfft(chunk_eq * win_eq))
-                                fft_eq = fft_eq / (len(chunk_eq) * 0.5 + 1e-9)
-                                freq_res_eq = sr / len(chunk_eq)
-                                n_bins_eq   = len(fft_eq)
-                                band_list_eq = []
-                                for b in range(4):
-                                    f_lo = CROSSOVERS[b]
-                                    f_hi = CROSSOVERS[b + 1]
-                                    freqs_eq = np.logspace(
-                                        np.log10(max(f_lo, 1)),
-                                        np.log10(f_hi), BINS_PER_BAND)
-                                    idxs_eq = np.clip(
-                                        (freqs_eq / freq_res_eq).astype(int),
-                                        0, n_bins_eq - 1)
-                                    band_vals_eq = fft_eq[idxs_eq]
-                                    band_db_eq   = np.clip(
-                                        (20*np.log10(band_vals_eq+1e-9)+80)/80,
-                                        0.0, 1.0).astype(np.float32)
-                                    band_list_eq.append(band_db_eq)
-                                eq_snaps.append(np.stack(band_list_eq))
-                            if eq_snaps:
-                                _fft_timeline[channel_idx] = {
-                                    'snapshots'  : np.stack(eq_snaps),
-                                    'snap_frames': snap_frames,
-                                    'start_frame': position_seconds * scene_fps,
-                                    'sr'         : sr,
-                                    'fps'        : scene_fps,
-                                }
-                        except Exception as _eqfe:
-                            pass   # non-fatal — falls back to main timeline
-                except Exception as fe:
-                    print(f"[ENGINE] FFT timeline failed: {fe}")
-
-                # Build GR timeline by calling process_buffer on each 80ms chunk
-                # and reading the exact GR values from the C++ engine.
-                # raw_for_gr = the signal as it arrived at the compressor,
-                # which may differ from samples if an EQ rack is placed before it.
-                try:
-                    snap_frames_gr = int(sr * 0.08)  # 80ms snapshots
-                    inp_gr = np.asarray(raw_for_gr, dtype=np.float32)
-                    n_snaps_gr = max(1, inp_gr.shape[0] // snap_frames_gr)
-                    gr_snaps = []
-
-                    for snap_i_gr in range(n_snaps_gr):
-                        start_gr = snap_i_gr * snap_frames_gr
-                        chunk_gr = inp_gr[start_gr:start_gr + snap_frames_gr]
-                        if chunk_gr.shape[0] < 64:
-                            break
-                        if chunk_gr.ndim == 1:
-                            chunk_gr = chunk_gr.reshape(-1, 1)
-                        chunk_gr = np.ascontiguousarray(chunk_gr, dtype=np.float32)
-
-                        # Run C++ compressor on this chunk — gr_levels gets updated
-                        try:
-                            engine.process_buffer(channel_idx, chunk_gr, sr)
-                            gr_vals = engine.get_state().get_gr_levels(channel_idx)
-                            # gr_vals are already in dB (positive = gain reduction)
-                            # e.g. 3.5 means 3.5dB of compression applied
-                            gr_snap = np.array([
-                                min(24.0, max(0.0, float(gr_vals[b])))
-                                for b in range(4)
-                            ], dtype=np.float32)
-                        except Exception:
-                            gr_snap = np.zeros(4, dtype=np.float32)
-
-                        gr_snaps.append(gr_snap)
-
-                    if gr_snaps:
-                        gr_array = np.stack(gr_snaps)  # (n_snaps, 4)
-                        _gr_timeline[channel_idx] = {
-                            'snapshots'  : gr_array,
-                            'snap_frames': snap_frames_gr,
-                            'start_frame': position_seconds * scene_fps,
-                            'sr'         : sr,
-                            'fps'        : scene_fps,
-                        }
-                        peak_gr = gr_array.max(axis=0)
-                        print(f"[ENGINE] ch{channel_idx+1} GR timeline: "
-                              f"{len(gr_snaps)} snapshots | "
-                              f"peak GR: "
-                              f"Low={peak_gr[0]:.1f}dB "
-                              f"LMid={peak_gr[1]:.1f}dB "
-                              f"HMid={peak_gr[2]:.1f}dB "
-                              f"High={peak_gr[3]:.1f}dB")
-                except Exception as gre:
-                    print(f"[ENGINE] GR timeline failed: {gre}")
-
-                # Write processed wav using wave module
-                # (aud.Sound.buffer() not available in Blender 4.5)
-                tmp_path = os.path.join(tempfile.gettempdir(),
-                                        f"pb_proc_ch{channel_idx}.wav")
-
-                proc_np = np.asarray(processed, dtype=np.float32)
-                int16   = np.clip(proc_np, -1.0, 1.0)
-                int16   = (int16 * 32767).astype(np.int16)
-
-                with wave.open(tmp_path, 'wb') as wf:
-                    wf.setnchannels(nch)
-                    wf.setsampwidth(2)
-                    wf.setframerate(sr)
-                    wf.writeframes(int16.tobytes())
-
-                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
-                    pb_sound = _aud.Sound.file(tmp_path)
-                    _pb_proc_wav_cache[channel_idx] = tmp_path  # cache for loop restart
-
-                    # Build full-track wav for clean loop replay.
-                    # Only needed when play started mid-sequence.
-                    try:
-                        scene_ft = bpy.context.scene
-                        fps_ft   = scene_fps
-                        start_s  = ((scene_ft.frame_preview_start
-                                     if scene_ft.use_preview_range
-                                     else scene_ft.frame_start)
-                                    / fps_ft) if scene_ft else 0.0
-                        if position_seconds > start_s + 0.1:
-                            # Mid-track start — build full-track version
-                            snd_ft, _ = _pb_build_channel_sound(
-                                channel_idx, start_s)
-                            if snd_ft is not None:
-                                samp_ft = snd_ft.data()
-                                if samp_ft is not None and samp_ft.size > 0:
-                                    if samp_ft.ndim == 1:
-                                        samp_ft = samp_ft.reshape(-1, 1)
-                                    samp_ft = np.ascontiguousarray(
-                                        samp_ft, dtype=np.float32)
-                                    proc_ft, _ = _apply_effect_chain(
-                                        samp_ft, channel_idx, sr)
-                                    ft_path = os.path.join(
-                                        tempfile.gettempdir(),
-                                        f"pb_full_ch{channel_idx}.wav")
-                                    ft_np  = np.asarray(proc_ft, dtype=np.float32)
-                                    ft_i16 = (np.clip(ft_np,-1.0,1.0)*32767
-                                              ).astype(np.int16)
-                                    with wave.open(ft_path, 'wb') as wff:
-                                        wff.setnchannels(nch)
-                                        wff.setsampwidth(2)
-                                        wff.setframerate(sr)
-                                        wff.writeframes(ft_i16.tobytes())
-                                    if os.path.getsize(ft_path) > 0:
-                                        _pb_full_wav_cache[channel_idx] = ft_path
-                                        print(f"[ENGINE] ch{channel_idx+1} "
-                                              f"full-track cached "
-                                              f"({os.path.getsize(ft_path)//1024}KB)")
-                                        # Build full-track timelines from this audio
-                                        try:
-                                            _ft_np = np.asarray(proc_ft,
-                                                                 dtype=np.float32)
-                                            # samp_ft is the raw input for full-track
-                                            _raw_np = np.asarray(samp_ft,
-                                                                  dtype=np.float32)
-                                            _build_timelines(
-                                                channel_idx, _ft_np, sr,
-                                                scene_fps, start_s,
-                                                full_track=True,
-                                                raw_np=_raw_np)
-                                            # DEBUG: confirm full-track timeline contents
-                                            _ft_check = _fft_timeline_full.get(channel_idx)
-                                            _gt_check = _gate_timeline_full.get(channel_idx)
-                                            print(f"[FULL_TL] ch{channel_idx+1} "
-                                                  f"fft_snaps={len(_ft_check['snapshots']) if _ft_check else 0} "
-                                                  f"gate_snaps={len(_gt_check['snapshots']) if _gt_check else 0} "
-                                                  f"start_frame={_ft_check['start_frame'] if _ft_check else 'None'} "
-                                                  f"snap_frames={_ft_check['snap_frames'] if _ft_check else 'None'} "
-                                                  f"sr={_ft_check['sr'] if _ft_check else 'None'} "
-                                                  f"fps={_ft_check['fps'] if _ft_check else 'None'}")
-                                        except Exception:
-                                            _fft_timeline_full[channel_idx] = (
-                                                _fft_timeline.get(channel_idx))
-                                            _gr_timeline_full[channel_idx]  = (
-                                                _gr_timeline.get(channel_idx))
-                        else:
-                            # Started from beginning — trimmed IS the full track
-                            _pb_full_wav_cache[channel_idx] = tmp_path
-                            print(f"[ENGINE] ch{channel_idx+1} "
-                                  f"started at beginning — trimmed = full-track")
-                            _fft_timeline_full[channel_idx] = (
-                                _fft_timeline.get(channel_idx))
-                            _gr_timeline_full[channel_idx]  = (
-                                _gr_timeline.get(channel_idx))
-                    except Exception as _fte:
-                        # Non-fatal — fall back to trimmed wav on loop
-                        _pb_full_wav_cache[channel_idx] = tmp_path
-                        print(f"[ENGINE] ch{channel_idx+1} full-track build failed "
-                              f"({_fte}) — loop will use trimmed")
-                    # Verify compression actually changed the audio
-                    proc_np  = np.asarray(processed, dtype=np.float32)
-                    in_rms   = float(np.sqrt(np.mean(samples**2)))
-                    out_rms  = float(np.sqrt(np.mean(proc_np**2)))
-                    ratio_db = 20*np.log10(out_rms/(in_rms+1e-9))
-                    print(f"[ENGINE] ch{channel_idx+1} DSP done — "
-                          f"wav={os.path.getsize(tmp_path)//1024}KB | "
-                          f"in_rms={in_rms:.4f} out_rms={out_rms:.4f} "
-                          f"level_change={ratio_db:+.1f}dB — "
-                          f"{'COMPRESSION APPLIED' if abs(ratio_db) > 0.1 else 'NO CHANGE DETECTED'}")
+        if slot_idx >= 8:
+            break
 
 
-                else:
-                    raise RuntimeError("processed wav write failed")
-
-            except Exception as e:
-                print(f"[ENGINE] ch{channel_idx+1} DSP failed ({e}) — "
-                      f"playing unprocessed")
-                import traceback; traceback.print_exc()
-        else:
-            # No rack assigned — but pan still applies.
-            # If pan is not centre, extract samples, apply pan, write wav.
-            print(f"[ENGINE] ch{channel_idx+1} no rack assigned — "
-                  f"playing unprocessed")
-            try:
-                import math as _mp
-                scene_p = bpy.context.scene
-                tracks_p = getattr(scene_p, 'pb_sync_tracks', [])
-                pan = getattr(tracks_p[channel_idx], 'pan', 0.5) \
-                      if channel_idx < len(tracks_p) else 0.5
-                if abs(pan - 0.5) > 0.01:
-                    import tempfile, os, aud as _aud, numpy as _npan, wave
-                    try:
-                        sr_p  = int(sound.specs[0])
-                        nch_p = int(sound.specs[1])
-                    except Exception:
-                        sr_p, nch_p = 44100, 2
-                    samp_p = sound.data()
-                    if samp_p is not None and samp_p.size > 0 and nch_p >= 2:
-                        angle   = pan * (_mp.pi / 2.0)
-                        gain_l  = _mp.cos(angle)
-                        gain_r  = _mp.sin(angle)
-                        samp_p  = samp_p.astype(_npan.float32)
-                        samp_p[:, 0] *= gain_l
-                        samp_p[:, 1] *= gain_r
-                        pan_path = os.path.join(tempfile.gettempdir(),
-                                                f"pb_pan_ch{channel_idx}.wav")
-                        i16 = (_npan.clip(samp_p, -1.0, 1.0) * 32767).astype(_npan.int16)
-                        with wave.open(pan_path, 'wb') as wf:
-                            wf.setnchannels(nch_p)
-                            wf.setsampwidth(2)
-                            wf.setframerate(sr_p)
-                            wf.writeframes(i16.tobytes())
-                        pb_sound = _aud.Sound.file(pan_path)
-                        print(f"[PAN] ch{channel_idx+1} no-rack pan={pan:.2f} "
-                              f"L={gain_l:.2f} R={gain_r:.2f}")
-            except Exception as _pe:
-                pass  # pan is non-critical — fall back to raw sound
-
-    # Stop old handle now — new sound plays immediately after (minimal gap)
-    if existing:
-        try: existing['handle'].stop()
-        except Exception: pass
-
-    device = _pb_get_device()
-    handle = device.play(pb_sound)
-    handle.volume = _pb_channel_volume(channel_idx)
-    # Position 0 because we already trimmed sound to start at position_seconds
-    handle.position = 0.0
-
-    _pb_channels[channel_idx] = {
-        'handle'      : handle,
-        'start_wall'  : _time.time(),
-        'start_pos'   : position_seconds,
-        'channel_idx' : channel_idx,
-        'proc_wav'    : _pb_proc_wav_cache.get(channel_idx),
-    }
-    print(f"[ENGINE] ch{channel_idx+1} started at {round(position_seconds,2)}s "
-          f"vol={round(handle.volume,3)}")
-
-
-def _pb_start_all(scene):
-    """Start all channels from the current timeline position."""
-    _pb_start_all_from_frame(scene, int(scene.frame_current))
-
-
-def _pb_start_all_from_frame(scene, frame):
-    """Start all channels from an explicit frame number.
-    Clamps frame to the valid sequence range before doing anything —
-    prevents crashes and silence when cursor is outside the sequence.
+def _hj_load_all_channels(scene):
     """
-    global _pb_start_wall, _pb_start_frame, _pb_last_frame
+    Build segment playlists for all active VSE channels and load them
+    into the engine. Also wires effect slots for each channel.
+    Called at play-start and after seeks.
+    """
+    engine = get_engine()
+    if not engine: return
 
-    # Clamp to sequence bounds — handles cursor past end or before start
-    effective_start = int(scene.frame_preview_start if scene.use_preview_range
-                          else scene.frame_start)
-    effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
-                          else scene.frame_end)
-    frame = int(frame)
+    hj = engine.get_engine()
+    if not hj: return
 
-    # If cursor is outside the sequence, snap to start
-    if frame < effective_start or frame >= effective_end:
-        frame = effective_start
-        print(f"[ENGINE] cursor outside sequence, snapping to frame {frame}")
-        # Also move Blender's timeline cursor so it matches the audio position
-        try:
-            scene.frame_set(frame)
-        except Exception:
-            pass
-    else:
-        frame = max(effective_start, min(effective_end, frame))
-
-    _pb_last_frame     = frame
-    _pb_last_loop_time = 0.0     # reset cooldown on fresh start
-    fps             = scene.render.fps / scene.render.fps_base
-    _pb_start_frame = frame
-    _pb_start_wall  = _time.time()
+    if not scene or not scene.sequence_editor: return
 
     channels = set()
     for s in scene.sequence_editor.sequences_all:
         if s.type == "SOUND" and s.sound:
             channels.add(s.channel - 1)
 
-    for idx in channels:
-        pos_seconds = frame / fps
-        _pb_start_channel(idx, pos_seconds)
+    tracks = getattr(scene, "pb_sync_tracks", [])
 
-    print(f"[ENGINE] all channels started from frame {frame}")
+    for ch in sorted(channels):
+        segs = _hj_build_segment_playlist(ch, scene)
+        if not segs:
+            hj.clear_channel(ch)
+            continue
+
+        # Convert to engine.Segment objects
+        seg_objects = []
+        for seg in segs:
+            s = engine.Segment()
+            s.filepath       = seg['filepath']
+            s.file_offset_s  = seg['file_offset_s']
+            s.duration_s     = seg['duration_s']
+            s.timeline_pos_s = seg['timeline_pos_s']
+            seg_objects.append(s)
+
+        hj.set_channel_playlist(ch, seg_objects)
+
+        # Volume / mute / solo
+        vol    = _pb_channel_volume(ch)
+        muted  = tracks[ch].mute if ch < len(tracks) else False
+        soloed = tracks[ch].solo if ch < len(tracks) else False
+        hj.set_volume(ch, vol)
+        hj.set_mute(ch, muted)
+        hj.set_solo(ch, soloed)
+        pan = getattr(tracks[ch], 'pan', 0.5) if ch < len(tracks) else 0.5
+        hj.set_pan(ch, pan)
+
+        # Wire DSP effects — includes both rack effects and channel strip EQ
+        _pb_rebuild_eq(ch)
+
+        print(f"[HIJACKER] ch{ch+1} loaded {len(seg_objects)} segments")
+
+
+# ---------------------------------------------------------------------------
+# Transport functions — called by Blender handlers and Python UI
+# ---------------------------------------------------------------------------
+
+def _pb_start_all(scene):
+    _pb_start_all_from_frame(scene, int(scene.frame_current))
+
+
+def _pb_start_all_from_frame(scene, frame):
+    """Load all channels into the Hijacker engine and start playback."""
+    global _pb_start_frame, _pb_last_frame
+
+    engine = get_engine()
+    if not engine:
+        print("[HIJACKER] engine not available — cannot play")
+        return
+
+    hj = engine.get_engine()
+    if not hj:
+        print("[HIJACKER] engine instance not initialised")
+        return
+
+    # Clamp frame to sequence bounds — handle both before-start and after-end
+    effective_start = int(scene.frame_preview_start if scene.use_preview_range
+                          else scene.frame_start)
+    effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
+                          else scene.frame_end)
+
+    if frame < effective_start or frame >= effective_end:
+        frame = effective_start
+        print(f"[HIJACKER] cursor outside sequence, snapping to frame {frame}")
+        try: scene.frame_set(frame)
+        except Exception: pass
+
+    _pb_last_frame  = frame
+    _pb_start_frame = frame
+
+    fps        = scene.render.fps / scene.render.fps_base
+    timeline_s = max(0.0, frame / fps)   # never negative
+
+    # Load playlists
+    _hj_load_all_channels(scene)
+
+    # Start the engine — all channels begin from same sample atomically
+    hj.play(timeline_s)
+    print(f"[HIJACKER] all channels started from frame {frame}")
 
 
 def _pb_stop_all(scene):
-    """Stop all channel handles.
-    On genuine user stop: leave cursor where Blender put it (scene.frame_current
-    is already correct — Blender stops the timeline at the right frame).
-    On loop transition: do nothing, let Blender restart from its loop point.
-    """
-    global _pb_channels, _pb_eq_pending
-
-    if not _pb_channels: return  # guard against re-entry
-
-    # Stop all handles
-    channels_snapshot = dict(_pb_channels)
-    _pb_channels.clear()
-    _pb_eq_pending.clear()
-    for ch in channels_snapshot.values():
-        try: ch['handle'].stop()
-        except Exception: pass
-
-    # Restore strip mute states respecting both mute AND solo
-    try:
-        scene = bpy.context.scene
-        if scene and scene.sequence_editor:
-            tracks = getattr(scene, "pb_sync_tracks", [])
-            soloed = {i for i, t in enumerate(tracks) if t.solo}
-            any_solo = len(soloed) > 0
-            for strip in scene.sequence_editor.sequences_all:
-                if strip.type == "SOUND":
-                    idx = strip.channel - 1
-                    if any_solo:
-                        strip.mute = (idx not in soloed)
-                    else:
-                        strip.mute = tracks[idx].mute if idx < len(tracks) else False
-    except Exception: pass
-
-    # Record when stop fired — if play fires within 200ms it's a loop restart,
-    # not a genuine user stop. This is reliable regardless of frame position.
-    global _pb_is_loop_restart, _pb_stop_time
-    _pb_stop_time       = _time.time()
-    _pb_is_loop_restart = False   # will be set by play handler if needed
-    print(f"[ENGINE] stopped at frame {scene.frame_current}")
-
-
-def _pb_engine_update_volume(channel_idx):
-    """Update handle volume immediately — called when fader/gain/mute changes."""
-    ch = _pb_channels.get(channel_idx)
-    if ch:
-        try: ch['handle'].volume = _pb_channel_volume(channel_idx)
-        except Exception: pass
+    """Stop the Hijacker engine."""
+    engine = get_engine()
+    if not engine: return
+    hj = engine.get_engine()
+    if not hj: return
+    hj.stop()
+    print(f"[HIJACKER] stopped")
 
 
 def _pb_rebuild_eq(channel_idx):
     """
-    Schedule an EQ rebuild for channel_idx.
-    Uses debouncing — only actually rebuilds after the knob has been
-    still for _pb_eq_debounce seconds. This prevents rapid clicking
-    when dragging an EQ knob continuously.
+    Called when a rack parameter OR channel strip EQ/gain/pan changes.
+    Pushes all current params to the engine — heard next buffer (~5ms).
     """
-    global _pb_eq_pending
-    # Record when this channel last requested a rebuild
-    _pb_eq_pending[channel_idx] = _time.time()
+    scene = bpy.context.scene
+    if not scene: return
+    engine = get_engine()
+    if not engine: return
+    hj = engine.get_engine()
+    if not hj: return
+
+    # Push rack effects (parametric EQ, compressor, reverb etc.)
+    _hj_wire_effects(channel_idx, scene)
+
+    # Push channel strip 3-band EQ into a dedicated effect slot (slot 7)
+    # Uses FX_EQ_PARAM with simplified 3-band mapping:
+    #   Band 0 (low shelf)  ← eq_low
+    #   Band 3 (mid peak)   ← eq_mid
+    #   Band 6 (high shelf) ← eq_high
+    tracks = getattr(scene, "pb_sync_tracks", [])
+    if channel_idx < len(tracks):
+        t = tracks[channel_idx]
+        eq_h = getattr(t, 'eq_high', 0.0)
+        eq_m = getattr(t, 'eq_mid',  0.0)
+        eq_l = getattr(t, 'eq_low',  0.0)
+        # Only add strip EQ slot if any band is non-zero
+        if abs(eq_h) > 0.01 or abs(eq_m) > 0.01 or abs(eq_l) > 0.01:
+            params = [0.5] * 24   # 0.5 = 0dB for all bands
+            # Normalise: gain is stored as dB (-24..+24), engine wants 0..1
+            params[0] = (eq_l + 24.0) / 48.0   # band 0 = low shelf
+            params[3] = (eq_m + 24.0) / 48.0   # band 3 = mid peak
+            params[6] = (eq_h + 24.0) / 48.0   # band 6 = high shelf
+            # Frequencies — low=200Hz, mid=1kHz, high=8kHz (log-normalised)
+            import math
+            params[7]  = math.log10(200  / 20) / math.log10(20000 / 20)
+            params[10] = math.log10(1000 / 20) / math.log10(20000 / 20)
+            params[13] = math.log10(8000 / 20) / math.log10(20000 / 20)
+            # Q — moderate for all bands
+            params[14] = params[17] = params[20] = 0.3
+            hj.set_effect_slot(channel_idx, 7, engine.FX_EQ_PARAM, params)
+        else:
+            hj.clear_effect_slot(channel_idx, 7)
 
 
 def _pb_do_eq_rebuild(channel_idx):
-    """
-    Actually perform the EQ rebuild — called by timer after debounce.
-    Works both during playback and when stopped.
-    When playing: restarts the channel from current position with new EQ.
-    When stopped: rebuilds the channel sound in-place so next play uses new EQ.
-    """
-    if channel_idx not in _pb_channels: return
-    scene = bpy.context.scene
-    if not scene: return
-    fps = scene.render.fps / scene.render.fps_base
-    seq_start_s = ((scene.frame_preview_start if scene.use_preview_range
-                    else scene.frame_start) / fps)
-    seq_end_s   = ((scene.frame_preview_end   if scene.use_preview_range
-                    else scene.frame_end)   / fps)
-    current_pos = max(seq_start_s,
-                      min(seq_end_s - 0.1, scene.frame_current / fps))
-    print(f"[ENGINE] rebuilding EQ ch{channel_idx+1} at {round(current_pos,3)}s")
-
-    is_playing = bool(bpy.context.screen and
-                      bpy.context.screen.is_animation_playing)
-    if is_playing:
-        # Full restart from current position
-        _pb_start_channel(channel_idx, current_pos)
-    else:
-        # Stopped: rebuild the processed WAV cache so next play uses new EQ.
-        # _pb_build_channel_sound rebuilds + caches without starting playback.
-        try:
-            _pb_build_channel_sound(channel_idx, current_pos)
-            print(f"[ENGINE] EQ ch{channel_idx+1} cache rebuilt (stopped)")
-        except Exception as e:
-            print(f"[ENGINE] EQ rebuild (stopped) error: {e}")
+    """Alias for _pb_rebuild_eq — kept for compatibility."""
+    _pb_rebuild_eq(channel_idx)
 
 
 # ---------------------------------------------------------------------------
-# Transport handlers — animation_playback_pre / animation_playback_post
-#
-# These fire EXACTLY ONCE per genuine play/stop event.
-# They do NOT fire on cursor moves, scrubbing, or frame changes.
-# This is the correct Blender-native hook for audio transport.
-#
-# When the user moves the cursor during playback, Blender fires:
-#   animation_playback_post (stop) → animation_playback_pre (play)
-# automatically, so we get a free restart from the correct position.
+# Transport handlers — Blender animation_playback_pre / post
 # ---------------------------------------------------------------------------
 
 @bpy.app.handlers.persistent
 def _pb_on_play_start(scene, depsgraph=None):
-    """Fired by Blender exactly once when animation playback begins.
-    Always starts from scene.frame_current — _pb_loop_detect handles
-    loop restarts independently via frame_change_post.
-    """
-    global _pb_is_loop_restart
-    if not _pb_engine_active:
-        return
+    if not _pb_engine_active: return
     try:
-        print(f"[ENGINE] play start at frame {scene.frame_current}")
+        print(f"[HIJACKER] play start at frame {scene.frame_current}")
         _pb_start_all(scene)
     except Exception as e:
-        print(f"[ENGINE] play start error: {e}")
+        print(f"[HIJACKER] play start error: {e}")
+        import traceback; traceback.print_exc()
 
 
 @bpy.app.handlers.persistent
 def _pb_on_play_stop(scene, depsgraph=None):
-    """Fired by Blender exactly once when animation playback stops."""
-    if not _pb_engine_active:
-        return
+    if not _pb_engine_active: return
     try:
-        print(f"[ENGINE] play stop at frame {scene.frame_current}")
+        print(f"[HIJACKER] play stop at frame {scene.frame_current}")
         _pb_stop_all(scene)
     except Exception as e:
-        print(f"[ENGINE] play stop error: {e}")
+        print(f"[HIJACKER] play stop error: {e}")
 
 
 @bpy.app.handlers.persistent
 def _pb_loop_detect(scene, depsgraph=None):
-    """Watches frame_change_post for:
-    1. Genuine loop restarts (Blender jumps back to frame_start silently)
-    2. Mid-playback cursor seeks (user clicks timeline during playback)
-    Both require restarting audio from the new position.
     """
-    global _pb_last_frame, _pb_last_loop_time, _pb_start_frame, _pb_start_wall
+    Watches frame_change_post for loop restarts and mid-playback seeks.
+    With the Hijacker engine, seeks are a single engine.seek() call.
+    """
+    global _pb_last_frame, _pb_last_loop_time, _pb_start_frame
+
     if not _pb_engine_active:
         _pb_last_frame = scene.frame_current
         return
 
     current = scene.frame_current
 
-    # Not playing — just track the frame, no audio action needed
     try:
         is_playing = bpy.context.screen.is_animation_playing
     except Exception:
@@ -1636,138 +1381,88 @@ def _pb_loop_detect(scene, depsgraph=None):
         _pb_last_frame = current
         return
 
-    # Normal playback: frame advances by 1 (or small amount at varying fps).
-    # delta=0 means Blender fired twice on same frame (happens after restarts) — ignore.
     frame_delta = current - _pb_last_frame
 
+    # Normal advance
     if frame_delta == 0 or (0 < frame_delta <= 5):
         _pb_last_frame = current
+        # Keep Blender's timeline cursor synced to engine playhead
+        engine = get_engine()
+        if engine:
+            hj = engine.get_engine()
+            if hj:
+                fps = scene.render.fps / scene.render.fps_base
+                ph_frame = int(hj.get_playhead_s() * fps)
+                state = hj.get_state()
+                if state:
+                    state.current_frame = ph_frame
         return
 
-    # If channels are empty, playback just stopped (stop fired before this).
-    # _pb_on_play_start will handle the restart with correct position.
-    # Don't double-restart here.
-    if not _pb_channels:
-        _pb_last_frame = current
-        return
-
-    # Cooldown logic: only skip if destination is within 3 frames of where
-    # we last restarted (user clicking the same spot — audio is already there).
-    # Any seek to a new position always goes through immediately.
-    # Out-of-bounds seeks always go through (snap to frame 1).
-    effective_start = int(scene.frame_preview_start
-                          if scene.use_preview_range
+    effective_start = int(scene.frame_preview_start if scene.use_preview_range
                           else scene.frame_start)
-    effective_end   = int(scene.frame_preview_end
-                          if scene.use_preview_range
+    effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
                           else scene.frame_end)
-    out_of_bounds = (current < effective_start or current >= effective_end)
 
-    # _pb_start_frame is set to the frame we last restarted from
-    already_there = (abs(current - _pb_start_frame) <= 3)
+    already_there   = (abs(current - _pb_start_frame) <= 3)
     time_since_last = _time.time() - _pb_last_loop_time
+    out_of_bounds   = (current < effective_start or current >= effective_end)
 
     if not out_of_bounds and already_there and time_since_last < 0.5:
         _pb_last_frame = current
         return
 
+    fps = scene.render.fps / scene.render.fps_base
+
+    # Clamp seek target to valid range — never seek to negative time
+    seek_frame = max(effective_start, min(effective_end - 1, current))
+
     if frame_delta < 0 and abs(current - effective_start) <= 2:
-        # Genuine loop: large backward jump landing exactly on frame_start
-        print(f"[ENGINE] loop jump detected: {_pb_last_frame}→{current}, "
-              f"restarting from frame {effective_start}")
+        # Genuine loop back to start
+        print(f"[HIJACKER] loop: {_pb_last_frame}→{current}")
         _pb_last_loop_time = _time.time()
-        fps_loop        = scene.render.fps / scene.render.fps_base
-        _pb_start_frame = effective_start
-        _pb_start_wall  = _time.time()
-
-        _loop_start_s = effective_start / fps_loop
-        for _ch_k in set(list(_fft_timeline.keys()) +
-                          list(_fft_timeline_full.keys())):
-            _ft = _fft_timeline_full.get(_ch_k) or _fft_timeline.get(_ch_k)
-            if _ft:
-                _ft['start_frame'] = _loop_start_s * _ft['fps']
-                _fft_timeline[_ch_k] = _ft
-        for _ch_k in set(list(_gr_timeline.keys()) +
-                          list(_gr_timeline_full.keys())):
-            _gt = _gr_timeline_full.get(_ch_k) or _gr_timeline.get(_ch_k)
-            if _gt:
-                _gt['start_frame'] = _loop_start_s * _gt['fps']
-                _gr_timeline[_ch_k] = _gt
-
-        channels_snapshot = dict(_pb_channels)
-        _pb_channels.clear()
-        for ch_data in channels_snapshot.values():
-            try: ch_data['handle'].stop()
-            except Exception: pass
-
-        device = _pb_get_device()
-        all_ch = set(list(_pb_full_wav_cache.keys()) +
-                     list(_pb_proc_wav_cache.keys()))
-        for ch_idx in all_ch:
-            full_wav    = _pb_full_wav_cache.get(ch_idx)
-            trimmed_wav = _pb_proc_wav_cache.get(ch_idx)
-            replay_wav  = (full_wav    if full_wav    and os.path.exists(full_wav)
-                           else trimmed_wav if trimmed_wav and os.path.exists(trimmed_wav)
-                           else None)
-            try:
-                if replay_wav:
-                    import aud as _aud_loop
-                    snd = _aud_loop.Sound.file(replay_wav)
-                    h   = device.play(snd)
-                    h.volume = _pb_channel_volume(ch_idx)
-                    h.position = 0.0
-                    _pb_channels[ch_idx] = {
-                        'handle'     : h,
-                        'start_wall' : _pb_start_wall,
-                        'start_pos'  : effective_start / fps_loop,
-                        'channel_idx': ch_idx,
-                        'proc_wav'   : replay_wav,
-                    }
-                    print(f"[ENGINE] ch{ch_idx+1} loop: restart from frame {effective_start}")
-            except Exception as _le:
-                print(f"[ENGINE] ch{ch_idx+1} loop cache replay failed: {_le}")
-
-        try:
-            from Racks import get_rack_channels as _grc_loop
-            scene_loop = bpy.context.scene
-            racks_loop = getattr(scene_loop, "pb_racks", []) if scene_loop else []
-            cached_channels = set(list(_pb_full_wav_cache.keys()) +
-                                  list(_pb_proc_wav_cache.keys()))
-            for _ch_idx in list(channels_snapshot.keys()):
-                if _ch_idx in cached_channels:
-                    continue
-                has_rack_loop = any(
-                    r.enabled and _ch_idx in _grc_loop(r)
-                    for r in racks_loop
-                )
-                if not has_rack_loop:
-                    loop_pos_s = effective_start / fps_loop
-                    print(f"[ENGINE] ch{_ch_idx+1} loop: no-rack restart "
-                          f"from {loop_pos_s:.2f}s")
-                    _pb_start_channel(_ch_idx, loop_pos_s)
-        except Exception as _nrl:
-            print(f"[ENGINE] loop no-rack restart failed: {_nrl}")
-
+        _pb_start_frame    = effective_start
+        engine = get_engine()
+        if engine:
+            hj = engine.get_engine()
+            if hj:
+                hj.seek(max(0.0, effective_start / fps))
+    elif out_of_bounds:
+        # Cursor jumped outside sequence — snap to start and restart
+        print(f"[HIJACKER] seek out of bounds: {_pb_last_frame}→{current}, "
+              f"snapping to frame {effective_start}")
+        _pb_last_loop_time = _time.time()
+        _pb_start_frame    = effective_start
+        try: scene.frame_set(effective_start)
+        except Exception: pass
+        engine = get_engine()
+        if engine:
+            hj = engine.get_engine()
+            if hj:
+                hj.seek(max(0.0, effective_start / fps))
     else:
-        # Mid-playback cursor seek — forward or backward jump that isn't a loop.
-        # Restart audio from the new cursor position.
-        print(f"[ENGINE] mid-playback seek: {_pb_last_frame}→{current}, "
-              f"restarting audio from frame {current}")
+        # Normal mid-playback seek
+        print(f"[HIJACKER] seek: {_pb_last_frame}→{current}")
         _pb_last_loop_time = _time.time()
-        _pb_start_all_from_frame(scene, current)
+        _pb_start_frame    = seek_frame
+        engine = get_engine()
+        if engine:
+            hj = engine.get_engine()
+            if hj:
+                hj.seek(max(0.0, seek_frame / fps))
 
     _pb_last_frame = current
 
 
 # ---------------------------------------------------------------------------
-# EQ debounce timer — processes pending EQ rebuilds
-# Runs independently of transport so EQ updates work while paused too
+# EQ debounce timer
+# With Hijacker engine, "EQ rebuild" just updates effect slot params.
+# No need for the heavy rebuild logic — but we keep the debounce so
+# rapid knob drags don't spam set_effect_slot calls.
 # ---------------------------------------------------------------------------
 
 def _pb_eq_timer():
-    """Check for pending EQ rebuilds and execute them after debounce."""
     if not _pb_engine_active:
-        return 0.1
+        return 0.033
     try:
         now     = _time.time()
         pending = {ch: t for ch, t in list(_pb_eq_pending.items())
@@ -1775,9 +1470,21 @@ def _pb_eq_timer():
         for ch in pending:
             del _pb_eq_pending[ch]
             _pb_do_eq_rebuild(ch)
+
+        # Run spectrum analysis here (Python timer thread, not audio thread).
+        # 512-sample window costs ~65K muls/channel — cheap enough for 30Hz.
+        try:
+            engine = get_engine()
+            if engine and hasattr(engine, 'compute_spec_bins_all'):
+                hj = engine.get_engine()
+                if hj and hj.is_running():
+                    engine.compute_spec_bins_all(48000.0)
+        except Exception:
+            pass
+
     except Exception as e:
-        print(f"[ENGINE] EQ timer error: {e}")
-    return 0.1   # poll every 100ms
+        print(f"[HIJACKER] EQ timer error: {e}")
+    return 0.033
 
 
 _pb_eq_timer_registered = False
@@ -1788,62 +1495,87 @@ _pb_eq_timer_registered = False
 # ---------------------------------------------------------------------------
 
 def _pb_engine_enable():
-    """Disable Blender's audio, register our playback handlers."""
+    """Disable Blender's audio, start Hijacker engine, register handlers."""
     global _pb_engine_active, _pb_original_device, _pb_eq_timer_registered
 
     if _pb_engine_active: return
 
-    # Save and disable Blender's audio device
+    # Disable Blender's audio device
     try:
         current_device = bpy.context.preferences.system.audio_device
-        # Never save 'None' as the device to restore to — if audio was already
-        # disabled, restore to WASAPI (Windows) or OpenAL as a safe default.
         if current_device and current_device != 'None':
             _pb_original_device = current_device
         else:
-            # Detect platform default
-            import sys
-            _pb_original_device = 'WASAPI' if sys.platform == 'win32' else 'OpenAL'
+            import sys as _sys
+            _pb_original_device = 'WASAPI' if _sys.platform == 'win32' else 'OpenAL'
         bpy.context.preferences.system.audio_device = 'None'
-        print(f"[ENGINE] Blender audio disabled (was '{current_device}', "
+        print(f"[HIJACKER] Blender audio disabled (was '{current_device}', "
               f"will restore to '{_pb_original_device}')")
     except Exception as e:
-        print(f"[ENGINE] could not disable Blender audio: {e}")
+        print(f"[HIJACKER] could not disable Blender audio: {e}")
 
-    # Register transport handlers
+    # Init Hijacker PortAudio engine
+    engine = get_engine()
+    if engine:
+        try:
+            sample_rate = 44100
+            scene = bpy.context.scene
+            if scene and scene.sequence_editor:
+                for strip in scene.sequence_editor.sequences_all:
+                    if strip.type == "SOUND" and strip.sound:
+                        try:
+                            import aud as _aud_sr
+                            sr = int(_aud_sr.Sound.file(
+                                bpy.path.abspath(strip.sound.filepath)
+                            ).specs[0])
+                            if sr in (44100, 48000, 96000):
+                                sample_rate = sr
+                            break
+                        except Exception:
+                            pass
+            ok = engine.engine_init(sample_rate)
+            if ok:
+                print(f"[HIJACKER] audio engine active @ {sample_rate}Hz")
+            else:
+                print("[HIJACKER] WARNING: engine_init failed — no audio output")
+        except Exception as e:
+            print(f"[HIJACKER] engine_init error: {e}")
+    else:
+        print("[HIJACKER] WARNING: hijacker_engine.pyd not found — compile with build.bat")
+
+    # Register Blender transport handlers
     if _pb_on_play_start not in bpy.app.handlers.animation_playback_pre:
         bpy.app.handlers.animation_playback_pre.append(_pb_on_play_start)
     if _pb_on_play_stop not in bpy.app.handlers.animation_playback_post:
         bpy.app.handlers.animation_playback_post.append(_pb_on_play_stop)
-    # Register loop detection handler
     if _pb_loop_detect not in bpy.app.handlers.frame_change_post:
         bpy.app.handlers.frame_change_post.append(_pb_loop_detect)
 
-    # Register EQ debounce timer
     if not _pb_eq_timer_registered:
-        bpy.app.timers.register(_pb_eq_timer, first_interval=0.1)
+        bpy.app.timers.register(_pb_eq_timer, first_interval=0.033)
         _pb_eq_timer_registered = True
 
     _pb_engine_active = True
-    print("[ENGINE] Pedalboard audio engine active")
+    print("[HIJACKER] audio engine enabled")
 
 
 def _pb_engine_disable():
-    """Stop all audio, restore Blender's audio device."""
-    global _pb_engine_active, _pb_channels, _pb_eq_timer_registered
+    """Stop Hijacker engine, restore Blender's audio."""
+    global _pb_engine_active, _pb_eq_timer_registered
 
     if not _pb_engine_active: return
 
-    # Stop all handles
-    channels_snapshot = dict(_pb_channels)
-    _pb_channels.clear()
-    _pb_eq_pending.clear()
-    for ch in channels_snapshot.values():
-        try: ch['handle'].stop()
-        except Exception: pass
+    # Stop engine
+    engine = get_engine()
+    if engine:
+        try:
+            hj = engine.get_engine()
+            if hj: hj.stop()
+            engine.engine_shutdown()
+        except Exception as e:
+            print(f"[HIJACKER] engine shutdown error: {e}")
 
-    # Restore strip mute states to user's channel mute setting
-    # (on disable we restore fully — solo state is cleared)
+    # Restore strip mute states
     try:
         scene = bpy.context.scene
         if scene and scene.sequence_editor:
@@ -1854,7 +1586,7 @@ def _pb_engine_disable():
                     strip.mute = tracks[idx].mute if idx < len(tracks) else False
     except Exception: pass
 
-    # Remove transport handlers
+    # Remove handlers
     if _pb_on_play_start in bpy.app.handlers.animation_playback_pre:
         bpy.app.handlers.animation_playback_pre.remove(_pb_on_play_start)
     if _pb_on_play_stop in bpy.app.handlers.animation_playback_post:
@@ -1862,21 +1594,74 @@ def _pb_engine_disable():
     if _pb_loop_detect in bpy.app.handlers.frame_change_post:
         bpy.app.handlers.frame_change_post.remove(_pb_loop_detect)
 
-    # Cancel EQ timer
     if _pb_eq_timer_registered:
         try: bpy.app.timers.unregister(_pb_eq_timer)
         except Exception: pass
         _pb_eq_timer_registered = False
 
-    # Restore Blender's audio device
+    # Restore Blender audio
     try:
         bpy.context.preferences.system.audio_device = _pb_original_device
-        print(f"[ENGINE] Blender audio restored to '{_pb_original_device}'")
+        print(f"[HIJACKER] Blender audio restored to '{_pb_original_device}'")
     except Exception as e:
-        print(f"[ENGINE] could not restore Blender audio: {e}")
+        print(f"[HIJACKER] could not restore Blender audio: {e}")
 
     _pb_engine_active = False
-    print("[ENGINE] Pedalboard audio engine stopped")
+    print("[HIJACKER] audio engine disabled")
+
+
+# ---------------------------------------------------------------------------
+# Volume update — called by fader changes
+# ---------------------------------------------------------------------------
+
+def _pb_engine_update_volume(channel_idx):
+    """Real-time volume update — takes effect next audio buffer."""
+    engine = get_engine()
+    if not engine: return
+    hj = engine.get_engine()
+    if not hj: return
+    vol = _pb_channel_volume(channel_idx)
+    hj.set_volume(channel_idx, vol)
+
+
+def _pb_reprocess_channel(channel_idx):
+    """
+    Called when a rack is assigned or a major change happens.
+    Reloads the channel playlist and rewires effects.
+    If playing, seeks to current position to restart with new settings.
+    """
+    scene = bpy.context.scene
+    if not scene: return
+
+    engine = get_engine()
+    if not engine: return
+    hj = engine.get_engine()
+    if not hj: return
+
+    segs = _hj_build_segment_playlist(channel_idx, scene)
+    if segs:
+        seg_objects = []
+        eng_mod = get_engine()
+        for seg in segs:
+            s = eng_mod.Segment()
+            s.filepath       = seg['filepath']
+            s.file_offset_s  = seg['file_offset_s']
+            s.duration_s     = seg['duration_s']
+            s.timeline_pos_s = seg['timeline_pos_s']
+            seg_objects.append(s)
+        hj.set_channel_playlist(channel_idx, seg_objects)
+
+    # Wire effects — use _pb_rebuild_eq to include channel strip EQ slot
+    _pb_rebuild_eq(channel_idx)
+
+    # If currently playing, seek to refresh this channel
+    is_playing = bool(bpy.context.screen and
+                      bpy.context.screen.is_animation_playing)
+    if is_playing:
+        fps = scene.render.fps / scene.render.fps_base
+        hj.seek(scene.frame_current / fps)
+
+    print(f"[HIJACKER] ch{channel_idx+1} reprocessed")
 
 
 # ---------------------------------------------------------------------------
@@ -1885,30 +1670,52 @@ def _pb_engine_disable():
 # ---------------------------------------------------------------------------
 
 def sync_vse_mute(channel_idx, state):
-    """Mute: update strip.mute (VSE appearance) and handle volume."""
+    """Mute: update strip.mute (VSE appearance) and engine mute instantly."""
     scene = bpy.context.scene
     if not scene or not scene.sequence_editor: return
     for strip in scene.sequence_editor.sequences_all:
         if strip.type == "SOUND" and (strip.channel - 1) == channel_idx:
             strip.mute = state
-    _pb_engine_update_volume(channel_idx)
+    # Update engine — takes effect next audio buffer (~5ms)
+    engine = get_engine()
+    if engine:
+        hj = engine.get_engine()
+        if hj:
+            hj.set_mute(channel_idx, state)
+            hj.set_volume(channel_idx, _pb_channel_volume(channel_idx))
 
 
 def sync_vse_solo(channel_idx, solo_state):
-    """Solo: update strip.mute on all channels, update all handle volumes."""
+    """Solo: update strip.mute on all channels, update engine mute/solo instantly."""
     scene = bpy.context.scene
     if not scene or not scene.sequence_editor: return
     tracks   = getattr(scene, "pb_sync_tracks", [])
     soloed   = {i for i, t in enumerate(tracks) if t.solo}
     any_solo = len(soloed) > 0
+
     for strip in scene.sequence_editor.sequences_all:
         if strip.type != "SOUND": continue
         idx        = strip.channel - 1
         strip.mute = (idx not in soloed) if any_solo else (
             tracks[idx].mute if idx < len(tracks) else False)
-    # Update all handles
-    for idx in list(_pb_channels.keys()):
-        _pb_engine_update_volume(idx)
+
+    # Update engine for all active channels — takes effect next buffer
+    engine = get_engine()
+    if engine:
+        hj = engine.get_engine()
+        if hj:
+            active_chs = set()
+            for strip in scene.sequence_editor.sequences_all:
+                if strip.type == "SOUND" and strip.sound:
+                    active_chs.add(strip.channel - 1)
+            for idx in active_chs:
+                muted  = tracks[idx].mute  if idx < len(tracks) else False
+                soloed_ch = tracks[idx].solo if idx < len(tracks) else False
+                # When any channel is soloed, non-soloed channels are muted
+                effective_mute = (idx not in soloed) if any_solo else muted
+                hj.set_mute(idx, effective_mute)
+                hj.set_solo(idx, soloed_ch)
+                hj.set_volume(idx, _pb_channel_volume(idx))
 
 
 # ---------------------------------------------------------------------------

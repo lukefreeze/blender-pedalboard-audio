@@ -162,10 +162,19 @@ struct EngineState {
     bool  mutes[PB_MAX_CHANNELS]        = {};
     bool  solos[PB_MAX_CHANNELS]        = {};
 
+#define PB_SPEC_BINS     128   // Output bins: 128 log-spaced 20Hz-20kHz
+#define PB_SPEC_WIN      4096  // DFT window: 4096 samples @ 48kHz = 85ms, 11.7Hz/bin
+                               // Resolves individual harmonics → sharp teeth in display.
+                               // Memory: 32ch × 4096 × 4B = 512KB. Acceptable.
+
     // Real-time display data
     float band_levels[PB_MAX_CHANNELS][PB_MB_BANDS]              = {};
     float gr_levels  [PB_MAX_CHANNELS][PB_MB_BANDS]              = {};
     float fft_bins   [PB_MAX_CHANNELS][PB_MB_BANDS][PB_FFT_BINS] = {};
+    // Full-spectrum for EQ display — updated from raw pre-EQ signal
+    float spec_bins  [PB_MAX_CHANNELS][PB_SPEC_BINS]             = {};
+    float spec_window[PB_MAX_CHANNELS][PB_SPEC_WIN]              = {};
+    int   spec_wpos  [PB_MAX_CHANNELS]                           = {};
 
     // Effects rack
     EffectSlot effect_chain[PB_MAX_CHANNELS][PB_MAX_EFFECTS] = {};

@@ -38,7 +38,7 @@ if _ADDON_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 # Core imports
 # ---------------------------------------------------------------------------
-from core.engine     import get_engine, reset_engine, PEDALBOARD_AVAILABLE
+from core.engine import get_engine, reset_engine, PEDALBOARD_AVAILABLE, HIJACKER_AVAILABLE
 from core.properties import register_properties, unregister_properties
 from core.constants  import (
     MAX_CHANNELS, DEFAULT_CHANNELS,
@@ -137,7 +137,7 @@ def _get_hud(key):
 # ---------------------------------------------------------------------------
 class VSE_OT_TogglePBGui(bpy.types.Operator):
     bl_idname = "vse.toggle_pb_gui"
-    bl_label  = "Toggle Pedalboard"
+    bl_label  = "Toggle The Hijacker"
 
     def execute(self, context):
         global pb_ui_enabled
@@ -221,10 +221,10 @@ class VSE_OT_RefreshPBTracks(bpy.types.Operator):
 # Panel
 # ---------------------------------------------------------------------------
 class VSE_PT_Pedalboard_Panel(bpy.types.Panel):
-    bl_label       = "Pedalboard Engine"
+    bl_label       = "The Hijacker"
     bl_space_type  = "SEQUENCE_EDITOR"
     bl_region_type = "UI"
-    bl_category    = "Pedalboard"
+    bl_category    = "Hijacker"
 
     def draw(self, context):
         self.layout.operator("vse.refresh_pb_tracks")
@@ -232,7 +232,7 @@ class VSE_PT_Pedalboard_Panel(bpy.types.Panel):
 
 
 def draw_header_buttons(self, context):
-    self.layout.operator("vse.toggle_pb_gui", text="Pedalboard HUD")
+    self.layout.operator("vse.toggle_pb_gui", text="The Hijacker")
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ def register():
     if on_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(on_load_post)
 
-    print("[REGISTER] Pedalboard registered")
+    print("[REGISTER] The Hijacker registered")
 
 
 def unregister():
@@ -334,7 +334,7 @@ def unregister():
             pass
 
     unregister_properties()
-    print("[UNREGISTER] Pedalboard unregistered")
+    print("[UNREGISTER] The Hijacker unregistered")
 
 
 if __name__ == "__main__":

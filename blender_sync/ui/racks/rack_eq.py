@@ -249,117 +249,88 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
 
     # -----------------------------------------------------------------------
     # SPECTRUM ANALYSER — FabFilter Pro-Q style
-    # Reads _fft_timeline built by Loader.py during batch processing.
-    # Shape: (n_snaps, 4, 32) — 4 bands × 32 log-spaced bins = 128 points.
-    # Bands: 0=20-120Hz  1=120-800Hz  2=800-5000Hz  3=5000-20000Hz
-    #
-    # Two filled silhouette layers, bottom-to-top (NOT bars):
-    #   Layer 1 — pre-EQ:  dark grey filled polygon from floor up
-    #   Layer 2 — post-EQ: same data with current EQ gain curve applied
-    # Jagged/spiky look comes naturally from 128 narrow adjacent bins.
-    # Silent / dark until audio has been processed at least once.
     # -----------------------------------------------------------------------
+    # Real-time spectrum silhouette using full-spectrum analyser (128 bins,
+    # 20Hz-20kHz log-spaced, computed from raw pre-EQ signal in C++).
+    # Layer 1: dark grey pre-EQ shape. Layer 2: post-EQ with curve applied.
+    freq_amp = []
     try:
-        from Loader import _fft_timeline
+        from Loader import get_engine as _get_eng_eq
         import math as _ms
 
         assigned_sp = get_rack_channels(rack)
         if assigned_sp:
-            ch_sp = list(assigned_sp)[0]
-            tl_sp = _fft_timeline.get(ch_sp)
-            if tl_sp is not None and len(tl_sp['snapshots']) > 0:
-                scene_sp    = bpy.context.scene
-                cur_frame   = scene_sp.frame_current if scene_sp else 0
-                start_frame = tl_sp['start_frame']
-                fps_sp      = tl_sp['fps']
-                snap_sec    = tl_sp['snap_frames'] / tl_sp['sr']
-                elapsed_sec = max(0.0, (cur_frame - start_frame) / fps_sp)
-                snap_f      = elapsed_sec / snap_sec
-                snap_idx    = max(0, min(len(tl_sp['snapshots']) - 1, int(snap_f)))
-                frac        = snap_f - int(snap_f)
+            ch_sp   = list(assigned_sp)[0]
+            _eng_eq = _get_eng_eq()
+            if _eng_eq:
+                _hj_eq = _eng_eq.get_engine()
+                if _hj_eq and 0 <= ch_sp < 32:
+                    _st_eq  = _hj_eq.get_state()
+                    bins    = list(_st_eq.get_spec_bins(ch_sp))
+                    N_SPEC  = len(bins)
+                    LOG_MIN = _ms.log10(20.0)
+                    LOG_RNG = _ms.log10(20000.0) - LOG_MIN
 
-                import numpy as _nps
-                frame_data = tl_sp['snapshots'][snap_idx].astype(float)
-                if frac > 0.0 and snap_idx + 1 < len(tl_sp['snapshots']):
-                    frame_data = (frame_data * (1.0 - frac) +
-                                  tl_sp['snapshots'][snap_idx + 1].astype(float) * frac)
+                    # Each bin is already log-spaced — just map to x_norm 0-1
+                    freq_amp = []
+                    for i, val in enumerate(bins):
+                        t_x = i / (N_SPEC - 1)
+                        freq_amp.append((t_x, max(0.0, min(1.0, float(val)))))
 
-                # Build (x_norm 0-1, amplitude 0-1) pairs for all 128 bins
-                CROSSOVERS = [20, 120, 800, 5000, 20000]
-                BINS_PER   = 32
-                LOG_MIN    = _ms.log10(20.0)
-                LOG_RANGE  = _ms.log10(20000.0) - LOG_MIN
+        def _spectrum_poly(pairs, color, h_scale=0.85):
+            """Filled silhouette: each top point paired with floor point below it."""
+            if len(pairs) < 2: return
+            import gpu
+            from gpu_extras.batch import batch_for_shader as _bfs
+            _sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+            # Interleave floor and top: (floor0, top0, floor1, top1, ...)
+            # TRI_STRIP naturally fills between them with no cross-over
+            verts = []
+            for t_x, amp in pairs:
+                px = disp_x + t_x * disp_w
+                py = disp_y + amp * disp_h * h_scale
+                verts.append((px, disp_y))   # floor point
+                verts.append((px, py))        # top point
+            _b = _bfs(_sh, "TRI_STRIP", {"pos": verts})
+            _sh.bind(); _sh.uniform_float("color", color); _b.draw(_sh)
 
-                freq_amp = []   # (t_x, amp) sorted by frequency
-                import numpy as _nps2
-                for band in range(4):
-                    f_lo = CROSSOVERS[band]
-                    f_hi = CROSSOVERS[band + 1]
-                    bins = frame_data[band]
-                    freqs = _nps2.logspace(_ms.log10(max(f_lo, 1.0)),
-                                           _ms.log10(f_hi), BINS_PER)
-                    for bi in range(BINS_PER):
-                        t_x = (_ms.log10(max(float(freqs[bi]), 20.0)) - LOG_MIN) / LOG_RANGE
-                        freq_amp.append((t_x, max(0.0, min(1.0, float(bins[bi])))))
+        def _spectrum_edge(pairs, color, h_scale=0.85):
+            """Top edge line."""
+            if len(pairs) < 2: return
+            import gpu
+            from gpu_extras.batch import batch_for_shader as _bfs
+            _sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+            verts = [(disp_x + t*disp_w, disp_y + a*disp_h*h_scale)
+                     for t, a in pairs]
+            _b = _bfs(_sh, "LINE_STRIP", {"pos": verts})
+            gpu.state.line_width_set(max(1.0, scale * 1.2))
+            _sh.bind(); _sh.uniform_float("color", color); _b.draw(_sh)
+            gpu.state.line_width_set(1.0)
 
-                freq_amp.sort(key=lambda p: p[0])
+        if freq_amp:
+            _spectrum_poly(freq_amp, (0.17, 0.17, 0.22, 0.85))
+            _spectrum_edge(freq_amp, (0.35, 0.35, 0.42, 0.70))
 
-                def _spectrum_fill(pairs, color, h_scale=0.90):
-                    """Draw filled silhouette from floor up as a single polygon."""
-                    if len(pairs) < 2:
-                        return
-                    verts = []
-                    for t_x, amp in pairs:
-                        bx = disp_x + t_x * disp_w
-                        verts.append((bx, disp_y))
-                        verts.append((bx, disp_y + amp * disp_h * h_scale))
-                    if len(verts) >= 4:
-                        bf = batch_for_shader(shader, "TRI_STRIP", {"pos": verts})
-                        shader.bind()
-                        shader.uniform_float("color", color)
-                        bf.draw(shader)
-
-                def _spectrum_edge(pairs, color, h_scale=0.90):
-                    """Draw the top edge of the spectrum as a LINE_STRIP."""
-                    if len(pairs) < 2:
-                        return
-                    verts = [(disp_x + t_x * disp_w,
-                              disp_y + amp * disp_h * h_scale)
-                             for t_x, amp in pairs]
-                    bt = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
-                    gpu.state.line_width_set(max(1.0, scale * 0.7))
-                    shader.bind()
-                    shader.uniform_float("color", color)
-                    bt.draw(shader)
-                    gpu.state.line_width_set(1.0)
-
-                # --- Layer 1: pre-EQ spectrum (dark grey) ---
-                _spectrum_fill(freq_amp, (0.17, 0.17, 0.19, 0.82))
-                _spectrum_edge(freq_amp, (0.32, 0.32, 0.36, 0.55))
-
-                # --- Layer 2: post-EQ spectrum (EQ curve applied) ---
-                # Multiply each bin's amplitude by the linear gain the current
-                # EQ settings produce at that frequency — shows shaping live.
-                try:
-                    band_params_sp = [_get_b(bi) for bi in range(N_BANDS)]
-                    post_pairs = []
-                    for t_x, amp in freq_amp:
-                        freq_hz = 20.0 * (10.0 ** (t_x * LOG_RANGE))
-                        eq_db = 0.0
-                        for bi in range(N_BANDS):
-                            gdb_s, fhz_s, q_s, _, _, _ = band_params_sp[bi]
-                            eq_db += _eq_biquad_response(
-                                fhz_s, gdb_s, EQ7_BANDS[bi][2], q_s, freq_hz)
-                        lin = 10.0 ** (eq_db / 20.0)
-                        post_pairs.append((t_x, max(0.0, min(1.0, amp * lin))))
-
-                    _spectrum_fill(post_pairs, (0.28, 0.30, 0.35, 0.72))
-                    _spectrum_edge(post_pairs, (0.52, 0.58, 0.68, 0.90))
-                except Exception:
-                    pass  # post-EQ layer is bonus — never block pre-EQ draw
+            # Post-EQ layer — apply current EQ curve to each bin
+            try:
+                band_params_sp = [_get_b(bi) for bi in range(N_BANDS)]
+                post_pairs = []
+                for t_x, amp in freq_amp:
+                    freq_hz = 20.0 * (10.0 ** (t_x * LOG_RNG))
+                    eq_db   = 0.0
+                    for bi in range(N_BANDS):
+                        gdb_s, fhz_s, q_s, _, _, _ = band_params_sp[bi]
+                        eq_db += _eq_biquad_response(
+                            fhz_s, gdb_s, EQ7_BANDS[bi][2], q_s, freq_hz)
+                    lin = 10.0 ** (eq_db / 20.0)
+                    post_pairs.append((t_x, max(0.0, min(1.0, amp * lin))))
+                _spectrum_poly(post_pairs, (0.20, 0.28, 0.38, 0.65))
+                _spectrum_edge(post_pairs, (0.45, 0.62, 0.85, 0.95))
+            except Exception:
+                pass
 
     except Exception:
-        pass  # spectrum is decorative — never crash the draw callback
+        pass
 
     # -----------------------------------------------------------------------
     # EQ CURVES
