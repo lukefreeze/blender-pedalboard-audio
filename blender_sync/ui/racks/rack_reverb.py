@@ -100,72 +100,91 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     pre_frac = pre_d * 0.20
     div_x    = disp_x + pre_frac * disp_w
 
-    # --- LEFT ZONE: dry waveform from FFT timeline ---
+    # --- LEFT ZONE: dry waveform from envelope cache ---
+    # Uses _envelope_cache (pre-built at play start) keyed by filepath.
+    # Shows a scrolling N_WIN-frame window of peak amplitude centred on
+    # the playhead — identical pattern to the noise gate waveform.
     if rack.enabled:
         try:
-            from Loader import _fft_timeline
+            import bpy as _bpy_rv
+            from core.meters import _envelope_cache, get_envelope as _get_env_rv
             assigned_rv = get_rack_channels(rack)
             if assigned_rv:
-                ch_rv = list(assigned_rv)[0]
-                tl_rv = _fft_timeline.get(ch_rv)
-                if tl_rv is not None and len(tl_rv['snapshots']) > 0:
-                    import bpy as _bpy_rv
-                    scene_rv    = _bpy_rv.context.scene
-                    cur_frame   = scene_rv.frame_current if scene_rv else 0
-                    start_frame = tl_rv['start_frame']
-                    fps_rv      = tl_rv['fps']
-                    snap_sec    = tl_rv['snap_frames'] / tl_rv['sr']
-                    elapsed     = max(0.0, (cur_frame - start_frame) / fps_rv)
-                    snap_f      = elapsed / snap_sec
-                    snap_idx    = max(0, min(len(tl_rv['snapshots'])-1, int(snap_f)))
-                    frac_rv     = snap_f - int(snap_f)
+                ch_rv   = list(assigned_rv)[0]
+                scene_rv = _bpy_rv.context.scene
+                if scene_rv and scene_rv.sequence_editor:
+                    fps_rv  = scene_rv.render.fps / scene_rv.render.fps_base
+                    cur_f   = scene_rv.frame_current
+                    N_WIN   = 80
+                    half    = N_WIN // 2
+                    f_start = cur_f - half
+                    f_end   = f_start + N_WIN
 
-                    import numpy as _np_rv
-                    frame_data = tl_rv['snapshots'][snap_idx].astype(float)
-                    if frac_rv > 0.0 and snap_idx+1 < len(tl_rv['snapshots']):
-                        frame_data = (frame_data*(1.0-frac_rv) +
-                                      tl_rv['snapshots'][snap_idx+1].astype(float)*frac_rv)
+                    strips_rv = [
+                        s for s in scene_rv.sequence_editor.sequences_all
+                        if s.type == "SOUND" and s.sound
+                        and (s.channel - 1) == ch_rv
+                    ]
 
-                    # Flatten 4 bands × 32 bins into 128 amplitude points
-                    CROSSOVERS = [20, 120, 800, 5000, 20000]
-                    BINS_PER   = 32
-                    LOG_MIN    = _mr.log10(20.0)
-                    LOG_RNG    = _mr.log10(20000.0) - LOG_MIN
-                    import numpy as _np_rv2
-                    wf_pairs = []
-                    for band in range(4):
-                        f_lo = CROSSOVERS[band]; f_hi = CROSSOVERS[band+1]
-                        freqs = _np_rv2.logspace(_mr.log10(max(f_lo,1.0)),
-                                                  _mr.log10(f_hi), BINS_PER)
-                        for bi in range(BINS_PER):
-                            t_x = (_mr.log10(max(float(freqs[bi]),20.0)) - LOG_MIN) / LOG_RNG
-                            # Clamp to left zone (pre-delay divider)
-                            bx  = disp_x + t_x * pre_frac * disp_w
-                            amp = max(0.0, min(1.0, float(frame_data[band][bi])))
-                            wf_pairs.append((bx, amp))
+                    peak_by_frame = {}
+                    for strip in strips_rv:
+                        fp = _bpy_rv.path.abspath(strip.sound.filepath)
+                        if fp not in _envelope_cache:
+                            _get_env_rv(fp, fps_rv)
+                        env = _envelope_cache.get(fp)
+                        if env is None or len(env) < 2:
+                            continue
+                        peak_list = env[1]
+                        fs = int(strip.frame_start)
+                        fo = int(getattr(strip, "frame_offset_start", 0))
+                        for fi in range(f_start, f_end):
+                            file_f = fi - fs + fo
+                            if 0 <= file_f < len(peak_list):
+                                peak_by_frame[fi] = float(peak_list[file_f])
 
-                    wf_pairs.sort(key=lambda p: p[0])
+                    rms_vals_rv = [peak_by_frame.get(f_start + i, 0.0)
+                                   for i in range(N_WIN)]
+                    max_rv = max(max(rms_vals_rv), 0.001)
 
-                    # Draw dry waveform silhouette — same style as EQ pre-EQ layer
-                    if len(wf_pairs) >= 2:
-                        verts = []
-                        for bx, amp in wf_pairs:
-                            verts.append((bx, disp_y))
-                            verts.append((bx, disp_y + amp * disp_h * 0.88))
-                        if len(verts) >= 4:
-                            bf = batch_for_shader(shader, "TRI_STRIP", {"pos": verts})
+                    # Draw waveform clipped to left zone (up to pre-delay divider)
+                    left_w   = div_x - disp_x
+                    half_h_rv = disp_h * 0.34
+                    centre_rv = disp_y + disp_h * 0.5
+                    wf_top_rv = []; wf_bot_rv = []
+                    for i, amp in enumerate(rms_vals_rv):
+                        bx  = disp_x + (i / max(N_WIN - 1, 1)) * left_w
+                        h   = (amp / max_rv) * half_h_rv
+                        wf_top_rv.append((bx, centre_rv - h))
+                        wf_bot_rv.append((bx, centre_rv + h))
+
+                    fill_rv = []
+                    for (bx, ty), (_, by) in zip(wf_top_rv, wf_bot_rv):
+                        fill_rv += [(bx, ty), (bx, by)]
+                    if len(fill_rv) >= 4:
+                        bf = batch_for_shader(shader, "TRI_STRIP", {"pos": fill_rv})
+                        shader.bind()
+                        shader.uniform_float("color", (0.17, 0.17, 0.22, 0.82))
+                        bf.draw(shader)
+                    for pts_rv in [wf_top_rv, wf_bot_rv]:
+                        if len(pts_rv) >= 2:
+                            be = batch_for_shader(shader, "LINE_STRIP", {"pos": pts_rv})
+                            gpu.state.line_width_set(max(1.0, ui_scale * 0.7))
                             shader.bind()
-                            shader.uniform_float("color", (0.17, 0.17, 0.19, 0.82))
-                            bf.draw(shader)
-                        edge = [(bx, disp_y + amp * disp_h * 0.88)
-                                for bx, amp in wf_pairs]
-                        if len(edge) >= 2:
-                            be = batch_for_shader(shader, "LINE_STRIP", {"pos": edge})
-                            gpu.state.line_width_set(max(1.0, ui_scale*0.7))
-                            shader.bind()
-                            shader.uniform_float("color", (0.32, 0.32, 0.36, 0.55))
+                            shader.uniform_float("color", (0.32, 0.32, 0.40, 0.60))
                             be.draw(shader)
                             gpu.state.line_width_set(1.0)
+
+                    # Playhead cursor in left zone
+                    ph_x = disp_x + (half / max(N_WIN - 1, 1)) * left_w
+                    ph_b = batch_for_shader(shader, "LINES",
+                                            {"pos": [(ph_x, disp_y + 2*ui_scale),
+                                                     (ph_x, disp_y + disp_h - 2*ui_scale)]})
+                    gpu.state.line_width_set(max(1.5, ui_scale))
+                    shader.bind()
+                    shader.uniform_float("color", (0.85, 0.85, 0.90, 0.50))
+                    ph_b.draw(shader)
+                    gpu.state.line_width_set(1.0)
+
         except Exception:
             pass  # waveform is decorative — never crash
 

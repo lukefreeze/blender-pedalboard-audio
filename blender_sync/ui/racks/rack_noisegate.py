@@ -30,6 +30,16 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
+# ---------------------------------------------------------------------------
+# Module-level rolling RMS buffer — one per channel, updated every draw call.
+# Gives a scrolling waveform without needing _fft_timeline_full (dead code).
+# 80 samples = same window width as the old timeline approach.
+# ---------------------------------------------------------------------------
+import collections as _coll
+_NG_RMS_HISTORY  = {}   # ch_idx -> deque of float RMS values — UNUSED, kept for compat
+_NG_GATE_HISTORY = {}   # ch_idx -> dict {frame: bool} gate open state per timeline frame
+_NG_HISTORY_LEN  = 80
+
 
 def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     """Noise gate display.
@@ -102,81 +112,123 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     gate_open_now = True
     gr_db_cur = 0.0
 
+    # Pull live gate state from engine and store per-frame history
+    # gr_levels[ch][1]=GR dB, [ch][2]=1.0 open / 0.0 closed
     try:
-        import bpy as _bpy, numpy as _np
-        from Loader import _fft_timeline_full, _fft_timeline
+        import bpy as _bpy_ng
+        from Loader import get_engine as _get_eng_ng
+        _eng_ng = _get_eng_ng()
+        if _eng_ng:
+            _hj_ng = _eng_ng.get_engine()
+            if _hj_ng:
+                assigned_ng = get_rack_channels(rack)
+                if assigned_ng:
+                    _ch_ng  = list(assigned_ng)[0]
+                    _st_ng  = _hj_ng.get_state()
+                    _gr_ng  = _st_ng.get_gr_levels(_ch_ng)
+                    if _gr_ng and len(_gr_ng) >= 3:
+                        gr_db_cur     = float(_gr_ng[1])
+                        gate_open_now = float(_gr_ng[2]) > 0.5
+                        # Store current frame's gate state so the waveform
+                        # display can draw a historically accurate envelope
+                        _cur_f_ng = (_bpy_ng.context.scene.frame_current
+                                     if _bpy_ng.context.scene else 0)
+                        if _ch_ng not in _NG_GATE_HISTORY:
+                            _NG_GATE_HISTORY[_ch_ng] = {}
+                        _NG_GATE_HISTORY[_ch_ng][_cur_f_ng] = gate_open_now
+                        # Trim old frames to avoid unbounded growth
+                        if len(_NG_GATE_HISTORY[_ch_ng]) > 500:
+                            oldest = min(_NG_GATE_HISTORY[_ch_ng])
+                            del _NG_GATE_HISTORY[_ch_ng][oldest]
+    except Exception:
+        pass
+
+    try:
+        import bpy as _bpy
+        from core.meters import _envelope_cache, get_envelope as _get_env
         assigned = get_rack_channels(rack)
         if not assigned:
             raise ValueError("no ch")
         ch = list(assigned)[0]
-        tl = _fft_timeline_full.get(ch) or _fft_timeline.get(ch)
-        if tl is None or not len(tl["snapshots"]):
-            raise ValueError("no data")
 
-        # Always prefer the full-track timeline — it has consistent start_frame=1
-        # and covers the whole track, so cur_snap is always comparable.
-        tl_full = _fft_timeline_full.get(ch)
-        if tl_full and len(tl_full["snapshots"]):
-            tl = tl_full
+        scene = _bpy.context.scene
+        if not scene or not scene.sequence_editor:
+            raise ValueError("no seq editor")
 
-        n_tl     = len(tl["snapshots"])
-        scene    = _bpy.context.scene
-        cur_f    = scene.frame_current if scene else 0
-        snap_sec = tl["snap_frames"] / float(tl["sr"])
-        elapsed  = max(0.0, (cur_f - tl["start_frame"]) / float(tl["fps"]))
-        cur_snap = max(0, min(n_tl - 1, int(elapsed / snap_sec)))
+        fps   = scene.render.fps / scene.render.fps_base
+        cur_f = scene.frame_current
 
-        # Show a fixed N_WIN window of snapshots.
-        # Window slides so cur_snap is always visible:
-        #   - If track fits in N_WIN, show all of it (0..n_tl-1) + silence pad.
-        #   - Otherwise, centre the window on cur_snap.
-        N_WIN    = 80
-        if n_tl <= N_WIN:
-            # Short track — show everything, silence-pad the right
-            ws       = 0
-            n_real   = n_tl
-            n_pad_r  = N_WIN - n_real
-            raw_vals = ([float(_np.mean(tl["snapshots"][i])) for i in range(n_real)]
-                        + [0.0] * n_pad_r)
-        else:
-            # Long track — slide window to keep cur_snap near right edge (2/3 in)
-            ws = max(0, cur_snap - (N_WIN * 2 // 3))
-            we = ws + N_WIN
-            if we > n_tl:
-                we = n_tl
-                ws = max(0, we - N_WIN)
-            raw_vals = [float(_np.mean(tl["snapshots"][ws + i]))
-                        for i in range(we - ws)]
-            if len(raw_vals) < N_WIN:
-                raw_vals = raw_vals + [0.0] * (N_WIN - len(raw_vals))
-        rms_vals  = raw_vals  # always N_WIN entries
-        # cur_snap position within the displayed window (for playhead line)
-        playhead_slot = max(0, min(N_WIN - 1, cur_snap - ws))
+        # Find sound strips on this channel
+        strips_on_ch = [
+            s for s in scene.sequence_editor.sequences_all
+            if s.type == "SOUND" and s.sound and (s.channel - 1) == ch
+        ]
+        if not strips_on_ch:
+            raise ValueError("no strips on ch")
 
-        # Current gate state from RMS vs threshold
-        rms_cur = rms_vals[-1] if rms_vals else 0.0
-        gate_open_now = rms_cur >= thr_lin
+        # Window: N_WIN frames centred on cur_f, scrolling left→right
+        N_WIN  = 120   # frames to show — more = more detail and wider context
+        half   = N_WIN // 2
+        f_start = cur_f - half
+        f_end   = f_start + N_WIN
 
-        # Pixel widths for attack / hold / release — based on fixed N_WIN spacing
-        ms_per_snap = snap_sec * 1000.0
-        px_per_snap = disp_w / max(N_WIN - 1, 1)
-        atk_px  = max(2.0, (atk_ms  / ms_per_snap) * px_per_snap)
-        hold_px = max(2.0, (hold_ms / ms_per_snap) * px_per_snap)
-        rel_px  = max(2.0, (rel_ms  / ms_per_snap) * px_per_snap)
+        # Build per-frame levels from envelope cache (pre-built, pre-gate)
+        # Use peak_list (not rms_list) — peaks show transient spikes clearly.
+        # rms_list is smoothed and makes the waveform look like a blob.
+        # _envelope_cache[fp] = (rms_list, peak_list)
+        rms_by_frame = {}
+        for strip in strips_on_ch:
+            fp = _bpy.path.abspath(strip.sound.filepath)
+            if fp not in _envelope_cache:
+                _get_env(fp, fps)
+            env = _envelope_cache.get(fp)
+            if env is None or len(env) < 2:
+                continue
+            peak_list = env[1]   # peak per frame — spikier than RMS
+            fs = int(strip.frame_start)
+            fo = int(getattr(strip, "frame_offset_start", 0))
+            for fi in range(f_start, f_end):
+                file_f = fi - fs + fo
+                if 0 <= file_f < len(peak_list):
+                    rms_by_frame[fi] = float(peak_list[file_f])
+
+        rms_vals     = [rms_by_frame.get(f_start + i, 0.0) for i in range(N_WIN)]
+        playhead_slot = half   # playhead always centred
+
+        # Threshold in same linear scale as envelope RMS (0..1 amplitude)
+        thr_lin_disp = 10.0 ** (thr_db / 20.0)
+        thr_lin      = thr_lin_disp   # used by gate envelope drawing below
+
+        rms_cur = rms_by_frame.get(cur_f, 0.0)
+        if gr_db_cur == 0.0:
+            gate_open_now = rms_cur >= thr_lin_disp
+
+        # px widths based on fps — 1 frame = 1000/fps ms
+        ms_per_frame = 1000.0 / fps
+        px_per_frame = disp_w / max(N_WIN - 1, 1)
+        atk_px  = max(2.0, (atk_ms  / ms_per_frame) * px_per_frame)
+        hold_px = max(2.0, (hold_ms / ms_per_frame) * px_per_frame)
+        rel_px  = max(2.0, (rel_ms  / ms_per_frame) * px_per_frame)
 
     except Exception:
-        rms_vals = None
+        rms_vals     = None
+        thr_lin_disp = thr_lin
         atk_px  = max(2.0, disp_w * 0.025)
         hold_px = max(2.0, disp_w * 0.15)
         rel_px  = max(2.0, disp_w * 0.055)
 
     # Draw waveform if we have data
     if rms_vals:
-        max_rms = max(rms_vals + [0.01])
+        # Normalise to peak of visible window; floor at thr_lin so the
+        # threshold line always has context even on quiet signals
+        # Normalise to the peak of the visible window only.
+        # Do NOT include thr_lin — threshold has nothing to do with waveform scale.
+        # The waveform should always fill the same height regardless of threshold.
+        max_rms = max(max(rms_vals), 0.001)
         half_h  = disp_h * 0.34
         wf_top  = []
         wf_bot  = []
-        _N = 79  # N_WIN - 1, constant so x-spacing never changes
+        _N = N_WIN - 1  # spacing constant matches N_WIN
         for i, rms in enumerate(rms_vals):
             bx  = disp_x + (i / _N) * disp_w
             amp = (rms / max_rms) * half_h
@@ -215,67 +267,68 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
             pass
 
     # ── Gate envelope line ────────────────────────────────────────────────────
-    # Built from knob values: find where waveform crosses threshold → draw
-    # attack slope up, hold flat, release slope down, then closed again.
-    # Range floor: where the line sits when closed
+    # Use recorded engine gate state per frame (from _NG_GATE_HISTORY) so the
+    # envelope matches what the engine actually did — not a prediction from
+    # comparing waveform to threshold (which has scale/calibration errors).
     rng_y = closed_y - rng_norm * (closed_y - open_y)
 
     gate_pts = []
-    first_event = None   # (close_x, atk_x, hold_x, rel_x) for annotations
+    first_event = None
 
     if rms_vals:
         count    = len(rms_vals)
-        px_per_i = disp_w / 79  # always N_WIN-1 = 79 so spacing is constant
+        px_per_i = disp_w / max(count - 1, 1)
+        # f_start was set in the try block above; fall back if exception occurred
+        try:
+            _f0 = f_start
+            _ch = ch
+            gate_hist = _NG_GATE_HISTORY.get(_ch, {})
+        except Exception:
+            _f0 = 0; gate_hist = {}
+
         in_gate = False
         hold_remaining = 0.0
 
-        i = 0
-        while i < count:
-            bx  = disp_x + i * px_per_i
-            rms = rms_vals[i]
-            is_above = rms >= thr_lin
+        for i in range(count):
+            bx       = disp_x + i * px_per_i
+            frame_no = _f0 + i
+            # Use recorded engine state if available, else fall back to waveform
+            if frame_no in gate_hist:
+                is_above = gate_hist[frame_no]
+            else:
+                rms      = rms_vals[i]
+                is_above = rms >= thr_lin
 
             if not in_gate and is_above:
-                # Transition: closed → open (attack)
                 close_x = bx
                 atk_end = min(bx + atk_px, disp_x + disp_w)
-                if gate_pts and gate_pts[-1][1] != rng_y:
-                    gate_pts.append((bx, rng_y))
-                else:
-                    gate_pts.append((bx, rng_y))
+                gate_pts.append((bx, rng_y))
                 gate_pts.append((atk_end, open_y))
                 in_gate = True
                 hold_remaining = hold_px
                 if first_event is None:
                     first_event = (close_x, atk_end, None, None)
             elif in_gate and is_above:
-                # Still open — flat at open_y, consume hold
                 gate_pts.append((bx, open_y))
                 hold_remaining -= px_per_i
                 if first_event and first_event[2] is None:
                     first_event = (first_event[0], first_event[1], bx, None)
             elif in_gate and not is_above:
-                # Below threshold — hold then release
                 if hold_remaining > 0:
                     gate_pts.append((bx, open_y))
                     hold_remaining -= px_per_i
                     if first_event and first_event[2] is None:
                         first_event = (first_event[0], first_event[1], bx, None)
                 else:
-                    # Release slope
                     rel_end = min(bx + rel_px, disp_x + disp_w)
                     gate_pts.append((bx, open_y))
                     gate_pts.append((rel_end, rng_y))
                     in_gate = False
                     if first_event and first_event[3] is None:
-                        if first_event[2] is None:
-                            first_event = (first_event[0], first_event[1], bx, rel_end)
-                        else:
-                            first_event = (first_event[0], first_event[1], first_event[2], rel_end)
+                        hx2 = first_event[2] if first_event[2] else bx
+                        first_event = (first_event[0], first_event[1], hx2, rel_end)
             else:
-                # Closed — flat at range floor
                 gate_pts.append((bx, rng_y))
-            i += 1
     else:
         # No data — draw flat at open
         gate_pts = [(disp_x, open_y), (disp_x + disp_w, open_y)]
