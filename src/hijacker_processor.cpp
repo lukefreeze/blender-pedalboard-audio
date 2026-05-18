@@ -20,7 +20,19 @@ static const float PI = 3.14159265358979f;
 // ===========================================================================
 // Param denormalisation
 // ===========================================================================
-static inline float denorm_threshold(float n) { return -40.0f + n * 40.0f; }
+// Two separate threshold ranges for the two compressor types:
+//
+// Single-band: operates on the FULL unfiltered signal (-1..+1 PCM range).
+// A loud voice peaks at -3 to -6dBFS full-spectrum.
+// Range -40..0dB: n=0.5 → -20dB fires on typical programme, n=0.8 → -8dB for peaks.
+static inline float denorm_threshold_full(float n) { return -40.0f + n * 40.0f; }
+//
+// Multiband: operates on BAND-SPLIT signal which is 15-25dB lower than full.
+// Splitting a -18dBFS signal into 4 bands gives ~-24 to -30dBFS per band.
+// Range -60..-20dB: n=0.5 → -40dB, n=0.8 → -28dB — fires correctly on band content.
+static inline float denorm_threshold_band(float n) { return -60.0f + n * 40.0f; }
+// Legacy alias — multiband uses band version
+static inline float denorm_threshold(float n) { return denorm_threshold_band(n); }
 static inline float denorm_ratio    (float n) { return  1.0f  + n * 19.0f; }
 static inline float denorm_attack   (float n) { return  0.1f  + n * 99.9f; }
 static inline float denorm_release  (float n) { return 10.0f  + n * 990.0f; }
@@ -78,7 +90,8 @@ static void apply_comp_single(int ch, aud::sample_t* buf,
                                const EffectSlot& fx,
                                float sr)
 {
-    float thr_db  = denorm_threshold(fx.params[0]);
+    // Param snapshot — prevents torn reads if a preset changes mid-buffer
+    float thr_db  = denorm_threshold_full(fx.params[0]);  // -40..0dB for full signal
     float ratio   = denorm_ratio    (fx.params[1]);
     float atk_ms  = denorm_attack   (fx.params[2]);
     float rel_ms  = denorm_release  (fx.params[3]);
@@ -713,8 +726,7 @@ static void apply_comp_multi(int ch, aud::sample_t* buf,
                       + band_bufs[ch][c][2][f] * BAND_SIGN[2]
                       + band_bufs[ch][c][3][f] * BAND_SIGN[3];
             // Safety soft-limiter: catches any residual overshoot.
-            // tanh provides smooth, non-clicking limiting without hard clipping.
-            buf[f * n_ch + c] = std::tanh(out);
+            buf[f * n_ch + c] = out;
         }
     }
 

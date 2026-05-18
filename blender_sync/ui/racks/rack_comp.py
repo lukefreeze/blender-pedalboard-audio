@@ -366,7 +366,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
 
     def _band_output_db(b):
         """Actual output dB for this band at the reference input level."""
-        thr_db  = -40.0 + _rp(rack, b)       * 40.0   # -40..0 dB
+        thr_db  = -60.0 + _rp(rack, b)       * 40.0   # -60..-20dB, matches C++ denorm_threshold
         ratio   =  1.0  + _rp(rack, b + 4)   * 19.0   # 1..20
         knee_db =  0.5  + _rp(rack, b + 20)  * 23.5   # 0.5..24 dB
         gain_db = (_rp(rack, b + 16, 0.5) - 0.5) * 24.0  # -12..+12 dB
@@ -591,7 +591,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
 
         # Threshold (p0-p3)
         thr_n   = _rp(rack, band)
-        thr_db  = -40.0 + thr_n*40.0
+        thr_db  = -60.0 + thr_n*40.0   # -60..-20dB, matches C++ denorm_threshold
         _draw_knob(kx0, ky0, knob_r, thr_n, col_rgb,
                    "Thr", f"{thr_db:.0f}dB", scale)
 
