@@ -25,6 +25,7 @@ RACK_EXPANDED_H_EQ  = 580
 RACK_EXPANDED_H_RV  = 340
 RACK_EXPANDED_H_NG  = 320
 RACK_EXPANDED_H_DL  = 320
+RACK_EXPANDED_H_MX  = 320
 RACK_COLLAPSED_H    = 48
 RACK_RAIL_H         = 32
 RACK_GAP            = 8
@@ -409,6 +410,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
            else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
            else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
            else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
+           else RACK_EXPANDED_H_MX if rack.effect_type == "MIXDOWN"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -599,6 +601,15 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
             print(f"[BOOSTER] ImportError: {e}")
         except Exception as e:
             print(f"[BOOSTER] draw error: {e}")
+            import traceback; traceback.print_exc()
+    elif etype == "MIXDOWN":
+        try:
+            from ui.racks.rack_mixdown import _draw_mixdown_body
+            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
+        except Exception as e:
+            print(f"[MIXDOWN] draw error: {e}")
             import traceback; traceback.print_exc()
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters

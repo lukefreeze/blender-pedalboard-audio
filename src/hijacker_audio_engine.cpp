@@ -282,7 +282,51 @@ void HijackerEngine::set_volume(int ch, float vol) {
 
 void HijackerEngine::set_mute(int ch, bool muted) {
     if (ch < 0 || ch >= PB_MAX_CHANNELS) return;
+
+    bool was_muted = channels_[ch].muted.load();
     channels_[ch].muted.store(muted);
+
+    // When unmuting during active playback, seek this channel to the current
+    // playhead position. Without this the channel resumes from wherever its
+    // file pointer was when it was muted — which causes it to play out of sync.
+    if (was_muted && !muted && transport_.playing.load()
+        && channels_[ch].active.load())
+    {
+        std::lock_guard<std::mutex> lock(playlist_mutex_);
+        double target_s = playhead_s_;
+
+        // Find the segment that covers the current playhead
+        int seg_idx = -1;
+        double seek_within = 0.0;
+        for (int si = 0; si < channels_[ch].n_segments; ++si) {
+            const HijackerSegment& seg = channels_[ch].segments[si];
+            double seg_end = seg.timeline_pos_s + seg.duration_s;
+            if (target_s >= seg.timeline_pos_s && target_s < seg_end) {
+                seg_idx     = si;
+                seek_within = target_s - seg.timeline_pos_s;
+                break;
+            }
+        }
+
+        if (seg_idx >= 0) {
+            _open_segment(ch, seg_idx, seek_within);
+        } else {
+            _close_channel_file(ch);
+            channels_[ch].cur_segment = -1;
+        }
+
+        // Clear filter/compressor state to avoid click on resume
+        memset(g_state.comp_state[ch].lp_z, 0, sizeof(g_state.comp_state[ch].lp_z));
+        memset(g_state.comp_state[ch].hp_z, 0, sizeof(g_state.comp_state[ch].hp_z));
+        g_state.comp_state[ch].single.envelope  = 0.0f;
+        g_state.comp_state[ch].single.gr_smooth = 0.0f;
+        for (int b = 0; b < PB_MB_BANDS; ++b) {
+            g_state.comp_state[ch].bands[b].envelope  = 0.0f;
+            g_state.comp_state[ch].bands[b].gr_smooth = 0.0f;
+        }
+
+        printf("[HIJACKER] ch%d unmuted — seeked to %.3fs\n", ch+1, target_s);
+    }
 }
 
 void HijackerEngine::set_solo(int ch, bool soloed) {

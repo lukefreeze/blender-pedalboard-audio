@@ -60,6 +60,7 @@ RACK_EXPANDED_H_EQ  = 580
 RACK_EXPANDED_H_RV  = 340
 RACK_EXPANDED_H_NG  = 320   # noise gate — display + 5-knob row
 RACK_EXPANDED_H_DL  = 320   # delay      — waveform display + 5-knob row
+RACK_EXPANDED_H_MX  = 320   # mixdown    — 4-column layout
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
@@ -100,6 +101,7 @@ EFFECT_TYPES = [
     ("NOISE_GATE",  "Noise Gate"),
     ("DELAY",       "Delay"),
     ("BOOSTER",     "The BOOSTER!!"),
+    ("MIXDOWN",     "Mixdown"),
 ]
 
 # AI rack type identifiers — separate namespace from DSP racks
@@ -360,6 +362,7 @@ PRESETS = {
     "REVERB":      [p[0] for p in PRESET_DATA["REVERB"]],
     "NOISE_GATE":  [p[0] for p in PRESET_DATA["NOISE_GATE"]],
     "DELAY":       [p[0] for p in PRESET_DATA["DELAY"]],
+    "MIXDOWN":     ["settings"],   # single entry — no presets but list must be non-empty
     "BOOSTER":     [p[0] for p in PRESET_DATA["BOOSTER"]],
 }
 
@@ -371,6 +374,8 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     enabled:          bpy.props.BoolProperty(default=True)
     collapsed:        bpy.props.BoolProperty(default=False)
     preset_idx:       bpy.props.IntProperty(default=0)
+    # Mixdown rack output path — stored as file path string
+    mixdown_output_path: bpy.props.StringProperty(default="", subtype='FILE_PATH')
     # 32 channel assignment booleans (matches MAX_CHANNELS in Loader.py)
     ch0:  bpy.props.BoolProperty(default=False)
     ch1:  bpy.props.BoolProperty(default=False)
@@ -613,6 +618,18 @@ def init_rack_defaults(rack):
         rack.preset_idx = 2   # Medium Room
     elif rack.effect_type == "NOISE_GATE":
         rack.preset_idx = 0   # Dialogue Clean
+    elif rack.effect_type == "MIXDOWN":
+        # p0=mode(0=mix), p1=fmt(0=WAV), p2=sr(0.5=48k), p3=bd(0.5=24bit)
+        # p4=range(0=full), p5=custom_start, p6=custom_end, p7=import_mode(0=mute+free)
+        rack.p0 = 0.0   # mix mode
+        rack.p1 = 0.0   # WAV
+        rack.p2 = 0.5   # 48000 Hz
+        rack.p3 = 0.5   # 24-bit
+        rack.p4 = 0.0   # full timeline
+        rack.p5 = 0.0   # custom start (frame 1)
+        rack.p6 = 1.0   # custom end (frame 10000)
+        rack.p7 = 0.0   # mute originals + place on free channel
+        return
     _load_preset(rack, rack.preset_idx)
 
 
@@ -2899,6 +2916,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
            else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
            else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
            else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
+           else RACK_EXPANDED_H_MX if rack.effect_type == "MIXDOWN"
            else RACK_EXPANDED_H) * scale
 
     # --- CHASSIS ---
@@ -3063,6 +3081,16 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
     elif etype == "DELAY":
         _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "MIXDOWN":
+        try:
+            from ui.racks.rack_mixdown import _draw_mixdown_body
+            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.02, 0.08, 0.05, 1.0))
+            _draw_text("MISSING: blender_sync/ui/racks/rack_mixdown.py",
+                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
+                       max(1, int(10*scale)), (0.3, 1.0, 0.5, 1.0))
+            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
     elif etype == "BOOSTER":
         try:
             from ui.racks.rack_booster import _draw_booster_body
@@ -3377,6 +3405,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_DL * ui_scale
         elif rack.effect_type == "BOOSTER":
             rh = RACK_EXPANDED_H_DL * ui_scale
+        elif rack.effect_type == "MIXDOWN":
+            rh = RACK_EXPANDED_H_MX * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -3393,7 +3423,9 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
                 _draw_rack_expanded(rack_x, cur_y - rh, rack, i,
                                     ui_scale, dynamic_rack_w)
         except Exception as e:
+            import traceback
             print(f"[RACKS] draw error rack {i}: {e}")
+            traceback.print_exc()
 
         cur_y -= rh + RACK_GAP*ui_scale
 
@@ -3798,6 +3830,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
             rh = RACK_EXPANDED_H_DL * ui_scale
         elif rack.effect_type == "BOOSTER":
             rh = RACK_EXPANDED_H_DL * ui_scale
+        elif rack.effect_type == "MIXDOWN":
+            rh = RACK_EXPANDED_H_MX * ui_scale
         else:
             rh = RACK_EXPANDED_H * ui_scale
 
@@ -3956,6 +3990,131 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     elif rx >= rx2_bo + rw2_bo - third:
                         return {'zone': 'booster_ch_plus', 'rack_idx': i}
 
+            if not rack.collapsed and rack.effect_type == "MIXDOWN":
+                # Hit zones mirror the 4-column layout in rack_mixdown.py.
+                # Col A: 0..160px  — render mode buttons
+                # Col B: 160px..C_X — settings, path, toggles, import, render btn
+                # Col C: C_X..D_X  — stats (read-only, no hits needed)
+                # Col D: D_X..rw   — channel buttons (handled by rack_base)
+                s         = ui_scale
+                pad_mx    = 10 * s
+                CH_W      = 100 * s
+                C_W       = 200 * s
+                A_W       = 160 * s
+                A_X       = rack_x
+                B_X       = rack_x + A_W
+                C_X_abs   = rack_x + rw - CH_W - C_W
+                a_xi      = A_X + pad_mx;  a_wi = A_W - 2*pad_mx
+                b_xi      = B_X + pad_mx;  b_wi = C_X_abs - B_X - 2*pad_mx
+                body_top  = rack_y + rh - RACK_RAIL_H * s
+                tog_h     = 20 * s
+                row_h     = 20 * s
+                btn_h2    = 26 * s
+
+                # ── Col A: render mode buttons ─────────────────────────
+                # Two stacked buttons, each 24px tall, starting 17px from top
+                mode_btn_h = 24 * s
+                mix_y  = body_top - pad_mx - 17*s - mode_btn_h
+                bake_y = mix_y - mode_btn_h - 4*s
+                if a_xi <= rx <= a_xi + a_wi:
+                    if mix_y <= ry <= mix_y + mode_btn_h:
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p0', 'value': 0.0}
+                    if bake_y <= ry <= bake_y + mode_btn_h:
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p0', 'value': 1.0}
+
+                # ── Col B: replay b_nxt() arithmetic top-down ──────────
+                is_bake_ht = rack.p0 > 0.5
+                is_custom_ht = rack.p4 > 0.5
+                b_top = body_top - pad_mx
+
+                def bnxt(h):
+                    nonlocal b_top; b_top -= h; return b_top
+
+                # Output path + browse button
+                bnxt(4*s); bnxt(13*s)   # gap + label
+                path_h2   = 22*s; path_y2 = bnxt(path_h2 + 3*s)
+                browse_w2 = 60*s
+                path_bw2  = b_wi - browse_w2 - 4*s
+                br_x2     = b_xi + path_bw2 + 4*s
+
+                if path_y2 <= ry <= path_y2 + path_h2:
+                    if br_x2 <= rx <= br_x2 + browse_w2:
+                        return {'zone': 'mixdown_browse', 'rack_idx': i}
+                    # clicking anywhere else on path row also opens browse
+                    if b_xi <= rx <= b_xi + b_wi:
+                        return {'zone': 'mixdown_browse', 'rack_idx': i}
+
+                # Format / SR / BD row
+                bnxt(6*s); bnxt(13*s)
+                ty2 = bnxt(tog_h + 2*s)
+                col3_w2 = (b_wi - 2*4*s) / 3; col3_g2 = 4*s
+                if ty2 <= ry <= ty2 + tog_h:
+                    # Format (left third)
+                    if b_xi <= rx <= b_xi + col3_w2:
+                        mid = b_xi + col3_w2/2
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p1', 'value': 1.0 if rx >= mid else 0.0}
+                    # Sample rate (middle third)
+                    sr_x0 = b_xi + col3_w2 + col3_g2
+                    if sr_x0 <= rx <= sr_x0 + col3_w2:
+                        third = col3_w2 / 3
+                        rel   = rx - sr_x0
+                        val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p2', 'value': val}
+                    # Bit depth (right third)
+                    bd_x0 = b_xi + 2*(col3_w2 + col3_g2)
+                    if bd_x0 <= rx <= bd_x0 + col3_w2:
+                        third = col3_w2 / 3
+                        rel   = rx - bd_x0
+                        val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p3', 'value': val}
+
+                # Range toggle
+                bnxt(6*s); bnxt(13*s)
+                rng_y2 = bnxt(tog_h + 2*s)
+                if b_xi <= rx <= b_xi + b_wi and rng_y2 <= ry <= rng_y2 + tog_h:
+                    mid = b_xi + b_wi/2
+                    return {'zone': 'mixdown_set', 'rack_idx': i,
+                            'param': 'p4', 'value': 1.0 if rx >= mid else 0.0}
+                if is_custom_ht:
+                    bnxt(2*s); bnxt(20*s + 2*s)
+                else:
+                    bnxt(2*s); bnxt(8*s + 3*s)
+
+                # Import section
+                bnxt(6*s); bnxt(13*s)
+                if is_bake_ht:
+                    bnxt(2*s); opt0_y = bnxt(row_h)
+                    bnxt(2*s); opt1_y = bnxt(row_h)
+                    if b_xi <= rx <= b_xi + b_wi:
+                        if opt0_y <= ry <= opt0_y + row_h:
+                            return {'zone': 'mixdown_set', 'rack_idx': i,
+                                    'param': 'p7', 'value': 0.0}
+                        if opt1_y <= ry <= opt1_y + row_h:
+                            return {'zone': 'mixdown_set', 'rack_idx': i,
+                                    'param': 'p7', 'value': 1.0}
+                else:
+                    bnxt(2*s); src_y = bnxt(row_h)
+                    hw2 = b_wi/2 - 2*s
+                    src_x = b_xi + hw2 + 4*s
+                    if src_x <= rx <= src_x + hw2 and src_y <= ry <= src_y + row_h:
+                        cur_val = rack.p7
+                        nxt_val = (0.0 if cur_val > 0.75
+                                   else 0.5 if cur_val < 0.25 else 1.0)
+                        return {'zone': 'mixdown_set', 'rack_idx': i,
+                                'param': 'p7', 'value': nxt_val}
+
+                # Render button — bottom of col B
+                bnxt(3*s); bnxt(8*s + 3*s)   # version note
+                bnxt(6*s)
+                btn_y2 = bnxt(btn_h2 + 4*s)
+                if b_xi <= rx <= b_xi + b_wi and btn_y2 <= ry <= btn_y2 + btn_h2:
+                    return {'zone': 'mixdown_render', 'rack_idx': i}
+
             return {'zone': 'rack_body', 'rack_idx': i}
 
         cur_y -= rh + RACK_GAP*ui_scale
@@ -3965,6 +4124,9 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     if rack_x <= rx <= rack_x+rw and add_y <= ry <= add_y+28*ui_scale:
         return {'zone': 'add_rack', 'click_x': rx, 'click_y': ry}
 
+    # NOTE: AI rack section hits are NOT handled here.
+    # interaction.py calls hit_test_ai_racks() directly and routes the result
+    # to handle_ai_rack_click() — keeping AI and DSP click paths separate.
     return None
 
 
@@ -4079,6 +4241,57 @@ def handle_click(hit, context):
             if rack.ai_status != 'PROCESSING':
                 from core.booster import process_booster
                 process_booster(i, context)
+        return True
+
+    # ── Mixdown rack interactions ─────────────────────────────────────────
+    if zone == 'mixdown_render':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            rack = racks[i]
+            try:
+                from ui.racks.rack_mixdown import _start_render, _mx_state
+                if not _mx_state['running']:
+                    _start_render(i, rack, context.scene)
+            except Exception as e:
+                print(f"[MIXDOWN] start_render error: {e}")
+        return True
+
+    if zone == 'mixdown_toggle':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            param  = hit['param']
+            values = hit['values']   # list of float values to cycle through
+            cur    = getattr(racks[i], param, 0.0)
+            # Find next value in cycle
+            dists  = [abs(cur - v) for v in values]
+            cur_i  = dists.index(min(dists))
+            nxt    = values[(cur_i + 1) % len(values)]
+            setattr(racks[i], param, nxt)
+        return True
+
+    if zone == 'mixdown_set':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            setattr(racks[i], hit['param'], hit['value'])
+        return True
+
+    if zone == 'mixdown_browse':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            is_bake = racks[i].p0 > 0.5
+            try:
+                if is_bake:
+                    bpy.ops.vse.mixdown_browse_folder('INVOKE_DEFAULT',
+                                                      rack_idx=i)
+                else:
+                    bpy.ops.vse.mixdown_save_as('INVOKE_DEFAULT',
+                                                rack_idx=i)
+            except Exception as e:
+                print(f"[MIXDOWN] browse error: {e}")
         return True
 
     if zone == 'booster_limiter':
@@ -4241,8 +4454,87 @@ def register_racks():
     bpy.utils.register_class(PB_RackSettings)
     bpy.types.Scene.pb_racks = bpy.props.CollectionProperty(
         type=PB_RackSettings)
+    # Register mixdown file browser operators
+    _register_mixdown_operators()
     print("[RACKS] registered")
     register_ai_racks()
+
+
+def _register_mixdown_operators():
+    """Register file browser operators for the mixdown rack."""
+    import bpy
+
+    class VSE_OT_MixdownSaveAs(bpy.types.Operator):
+        """Open save-as file browser for mixdown output path."""
+        bl_idname   = "vse.mixdown_save_as"
+        bl_label    = "Save Mixdown As"
+        rack_idx: bpy.props.IntProperty(default=0)
+        filepath: bpy.props.StringProperty(subtype='FILE_PATH', default="")
+        filter_glob: bpy.props.StringProperty(
+            default="*.wav;*.flac", options={'HIDDEN'})
+
+        def invoke(self, context, event):
+            racks = getattr(context.scene, "pb_racks", [])
+            if self.rack_idx < len(racks):
+                rack = racks[self.rack_idx]
+                cur  = getattr(rack, 'mixdown_output_path', '')
+                if cur:
+                    self.filepath = cur
+                else:
+                    import os
+                    fmt   = 'flac' if rack.p1 > 0.5 else 'wav'
+                    base  = os.path.splitext(os.path.basename(
+                                bpy.data.filepath))[0] if bpy.data.filepath \
+                                else 'untitled'
+                    self.filepath = os.path.join(
+                        os.path.dirname(bpy.data.filepath) if bpy.data.filepath
+                        else bpy.app.tempdir,
+                        f"{base}_mixdown.{fmt}")
+            context.window_manager.fileselect_add(self)
+            return {'RUNNING_MODAL'}
+
+        def execute(self, context):
+            racks = getattr(context.scene, "pb_racks", [])
+            if self.rack_idx < len(racks):
+                racks[self.rack_idx].mixdown_output_path = self.filepath
+                print(f"[MIXDOWN] output path set: {self.filepath}")
+            return {'FINISHED'}
+
+    class VSE_OT_MixdownBrowseFolder(bpy.types.Operator):
+        """Open folder browser for per-channel bake output directory."""
+        bl_idname   = "vse.mixdown_browse_folder"
+        bl_label    = "Choose Bake Output Folder"
+        rack_idx: bpy.props.IntProperty(default=0)
+        directory: bpy.props.StringProperty(subtype='DIR_PATH', default="")
+
+        def invoke(self, context, event):
+            racks = getattr(context.scene, "pb_racks", [])
+            if self.rack_idx < len(racks):
+                cur = getattr(racks[self.rack_idx], 'mixdown_output_path', '')
+                if cur:
+                    import os
+                    self.directory = cur if os.path.isdir(cur) \
+                                     else os.path.dirname(cur)
+                else:
+                    import os
+                    self.directory = (os.path.dirname(bpy.data.filepath)
+                                      if bpy.data.filepath else bpy.app.tempdir)
+            context.window_manager.fileselect_add(self)
+            return {'RUNNING_MODAL'}
+
+        def execute(self, context):
+            racks = getattr(context.scene, "pb_racks", [])
+            if self.rack_idx < len(racks):
+                racks[self.rack_idx].mixdown_output_path = self.directory
+                print(f"[MIXDOWN] bake folder set: {self.directory}")
+            return {'FINISHED'}
+
+    for cls in [VSE_OT_MixdownSaveAs, VSE_OT_MixdownBrowseFolder]:
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+        bpy.utils.register_class(cls)
 
 
 def unregister_racks():

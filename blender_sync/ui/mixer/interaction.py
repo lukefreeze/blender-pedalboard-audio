@@ -516,6 +516,8 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                             _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
                         elif _ri.effect_type == "BOOSTER":
                             _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
+                        elif _ri.effect_type == "MIXDOWN":
+                            _rh = _rk_ai.RACK_EXPANDED_H_MX * UI_SCALE
                         else:
                             _rh = _rk_ai.RACK_EXPANDED_H * UI_SCALE
                         cur_y_ai -= _rh + _rk_ai.RACK_GAP * UI_SCALE
