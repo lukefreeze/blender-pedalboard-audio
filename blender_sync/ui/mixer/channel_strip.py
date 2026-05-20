@@ -85,13 +85,26 @@ def send_section_height(n_racks: int, scale: float) -> float:
     return slots * (SEND_BTN_H + SEND_BTN_GAP) * scale
 
 
+def send_section_height_for_group(group_idx: int, scale: float) -> float:
+    """send_section_height for a specific fader group."""
+    import bpy as _bpy
+    scene = _bpy.context.scene
+    if not scene:
+        return send_section_height(0, scale)
+    all_racks = getattr(scene, "pb_racks", [])
+    n = sum(1 for r in all_racks if getattr(r, 'group_idx', 0) == group_idx)
+    return send_section_height(n, scale)
+
+
 # ---------------------------------------------------------------------------
 # Draw the send button column for one strip
 # ---------------------------------------------------------------------------
 def draw_send_buttons(sx: float, base_y: float, channel_idx: int,
-                      tracks, scale: float) -> None:
+                      tracks, scale: float, group_idx: int = 0) -> None:
     scene   = bpy.context.scene
-    racks   = getattr(scene, "pb_racks", []) if scene else []
+    all_racks = getattr(scene, "pb_racks", []) if scene else []
+    # Only show racks belonging to this fader group
+    racks   = [r for r in all_racks if getattr(r, 'group_idx', 0) == group_idx]
     n_racks = len(racks)
     slots   = max(SEND_MIN_SLOTS, n_racks)
 
@@ -103,12 +116,15 @@ def draw_send_buttons(sx: float, base_y: float, channel_idx: int,
     import gpu
     from gpu_extras.batch import batch_for_shader
 
+    # local_ch = channel_idx within the group (0-8)
+    local_ch = channel_idx % 9
+
     for slot in range(slots):
         by = start_y - slot * (btn_h + SEND_BTN_GAP * scale)
 
         if slot < n_racks:
             rack   = racks[slot]
-            attr   = f'ch{channel_idx}'
+            attr   = f'ch{local_ch}'
             active = getattr(rack, attr, False)
             abbrev = EFFECT_ABBREV.get(rack.effect_type, rack.effect_type[:3])
             label  = f"{abbrev} - {slot+1}"
@@ -154,11 +170,14 @@ def draw_send_buttons(sx: float, base_y: float, channel_idx: int,
 # ---------------------------------------------------------------------------
 def draw_channel_strip(i: int, track, sx: float, base_y: float,
                        scale: float, tracks,
-                       engine_level: float, peak_hold: float) -> None:
+                       engine_level: float, peak_hold: float,
+                       group_idx: int = 0) -> None:
     """Draw one complete fader strip at screen x=sx, anchored to base_y."""
 
-    # Background
-    n_racks  = len(getattr(bpy.context.scene, "pb_racks", [])) if bpy.context.scene else 0
+    # Background — use only racks in this group for send height
+    scene    = bpy.context.scene
+    all_racks = getattr(scene, "pb_racks", []) if scene else []
+    n_racks  = sum(1 for r in all_racks if getattr(r, 'group_idx', 0) == group_idx)
     send_h   = send_section_height(n_racks, scale)
     strip_h  = 650 * scale + send_h
     draw_element("strip_bg", sx, base_y - strip_h,
@@ -202,8 +221,8 @@ def draw_channel_strip(i: int, track, sx: float, base_y: float,
                      KNOB_GAIN_R*scale, gain_norm,
                      KNOB_GAIN_COLOR, f"G:{gain_db:+.1f}dB")
 
-    # Send buttons
-    draw_send_buttons(sx, base_y, i, tracks, scale)
+    # Send buttons — only shows racks from this group
+    draw_send_buttons(sx, base_y, i, tracks, scale, group_idx)
     blf.color(0, 1, 1, 1, 1)
 
     # EQ knobs

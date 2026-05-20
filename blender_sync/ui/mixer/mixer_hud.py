@@ -107,6 +107,7 @@ def draw_callback_px(self, context) -> None:
 
         draw_col = 0
         for i, track in enumerate(tracks):
+            group_idx = i // 9
             sx = STRIP_LEFT_MARGIN*UI_SCALE + draw_col*STRIP_STRIDE*UI_SCALE + SCROLL_X
             draw_col += 1
             if sx + STRIP_W*UI_SCALE < 0 or sx > width:
@@ -114,7 +115,8 @@ def draw_callback_px(self, context) -> None:
 
             eng   = _engine_levels[i] if i < MAX_CHANNELS else 0.0
             peak  = _peak_hold[i]     if i < MAX_CHANNELS else 0.0
-            draw_channel_strip(i, track, sx, base_y, UI_SCALE, tracks, eng, peak)
+            draw_channel_strip(i, track, sx, base_y, UI_SCALE, tracks,
+                               eng, peak, group_idx)
 
         # Racks
         try:

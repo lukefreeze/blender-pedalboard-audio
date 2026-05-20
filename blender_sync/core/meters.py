@@ -168,7 +168,7 @@ def _meter_timer():
         if scene.sequence_editor:
             highest = max((s.channel for s in scene.sequence_editor.sequences_all
                            if s.type == "SOUND" and s.sound), default=0)
-            needed  = max(DEFAULT_CHANNELS, highest)
+            needed  = max(DEFAULT_CHANNELS, ((highest + 8) // 9) * 9)
             if needed > len(tracks):
                 from ui.mixer.interaction import _sync_tracks_to_vse
                 _sync_tracks_to_vse(scene, reset_values=False)

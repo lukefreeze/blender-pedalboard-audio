@@ -282,51 +282,9 @@ void HijackerEngine::set_volume(int ch, float vol) {
 
 void HijackerEngine::set_mute(int ch, bool muted) {
     if (ch < 0 || ch >= PB_MAX_CHANNELS) return;
-
-    bool was_muted = channels_[ch].muted.load();
     channels_[ch].muted.store(muted);
-
-    // When unmuting during active playback, seek this channel to the current
-    // playhead position. Without this the channel resumes from wherever its
-    // file pointer was when it was muted — which causes it to play out of sync.
-    if (was_muted && !muted && transport_.playing.load()
-        && channels_[ch].active.load())
-    {
-        std::lock_guard<std::mutex> lock(playlist_mutex_);
-        double target_s = playhead_s_;
-
-        // Find the segment that covers the current playhead
-        int seg_idx = -1;
-        double seek_within = 0.0;
-        for (int si = 0; si < channels_[ch].n_segments; ++si) {
-            const HijackerSegment& seg = channels_[ch].segments[si];
-            double seg_end = seg.timeline_pos_s + seg.duration_s;
-            if (target_s >= seg.timeline_pos_s && target_s < seg_end) {
-                seg_idx     = si;
-                seek_within = target_s - seg.timeline_pos_s;
-                break;
-            }
-        }
-
-        if (seg_idx >= 0) {
-            _open_segment(ch, seg_idx, seek_within);
-        } else {
-            _close_channel_file(ch);
-            channels_[ch].cur_segment = -1;
-        }
-
-        // Clear filter/compressor state to avoid click on resume
-        memset(g_state.comp_state[ch].lp_z, 0, sizeof(g_state.comp_state[ch].lp_z));
-        memset(g_state.comp_state[ch].hp_z, 0, sizeof(g_state.comp_state[ch].hp_z));
-        g_state.comp_state[ch].single.envelope  = 0.0f;
-        g_state.comp_state[ch].single.gr_smooth = 0.0f;
-        for (int b = 0; b < PB_MB_BANDS; ++b) {
-            g_state.comp_state[ch].bands[b].envelope  = 0.0f;
-            g_state.comp_state[ch].bands[b].gr_smooth = 0.0f;
-        }
-
-        printf("[HIJACKER] ch%d unmuted — seeked to %.3fs\n", ch+1, target_s);
-    }
+    // No seek needed on unmute — muted channels still advance file_pos_s
+    // in the audio callback so they stay in perfect sync at all times.
 }
 
 void HijackerEngine::set_solo(int ch, bool soloed) {
@@ -607,62 +565,75 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
     // Per-channel mixing
     for (int ch = 0; ch < PB_MAX_CHANNELS; ++ch) {
         if (!channels_[ch].active.load()) continue;
-        if (channels_[ch].muted.load())   continue;
-        if (any_soloed_ && !channels_[ch].soloed.load()) continue;
 
-        float vol = channels_[ch].volume.load();
-        if (vol < 0.0001f) continue;
+        bool is_muted  = channels_[ch].muted.load();
+        bool is_silent = any_soloed_ && !channels_[ch].soloed.load();
+        float vol      = channels_[ch].volume.load();
 
-        // Per-channel buffer — heap allocated to actual callback size
+        // Per-channel buffer
         std::vector<float> ch_buf(frames_per_buffer * 2, 0.0f);
 
-        // Read frames — may span segment boundary
-        int frames_needed = (int)frames_per_buffer;
-        int buf_offset    = 0;
+        // Always read file data — even when muted or silenced by solo.
+        // This advances file_pos_s in lockstep with the playhead so that
+        // unmuting is perfectly in sync with no drift, no seek, no click.
+        {
+            int frames_needed = (int)frames_per_buffer;
+            int buf_offset    = 0;
 
-        while (frames_needed > 0) {
-            int cur_seg = channels_[ch].cur_segment;
+            while (frames_needed > 0) {
+                int cur_seg = channels_[ch].cur_segment;
+                if (cur_seg < 0 || cur_seg >= channels_[ch].n_segments) break;
 
-            if (cur_seg < 0 || cur_seg >= channels_[ch].n_segments) break;
+                const HijackerSegment& seg = channels_[ch].segments[cur_seg];
+                double seg_timeline_end = seg.timeline_pos_s + seg.duration_s;
 
-            const HijackerSegment& seg = channels_[ch].segments[cur_seg];
-            double seg_timeline_end = seg.timeline_pos_s + seg.duration_s;
+                if (playhead_s_ < seg.timeline_pos_s) break;
 
-            // If playhead is before this segment, fill silence
-            if (playhead_s_ < seg.timeline_pos_s) break;
-
-            // If playhead is past this segment's end, advance
-            if (playhead_s_ >= seg_timeline_end) {
-                int next_seg = cur_seg + 1;
-                if (next_seg < channels_[ch].n_segments) {
-                    _open_segment(ch, next_seg, 0.0);
-                } else {
-                    _close_channel_file(ch);
-                    channels_[ch].cur_segment = -1;
+                if (playhead_s_ >= seg_timeline_end) {
+                    int next_seg = cur_seg + 1;
+                    if (next_seg < channels_[ch].n_segments)
+                        _open_segment(ch, next_seg, 0.0);
+                    else {
+                        _close_channel_file(ch);
+                        channels_[ch].cur_segment = -1;
+                    }
+                    break;
                 }
-                break;
-            }
 
-            int got = _read_pcm_frames(ch, ch_buf.data() + buf_offset * 2,
-                                        frames_needed);
-            if (got == 0) {
-                int next_seg = cur_seg + 1;
-                if (next_seg < channels_[ch].n_segments) {
-                    _open_segment(ch, next_seg, 0.0);
-                } else {
-                    channels_[ch].cur_segment = -1;
+                int got = _read_pcm_frames(ch, ch_buf.data() + buf_offset * 2,
+                                            frames_needed);
+                if (got == 0) {
+                    int next_seg = cur_seg + 1;
+                    if (next_seg < channels_[ch].n_segments)
+                        _open_segment(ch, next_seg, 0.0);
+                    else
+                        channels_[ch].cur_segment = -1;
+                    break;
                 }
-                break;
+                buf_offset    += got;
+                frames_needed -= got;
             }
-            buf_offset    += got;
-            frames_needed -= got;
+        }
+
+        // Skip DSP and output mix for muted/silent/silent-by-solo channels
+        if (is_muted || is_silent || vol < 0.0001f) {
+            channels_[ch].meter_rms.store(0.0f);
+            channels_[ch].meter_peak.store(0.0f);
+            g_state.meter_levels[ch] = 0.0f;
+            continue;
+        }
+
+        // Apply fader volume PRE-DSP
+        if (fabsf(vol - 1.0f) > 0.0001f) {
+            for (int i = 0; i < (int)frames_per_buffer * 2; ++i)
+                ch_buf[i] *= vol;
         }
 
         // Apply DSP effect chain
         _process_channel_buffer(ch, ch_buf.data(), (int)frames_per_buffer, 2,
                                  (float)sample_rate_);
 
-        // Metering
+        // Metering — post-fader, post-DSP
         float rms_sum = 0.0f, peak = 0.0f;
         for (int i = 0; i < (int)frames_per_buffer * 2; ++i) {
             float s = ch_buf[i];
@@ -675,13 +646,10 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
         channels_[ch].meter_peak.store(peak);
         g_state.meter_levels[ch] = rms;
 
-        // Apply pan — constant power law
-        // pan=0.5 → centre (gain_l=gain_r=1.0)
-        // pan=0.0 → full left (gain_r=0)
-        // pan=1.0 → full right (gain_l=0)
+        // Apply pan
         float pan_val = channels_[ch].pan.load();
         if (fabsf(pan_val - 0.5f) > 0.01f) {
-            float angle  = pan_val * 1.5707963f;  // pan * (pi/2)
+            float angle  = pan_val * 1.5707963f;
             float gain_l = cosf(angle);
             float gain_r = sinf(angle);
             for (int i = 0; i < (int)frames_per_buffer; ++i) {
@@ -692,7 +660,7 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
 
         // Mix into output
         for (int i = 0; i < (int)frames_per_buffer * 2; ++i)
-            out[i] += ch_buf[i] * vol;
+            out[i] += ch_buf[i];
     }
 
     // Soft limiter on final output — only activates above 0.95 to catch

@@ -34,6 +34,7 @@ _led_states      = {}   # rack_idx -> bool
 _popup_open     = False
 _popup_x        = 0.0
 _popup_y        = 0.0
+_popup_group_idx = 0   # which fader group the Add Rack popup belongs to
 
 # Reorder dropdown state
 _reorder_open     = False   # whether the reorder dropdown is open
@@ -374,6 +375,10 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     enabled:          bpy.props.BoolProperty(default=True)
     collapsed:        bpy.props.BoolProperty(default=False)
     preset_idx:       bpy.props.IntProperty(default=0)
+    # Which group of 9 faders this rack belongs to.
+    # group 0 = VSE channels 1-9, group 1 = 10-18, group 2 = 19-27, etc.
+    # Defaults to 0 so all existing racks survive migration unchanged.
+    group_idx:        bpy.props.IntProperty(default=0)
     # Mixdown rack output path — stored as file path string
     mixdown_output_path: bpy.props.StringProperty(default="", subtype='FILE_PATH')
     # 32 channel assignment booleans (matches MAX_CHANNELS in Loader.py)
@@ -573,8 +578,13 @@ def _rp(rack, idx, default=0.0):
 
 
 def get_rack_channels(rack):
-    """Return list of assigned channel indices (0-based) for a rack."""
-    return [i for i in range(32) if getattr(rack, f'ch{i}', False)]
+    """Return absolute VSE channel indices (0-based) assigned to this rack.
+
+    ch0–ch8 are LOCAL within the rack's group of 9.
+    Absolute = rack.group_idx * 9 + local.
+    """
+    offset = getattr(rack, 'group_idx', 0) * 9
+    return [offset + i for i in range(9) if getattr(rack, f'ch{i}', False)]
 
 
 def get_ai_rack_channels(rack):
@@ -1051,39 +1061,25 @@ def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
 
 
 def _draw_channel_buttons(rx, ry, rack, scale):
-    """Draw channel assignment buttons — one per active VSE channel.
-    Channels are laid out in rows of 3, only showing channels that
-    actually have strips in the VSE sequence editor.
+    """Draw channel assignment buttons — always exactly 9, local to the rack's group.
+
+    ch0–ch8 are LOCAL indices. Label shows absolute VSE channel number.
     """
-    btn_s = CH_BTN_SIZE * scale
-    gap   = 4 * scale
-    fs    = max(1, int(10*scale))
-
-    # Show DEFAULT_CHANNELS minimum buttons, expand if higher channels exist
-    try:
-        from Loader import DEFAULT_CHANNELS
-    except Exception:
-        DEFAULT_CHANNELS = 9
-
-    scene   = bpy.context.scene
-    highest = 0
-    if scene and scene.sequence_editor:
-        for s in scene.sequence_editor.sequences_all:
-            if s.type == "SOUND" and s.sound:
-                highest = max(highest, s.channel - 1)
-
-    num_buttons = max(DEFAULT_CHANNELS, highest + 1)
-    active      = list(range(num_buttons))
+    btn_s     = CH_BTN_SIZE * scale
+    gap       = 4 * scale
+    fs        = max(1, int(10*scale))
+    group_idx = getattr(rack, 'group_idx', 0)
+    offset    = group_idx * 9
 
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    for col_idx, ch_idx in enumerate(active):
-        row = col_idx // 3
-        col = col_idx % 3
+    for local_idx in range(9):
+        row = local_idx // 3
+        col = local_idx % 3
         bx  = rx + col * (btn_s + gap)
         by  = ry - row * (btn_s + gap) - btn_s
 
-        attr     = f'ch{ch_idx}' if ch_idx < 9 else None
-        assigned = getattr(rack, attr, False) if attr else False
+        attr     = f'ch{local_idx}'
+        assigned = getattr(rack, attr, False)
 
         if assigned:
             bg = (0.0, 0.18, 0.10, 1.0)
@@ -1099,7 +1095,7 @@ def _draw_channel_buttons(rx, ry, rack, scale):
         batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
         shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
 
-        label = str(ch_idx + 1)
+        label = str(offset + local_idx + 1)
         tw    = _text_width(label, fs)
         _draw_text(label, bx + btn_s/2 - tw/2,
                    by + btn_s/2 - fs/2, fs, tc)
@@ -3361,86 +3357,94 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     scene = bpy.context.scene
     if not scene: return
 
-    racks = getattr(scene, "pb_racks", [])
+    all_racks = getattr(scene, "pb_racks", [])
 
-    # Calculate Y position: below the fader+numbox section
-    # base_y in Loader = height - 150*scale - scroll_y
-    # fader bottom = base_y - FADER_TRACK_BOTTOM*scale
-    # numbox bottom = fader_bottom - numbox_h - margin
+    # Calculate base Y position — same anchor as before
     from Loader import FADER_TRACK_BOTTOM, NUMBOX_H, NUMBOX_Y_OFFSET
-    base_y       = region_height - 150*ui_scale - scroll_y
-    # fader bottom moves down by send section height
-    try:
-        from Loader import _send_section_height, SEND_MIN_SLOTS
-        n_racks_s = len(getattr(scene, "pb_racks", []))
-        send_h    = _send_section_height(n_racks_s, ui_scale)
-    except Exception:
-        send_h = 0.0
-    fader_bot_y  = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
-    rack_top_y   = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
+    base_y = region_height - 150*ui_scale - scroll_y
 
-    # Draw racks from top downward
-    cur_y = rack_top_y
-    rack_x = 30*ui_scale + scroll_x
+    # Number of fader groups — always in multiples of 9
+    num_tracks = len(getattr(scene, "pb_sync_tracks", []))
+    num_groups = max(1, (num_tracks + 8) // 9)
 
-    # Dynamic rack width — matches however many faders are currently shown
-    # Each fader is 120px wide with 135px stride, starting at 30px
-    scene2       = bpy.context.scene
-    num_tracks   = len(getattr(scene2, "pb_sync_tracks", [])) if scene2 else 9
-    num_tracks   = max(9, num_tracks)
-    dynamic_rack_w = num_tracks * 135 - 15  # = right edge of last fader - left margin
+    # Each group is 9 strips wide: 9 × 135 - 15 = 1200px unscaled
+    GROUP_STRIP_COUNT = 9
+    group_w_unscaled  = GROUP_STRIP_COUNT * 135 - 15   # 1200px
+    group_w           = group_w_unscaled * ui_scale
+    # Gap between groups (matches the strip stride gap: 135-120=15px)
+    group_gap         = 15 * ui_scale
 
-    for i, rack in enumerate(racks):
-        if rack.collapsed:
-            rh = RACK_COLLAPSED_H * ui_scale
-        elif rack.effect_type == "COMP_MULTI":
-            rh = RACK_EXPANDED_H_MB * ui_scale
-        elif rack.effect_type == "EQ":
-            rh = RACK_EXPANDED_H_EQ * ui_scale
-        elif rack.effect_type == "REVERB":
-            rh = RACK_EXPANDED_H_RV * ui_scale
-        elif rack.effect_type == "NOISE_GATE":
-            rh = RACK_EXPANDED_H_NG * ui_scale
-        elif rack.effect_type == "DELAY":
-            rh = RACK_EXPANDED_H_DL * ui_scale
-        elif rack.effect_type == "BOOSTER":
-            rh = RACK_EXPANDED_H_DL * ui_scale
-        elif rack.effect_type == "MIXDOWN":
-            rh = RACK_EXPANDED_H_MX * ui_scale
-        else:
-            rh = RACK_EXPANDED_H * ui_scale
+    for g in range(num_groups):
+        # X position of this group's rack section
+        rack_x = (30 + g * (group_w_unscaled + 15)) * ui_scale + scroll_x
 
-        # Cull if completely off screen vertically
-        if cur_y - rh > region_height or cur_y < -rh:
-            cur_y -= rh + RACK_GAP*ui_scale
-            continue
+        # Racks belonging to this group
+        group_racks = [(i, r) for i, r in enumerate(all_racks)
+                       if getattr(r, 'group_idx', 0) == g]
 
+        # send_h for this group's racks
         try:
+            from Loader import _send_section_height
+            send_h = _send_section_height(len(group_racks), ui_scale)
+        except Exception:
+            send_h = 0.0
+
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
+
+        cur_y = rack_top_y
+
+        for i, rack in group_racks:
             if rack.collapsed:
-                _draw_rack_collapsed(rack_x, cur_y - rh, rack, i,
-                                     ui_scale, dynamic_rack_w)
+                rh = RACK_COLLAPSED_H * ui_scale
+            elif rack.effect_type == "COMP_MULTI":
+                rh = RACK_EXPANDED_H_MB * ui_scale
+            elif rack.effect_type == "EQ":
+                rh = RACK_EXPANDED_H_EQ * ui_scale
+            elif rack.effect_type == "REVERB":
+                rh = RACK_EXPANDED_H_RV * ui_scale
+            elif rack.effect_type == "NOISE_GATE":
+                rh = RACK_EXPANDED_H_NG * ui_scale
+            elif rack.effect_type == "DELAY":
+                rh = RACK_EXPANDED_H_DL * ui_scale
+            elif rack.effect_type == "BOOSTER":
+                rh = RACK_EXPANDED_H_DL * ui_scale
+            elif rack.effect_type == "MIXDOWN":
+                rh = RACK_EXPANDED_H_MX * ui_scale
             else:
-                _draw_rack_expanded(rack_x, cur_y - rh, rack, i,
-                                    ui_scale, dynamic_rack_w)
+                rh = RACK_EXPANDED_H * ui_scale
+
+            # Cull if completely off screen vertically
+            if cur_y - rh > region_height or cur_y < -rh:
+                cur_y -= rh + RACK_GAP*ui_scale
+                continue
+
+            try:
+                if rack.collapsed:
+                    _draw_rack_collapsed(rack_x, cur_y - rh, rack, i,
+                                         ui_scale, group_w_unscaled)
+                else:
+                    _draw_rack_expanded(rack_x, cur_y - rh, rack, i,
+                                        ui_scale, group_w_unscaled)
+            except Exception as e:
+                import traceback
+                print(f"[RACKS] draw error rack {i}: {e}")
+                traceback.print_exc()
+
+            cur_y -= rh + RACK_GAP*ui_scale
+
+        # Add rack button for this group
+        _draw_add_rack_button(rack_x, cur_y - 28*ui_scale, ui_scale,
+                              group_w_unscaled)
+
+        # AI processing section — drawn below DSP racks for this group
+        ai_section_top_y = cur_y - 28*ui_scale
+        try:
+            draw_ai_racks(rack_x, ai_section_top_y, ui_scale, group_w_unscaled)
         except Exception as e:
-            import traceback
-            print(f"[RACKS] draw error rack {i}: {e}")
-            traceback.print_exc()
+            print(f"[AI RACKS] draw error: {e}")
 
-        cur_y -= rh + RACK_GAP*ui_scale
-
-    # Add rack button
-    _draw_add_rack_button(rack_x, cur_y - 28*ui_scale, ui_scale,
-                          dynamic_rack_w)
-
-    # AI processing section — drawn below DSP racks
-    ai_section_top_y = cur_y - 28*ui_scale  # sits at top of add-rack button
-    try:
-        draw_ai_racks(rack_x, ai_section_top_y, ui_scale, dynamic_rack_w)
-    except Exception as e:
-        print(f"[AI RACKS] draw error: {e}")
-
-    # Popup (drawn on top of everything)
+    # Popup (drawn on top of everything — not group-specific)
     if _popup_open:
         _draw_add_popup(_popup_x, _popup_y, ui_scale)
 
@@ -3762,7 +3766,6 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     racks = getattr(scene, "pb_racks", [])
 
     # Reorder dropdown check — must happen before everything else
-    # since the dropdown floats on top
     if _reorder_open and _reorder_rack_idx >= 0 and len(racks) > 1:
         row_h = 22 * ui_scale
         pad   = 6  * ui_scale
@@ -3781,353 +3784,359 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         else:
             return {'zone': 'reorder_dismiss'}
 
-    base_y       = region_height - 150*ui_scale - scroll_y
-    try:
-        from Loader import _send_section_height
-        n_racks_s2 = len(getattr(scene, "pb_racks", [])) if scene else 0
-        send_h2    = _send_section_height(n_racks_s2, ui_scale)
-    except Exception:
-        send_h2 = 0.0
-    fader_bot_y  = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h2
-    rack_top_y   = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
-
-    cur_y  = rack_top_y
-    rack_x = 30*ui_scale + scroll_x
-    # Dynamic width — same calculation as draw_racks
-    scene3     = bpy.context.scene
-    nt         = len(getattr(scene3, "pb_sync_tracks", [])) if scene3 else 9
-    nt         = max(9, nt)
-    rw         = (nt * 135 - 15) * ui_scale
-
-    # Check popup first (drawn on top)
+    # Check popup first (drawn on top — not group-specific)
     if _popup_open:
         pw  = 200*ui_scale
         ph  = (len(EFFECT_TYPES)*28 + 10)*ui_scale + 24*ui_scale
         if _popup_x <= rx <= _popup_x+pw and _popup_y <= ry <= _popup_y+ph:
-            # Which effect was clicked? Mirror draw calculation
             title_h = 24*ui_scale
-            for i, (etype, _) in enumerate(EFFECT_TYPES):
-                by = _popup_y + ph - title_h - (i+1)*28*ui_scale - 4*ui_scale
+            for idx, (etype, _) in enumerate(EFFECT_TYPES):
+                by = _popup_y + ph - title_h - (idx+1)*28*ui_scale - 4*ui_scale
                 bh = 24*ui_scale
                 if by <= ry <= by+bh:
-                    return {'zone': 'popup_effect', 'effect_type': etype}
+                    return {'zone': 'popup_effect', 'effect_type': etype,
+                            'group_idx': _popup_group_idx}
             return {'zone': 'popup_dismiss'}
         else:
             return {'zone': 'popup_dismiss'}
 
-    for i, rack in enumerate(racks):
-        if rack.collapsed:
-            rh = RACK_COLLAPSED_H * ui_scale
-        elif rack.effect_type == "COMP_MULTI":
-            rh = RACK_EXPANDED_H_MB * ui_scale
-        elif rack.effect_type == "EQ":
-            rh = RACK_EXPANDED_H_EQ * ui_scale
-        elif rack.effect_type == "REVERB":
-            rh = RACK_EXPANDED_H_RV * ui_scale
-        elif rack.effect_type == "NOISE_GATE":
-            rh = RACK_EXPANDED_H_NG * ui_scale
-        elif rack.effect_type == "DELAY":
-            rh = RACK_EXPANDED_H_DL * ui_scale
-        elif rack.effect_type == "BOOSTER":
-            rh = RACK_EXPANDED_H_DL * ui_scale
-        elif rack.effect_type == "MIXDOWN":
-            rh = RACK_EXPANDED_H_MX * ui_scale
-        else:
-            rh = RACK_EXPANDED_H * ui_scale
+    base_y = region_height - 150*ui_scale - scroll_y
 
-        rack_y = cur_y - rh
+    # Group geometry constants
+    GROUP_STRIP_COUNT = 9
+    group_w_unscaled  = GROUP_STRIP_COUNT * 135 - 15   # 1200px
+    group_w           = group_w_unscaled * ui_scale
 
-        if rack_x <= rx <= rack_x+rw and rack_y <= ry <= rack_y+rh:
-            # Hit in this rack — determine zone
-            rail_top = rack_y + rh - RACK_RAIL_H*ui_scale
+    num_tracks = len(getattr(scene, "pb_sync_tracks", []))
+    num_groups = max(1, (num_tracks + 8) // 9)
 
-            # Collapse button — dedicated 24px button at far left of rail
-            col_btn_x2 = rack_x + 4*ui_scale
-            col_btn_y2 = rack_y + rh - 28*ui_scale
-            col_btn_w2 = 24*ui_scale
-            col_btn_h2 = 20*ui_scale
-            if (col_btn_x2 <= rx <= col_btn_x2 + col_btn_w2 and
-                    col_btn_y2 <= ry <= col_btn_y2 + col_btn_h2):
-                return {'zone': 'collapse', 'rack_idx': i}
+    for g in range(num_groups):
+        rack_x = (30 + g * (group_w_unscaled + 15)) * ui_scale + scroll_x
+        rw     = group_w
 
-            # Delete button
-            del_x = rack_x + rw - 26*ui_scale
-            del_y = rack_y + rh - 27*ui_scale
-            if del_x <= rx <= del_x+18*ui_scale and del_y <= ry <= del_y+16*ui_scale:
-                return {'zone': 'delete_rack', 'rack_idx': i}
+        # Skip this group if click is outside its X range
+        if not (rack_x <= rx <= rack_x + rw):
+            continue
 
-            # Rack number badge — starts after collapse button
-            badge_x2 = rack_x + 4*ui_scale + 24*ui_scale + 4*ui_scale
-            badge_y2 = rack_y + rh - 28*ui_scale
-            badge_w2 = 38*ui_scale
-            badge_h2 = 20*ui_scale
-            if (badge_x2 <= rx <= badge_x2 + badge_w2 and
-                    badge_y2 <= ry <= badge_y2 + badge_h2):
-                return {'zone': 'rack_badge', 'rack_idx': i,
-                        'bx': badge_x2, 'by': badge_y2+badge_h2}
+        # Group racks
+        group_racks = [(i, r) for i, r in enumerate(racks)
+                       if getattr(r, 'group_idx', 0) == g]
 
-            # ON/OFF button (expanded: shifted left of delete)
-            on_x = rack_x + rw - 68*ui_scale
-            on_y = rack_y + rh - 27*ui_scale
-            if on_x <= rx <= on_x+40*ui_scale and on_y <= ry <= on_y+16*ui_scale:
-                return {'zone': 'on_off', 'rack_idx': i}
+        try:
+            from Loader import _send_section_height
+            send_h = _send_section_height(len(group_racks), ui_scale)
+        except Exception:
+            send_h = 0.0
 
-            # Delete button (collapsed)
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
+        cur_y       = rack_top_y
+
+        for i, rack in group_racks:
             if rack.collapsed:
-                cdel_x = rack_x + rw - 28*ui_scale
-                cdel_y = rack_y + rh/2 - 7*ui_scale
-                if cdel_x <= rx <= cdel_x+18*ui_scale and cdel_y <= ry <= cdel_y+14*ui_scale:
-                    return {'zone': 'delete_rack', 'rack_idx': i}
+                rh = RACK_COLLAPSED_H * ui_scale
+            elif rack.effect_type == "COMP_MULTI":
+                rh = RACK_EXPANDED_H_MB * ui_scale
+            elif rack.effect_type == "EQ":
+                rh = RACK_EXPANDED_H_EQ * ui_scale
+            elif rack.effect_type == "REVERB":
+                rh = RACK_EXPANDED_H_RV * ui_scale
+            elif rack.effect_type == "NOISE_GATE":
+                rh = RACK_EXPANDED_H_NG * ui_scale
+            elif rack.effect_type == "DELAY":
+                rh = RACK_EXPANDED_H_DL * ui_scale
+            elif rack.effect_type == "BOOSTER":
+                rh = RACK_EXPANDED_H_DL * ui_scale
+            elif rack.effect_type == "MIXDOWN":
+                rh = RACK_EXPANDED_H_MX * ui_scale
+            else:
+                rh = RACK_EXPANDED_H * ui_scale
 
-            # Preset arrows
-            p_box_x = rack_x + 280*ui_scale
-            p_box_w = 160*ui_scale
-            if rack_y+rh-30*ui_scale <= ry <= rack_y+rh-12*ui_scale:
-                if p_box_x-18*ui_scale <= rx <= p_box_x:
-                    return {'zone': 'preset_left', 'rack_idx': i}
-                if p_box_x+p_box_w <= rx <= p_box_x+p_box_w+18*ui_scale:
-                    return {'zone': 'preset_right', 'rack_idx': i}
+            rack_y = cur_y - rh
 
-            # Channel buttons (expanded only)
-            if not rack.collapsed:
-                ch_right_x = rack_x + rw - 100*ui_scale
-                ch_top_y   = rack_y + rh - RACK_RAIL_H*ui_scale - 20*ui_scale
-                btn_s      = CH_BTN_SIZE * ui_scale
-                btn_gap    = 4*ui_scale
-                # Use active channels only — same layout as _draw_channel_buttons
-                try:
-                    from Loader import DEFAULT_CHANNELS as _DC
-                except Exception:
-                    _DC = 9
-                scene2  = bpy.context.scene
-                highest2 = 0
-                if scene2 and scene2.sequence_editor:
-                    for _s in scene2.sequence_editor.sequences_all:
-                        if _s.type == "SOUND" and _s.sound:
-                            highest2 = max(highest2, _s.channel - 1)
-                active_chs = list(range(max(_DC, highest2 + 1)))
-                for col_idx, ch_idx in enumerate(active_chs):
-                    row = col_idx // 3
-                    col = col_idx % 3
-                    bx  = ch_right_x + col*(btn_s+btn_gap)
-                    by  = ch_top_y - row*(btn_s+btn_gap) - btn_s
-                    if bx <= rx <= bx+btn_s and by <= ry <= by+btn_s:
-                        return {'zone': 'channel_btn',
-                                'rack_idx': i, 'ch_idx': ch_idx}
+            if rack_x <= rx <= rack_x+rw and rack_y <= ry <= rack_y+rh:
+                # Hit in this rack — determine zone (all existing zone logic unchanged)
+                rail_top = rack_y + rh - RACK_RAIL_H*ui_scale
 
-            # Collapsed channel buttons
-            if rack.collapsed:
-                assigned = get_rack_channels(rack)
-                btn_x    = rack_x + 250*ui_scale
-                btn_y    = rack_y + rh/2 - 8*ui_scale
-                btn_w    = 20*ui_scale
-                btn_h    = 16*ui_scale
-                btn_gap  = 4*ui_scale
-                for j, ch_idx in enumerate(assigned):
-                    bx = btn_x + j*(btn_w+btn_gap)
-                    if bx <= rx <= bx+btn_w and btn_y <= ry <= btn_y+btn_h:
-                        return {'zone': 'channel_btn',
-                                'rack_idx': i, 'ch_idx': ch_idx}
+                # Collapse button
+                col_btn_x2 = rack_x + 4*ui_scale
+                col_btn_y2 = rack_y + rh - 28*ui_scale
+                col_btn_w2 = 24*ui_scale
+                col_btn_h2 = 20*ui_scale
+                if (col_btn_x2 <= rx <= col_btn_x2 + col_btn_w2 and
+                        col_btn_y2 <= ry <= col_btn_y2 + col_btn_h2):
+                    return {'zone': 'collapse', 'rack_idx': i}
 
-            # BOOSTER rack — APPLY, LIMITER, presets, channel stepper
-            if not rack.collapsed and rack.effect_type == "BOOSTER":
-                body_h_bo   = rh - RACK_RAIL_H * ui_scale
-                left_w_bo   = rw * 0.25
-                centre_w_bo = rw * 0.50
-                centre_x_bo = rack_x + left_w_bo
+                # Delegate full zone detection to the existing helper
+                # by re-using the existing code path below
+                # We set rack_x/rw/cur_y and fall through to the zone block
+                return _hit_test_rack_zones(
+                    rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, g)
 
-                # Bar geometry — mirrors _draw_booster_body
-                bar_pad_bo  = 8 * ui_scale
-                bar_x_bo    = centre_x_bo + bar_pad_bo
-                bar_w_bo    = centre_w_bo - bar_pad_bo * 2
+            cur_y -= rh + RACK_GAP*ui_scale
 
-                # Apply / Limiter buttons at bottom of centre column
-                ctrl_h_bo   = min(body_h_bo * 0.26, 26 * ui_scale)
-                apply_y_bo  = rack_y + 4 * ui_scale
-                lim_w_bo    = 88 * ui_scale
-                apply_w_bo  = bar_w_bo - lim_w_bo - 6 * ui_scale
-                apply_x_bo  = bar_x_bo
-                lim_x_bo    = apply_x_bo + apply_w_bo + 6 * ui_scale
-
-                if (apply_x_bo <= rx <= apply_x_bo + apply_w_bo and
-                        apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
-                    return {'zone': 'booster_apply', 'rack_idx': i}
-
-                if (lim_x_bo <= rx <= lim_x_bo + lim_w_bo and
-                        apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
-                    return {'zone': 'booster_limiter', 'rack_idx': i}
-
-                # Preset buttons — between apply row and separator (~68% body height)
-                grid_bot_bo = apply_y_bo + ctrl_h_bo + 4 * ui_scale
-                grid_top_bo = rack_y + body_h_bo * 0.68
-                grid_h_bo   = grid_top_bo - grid_bot_bo
-                cols_bo, rows_bo = 3, 2
-                btn_w_bo = (bar_w_bo - (cols_bo-1)*3*ui_scale) / cols_bo
-                btn_h_bo = max(ui_scale, (grid_h_bo - (rows_bo-1)*3*ui_scale) / rows_bo)
-                presets_bo = [6/40, 12/40, 18/40, 24/40, 30/40, 1.0]
-                for pi, norm in enumerate(presets_bo):
-                    col_i = pi % cols_bo
-                    row_i = pi // cols_bo
-                    bx    = bar_x_bo + col_i * (btn_w_bo + 3*ui_scale)
-                    by    = grid_bot_bo + row_i * (btn_h_bo + 3*ui_scale)
-                    if bx <= rx <= bx + btn_w_bo and by <= ry <= by + btn_h_bo:
-                        return {'zone': 'booster_preset', 'rack_idx': i,
-                                'boost_norm': norm}
-
-                # Channel stepper — right column, just above apply button
-                right_x_bo  = rack_x + left_w_bo + centre_w_bo
-                rpad_bo     = 6 * ui_scale
-                rx2_bo      = right_x_bo + rpad_bo
-                rw2_bo      = left_w_bo - rpad_bo * 2
-                stepper_h   = 18 * ui_scale
-                stepper_y   = apply_y_bo + ctrl_h_bo + 6 * ui_scale
-
-                if (rx2_bo <= rx <= rx2_bo + rw2_bo and
-                        stepper_y <= ry <= stepper_y + stepper_h):
-                    third = rw2_bo / 3.0
-                    if rx <= rx2_bo + third:
-                        return {'zone': 'booster_ch_minus', 'rack_idx': i}
-                    elif rx >= rx2_bo + rw2_bo - third:
-                        return {'zone': 'booster_ch_plus', 'rack_idx': i}
-
-            if not rack.collapsed and rack.effect_type == "MIXDOWN":
-                # Hit zones mirror the 4-column layout in rack_mixdown.py.
-                # Col A: 0..160px  — render mode buttons
-                # Col B: 160px..C_X — settings, path, toggles, import, render btn
-                # Col C: C_X..D_X  — stats (read-only, no hits needed)
-                # Col D: D_X..rw   — channel buttons (handled by rack_base)
-                s         = ui_scale
-                pad_mx    = 10 * s
-                CH_W      = 100 * s
-                C_W       = 200 * s
-                A_W       = 160 * s
-                A_X       = rack_x
-                B_X       = rack_x + A_W
-                C_X_abs   = rack_x + rw - CH_W - C_W
-                a_xi      = A_X + pad_mx;  a_wi = A_W - 2*pad_mx
-                b_xi      = B_X + pad_mx;  b_wi = C_X_abs - B_X - 2*pad_mx
-                body_top  = rack_y + rh - RACK_RAIL_H * s
-                tog_h     = 20 * s
-                row_h     = 20 * s
-                btn_h2    = 26 * s
-
-                # ── Col A: render mode buttons ─────────────────────────
-                # Two stacked buttons, each 24px tall, starting 17px from top
-                mode_btn_h = 24 * s
-                mix_y  = body_top - pad_mx - 17*s - mode_btn_h
-                bake_y = mix_y - mode_btn_h - 4*s
-                if a_xi <= rx <= a_xi + a_wi:
-                    if mix_y <= ry <= mix_y + mode_btn_h:
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p0', 'value': 0.0}
-                    if bake_y <= ry <= bake_y + mode_btn_h:
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p0', 'value': 1.0}
-
-                # ── Col B: replay b_nxt() arithmetic top-down ──────────
-                is_bake_ht = rack.p0 > 0.5
-                is_custom_ht = rack.p4 > 0.5
-                b_top = body_top - pad_mx
-
-                def bnxt(h):
-                    nonlocal b_top; b_top -= h; return b_top
-
-                # Output path + browse button
-                bnxt(4*s); bnxt(13*s)   # gap + label
-                path_h2   = 22*s; path_y2 = bnxt(path_h2 + 3*s)
-                browse_w2 = 60*s
-                path_bw2  = b_wi - browse_w2 - 4*s
-                br_x2     = b_xi + path_bw2 + 4*s
-
-                if path_y2 <= ry <= path_y2 + path_h2:
-                    if br_x2 <= rx <= br_x2 + browse_w2:
-                        return {'zone': 'mixdown_browse', 'rack_idx': i}
-                    # clicking anywhere else on path row also opens browse
-                    if b_xi <= rx <= b_xi + b_wi:
-                        return {'zone': 'mixdown_browse', 'rack_idx': i}
-
-                # Format / SR / BD row
-                bnxt(6*s); bnxt(13*s)
-                ty2 = bnxt(tog_h + 2*s)
-                col3_w2 = (b_wi - 2*4*s) / 3; col3_g2 = 4*s
-                if ty2 <= ry <= ty2 + tog_h:
-                    # Format (left third)
-                    if b_xi <= rx <= b_xi + col3_w2:
-                        mid = b_xi + col3_w2/2
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p1', 'value': 1.0 if rx >= mid else 0.0}
-                    # Sample rate (middle third)
-                    sr_x0 = b_xi + col3_w2 + col3_g2
-                    if sr_x0 <= rx <= sr_x0 + col3_w2:
-                        third = col3_w2 / 3
-                        rel   = rx - sr_x0
-                        val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p2', 'value': val}
-                    # Bit depth (right third)
-                    bd_x0 = b_xi + 2*(col3_w2 + col3_g2)
-                    if bd_x0 <= rx <= bd_x0 + col3_w2:
-                        third = col3_w2 / 3
-                        rel   = rx - bd_x0
-                        val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p3', 'value': val}
-
-                # Range toggle
-                bnxt(6*s); bnxt(13*s)
-                rng_y2 = bnxt(tog_h + 2*s)
-                if b_xi <= rx <= b_xi + b_wi and rng_y2 <= ry <= rng_y2 + tog_h:
-                    mid = b_xi + b_wi/2
-                    return {'zone': 'mixdown_set', 'rack_idx': i,
-                            'param': 'p4', 'value': 1.0 if rx >= mid else 0.0}
-                if is_custom_ht:
-                    bnxt(2*s); bnxt(20*s + 2*s)
-                else:
-                    bnxt(2*s); bnxt(8*s + 3*s)
-
-                # Import section
-                bnxt(6*s); bnxt(13*s)
-                if is_bake_ht:
-                    bnxt(2*s); opt0_y = bnxt(row_h)
-                    bnxt(2*s); opt1_y = bnxt(row_h)
-                    if b_xi <= rx <= b_xi + b_wi:
-                        if opt0_y <= ry <= opt0_y + row_h:
-                            return {'zone': 'mixdown_set', 'rack_idx': i,
-                                    'param': 'p7', 'value': 0.0}
-                        if opt1_y <= ry <= opt1_y + row_h:
-                            return {'zone': 'mixdown_set', 'rack_idx': i,
-                                    'param': 'p7', 'value': 1.0}
-                else:
-                    bnxt(2*s); src_y = bnxt(row_h)
-                    hw2 = b_wi/2 - 2*s
-                    src_x = b_xi + hw2 + 4*s
-                    if src_x <= rx <= src_x + hw2 and src_y <= ry <= src_y + row_h:
-                        cur_val = rack.p7
-                        nxt_val = (0.0 if cur_val > 0.75
-                                   else 0.5 if cur_val < 0.25 else 1.0)
-                        return {'zone': 'mixdown_set', 'rack_idx': i,
-                                'param': 'p7', 'value': nxt_val}
-
-                # Render button — bottom of col B
-                bnxt(3*s); bnxt(8*s + 3*s)   # version note
-                bnxt(6*s)
-                btn_y2 = bnxt(btn_h2 + 4*s)
-                if b_xi <= rx <= b_xi + b_wi and btn_y2 <= ry <= btn_y2 + btn_h2:
-                    return {'zone': 'mixdown_render', 'rack_idx': i}
-
-            return {'zone': 'rack_body', 'rack_idx': i}
-
-        cur_y -= rh + RACK_GAP*ui_scale
-
-    # Add rack button
-    add_y = cur_y - 28*ui_scale
-    if rack_x <= rx <= rack_x+rw and add_y <= ry <= add_y+28*ui_scale:
-        return {'zone': 'add_rack', 'click_x': rx, 'click_y': ry}
+        # Add rack button for this group
+        add_y = cur_y - 28*ui_scale
+        if add_y <= ry <= add_y + 28*ui_scale:
+            return {'zone': 'add_rack', 'click_x': rx, 'click_y': ry,
+                    'group_idx': g}
 
     # NOTE: AI rack section hits are NOT handled here.
-    # interaction.py calls hit_test_ai_racks() directly and routes the result
-    # to handle_ai_rack_click() — keeping AI and DSP click paths separate.
+    # interaction.py calls hit_test_ai_racks() directly.
     return None
+
+def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, group_idx=0):
+    """Determine the exact zone within a rack that was clicked.
+    Called from hit_test once a click is confirmed to be inside a rack's bounding box.
+    Returns a hit dict or {'zone': 'rack_body', 'rack_idx': i} as fallback.
+    """
+    rail_top = rack_y + rh - RACK_RAIL_H*ui_scale
+
+    # Collapse button — dedicated 24px button at far left of rail
+    col_btn_x2 = rack_x + 4*ui_scale
+    col_btn_y2 = rack_y + rh - 28*ui_scale
+    col_btn_w2 = 24*ui_scale
+    col_btn_h2 = 20*ui_scale
+    if (col_btn_x2 <= rx <= col_btn_x2 + col_btn_w2 and
+            col_btn_y2 <= ry <= col_btn_y2 + col_btn_h2):
+        return {'zone': 'collapse', 'rack_idx': i}
+
+    # Delete button
+    del_x = rack_x + rw - 26*ui_scale
+    del_y = rack_y + rh - 27*ui_scale
+    if del_x <= rx <= del_x+18*ui_scale and del_y <= ry <= del_y+16*ui_scale:
+        return {'zone': 'delete_rack', 'rack_idx': i}
+
+    # Rack number badge
+    badge_x2 = rack_x + 4*ui_scale + 24*ui_scale + 4*ui_scale
+    badge_y2 = rack_y + rh - 28*ui_scale
+    badge_w2 = 38*ui_scale
+    badge_h2 = 20*ui_scale
+    if (badge_x2 <= rx <= badge_x2 + badge_w2 and
+            badge_y2 <= ry <= badge_y2 + badge_h2):
+        return {'zone': 'rack_badge', 'rack_idx': i,
+                'bx': badge_x2, 'by': badge_y2+badge_h2}
+
+    # ON/OFF button
+    on_x = rack_x + rw - 68*ui_scale
+    on_y = rack_y + rh - 27*ui_scale
+    if on_x <= rx <= on_x+40*ui_scale and on_y <= ry <= on_y+16*ui_scale:
+        return {'zone': 'on_off', 'rack_idx': i}
+
+    # Delete button (collapsed)
+    if rack.collapsed:
+        cdel_x = rack_x + rw - 28*ui_scale
+        cdel_y = rack_y + rh/2 - 7*ui_scale
+        if cdel_x <= rx <= cdel_x+18*ui_scale and cdel_y <= ry <= cdel_y+14*ui_scale:
+            return {'zone': 'delete_rack', 'rack_idx': i}
+
+    # Preset arrows
+    p_box_x = rack_x + 280*ui_scale
+    p_box_w = 160*ui_scale
+    if rack_y+rh-30*ui_scale <= ry <= rack_y+rh-12*ui_scale:
+        if p_box_x-18*ui_scale <= rx <= p_box_x:
+            return {'zone': 'preset_left', 'rack_idx': i}
+        if p_box_x+p_box_w <= rx <= p_box_x+p_box_w+18*ui_scale:
+            return {'zone': 'preset_right', 'rack_idx': i}
+
+    # Channel buttons (expanded only) — ch0-ch8 are LOCAL to the group
+    if not rack.collapsed:
+        ch_right_x = rack_x + rw - 100*ui_scale
+        ch_top_y   = rack_y + rh - RACK_RAIL_H*ui_scale - 20*ui_scale
+        btn_s      = CH_BTN_SIZE * ui_scale
+        btn_gap    = 4*ui_scale
+        # Always exactly 9 buttons — local indices 0-8 for this group
+        for local_idx in range(9):
+            row = local_idx // 3
+            col = local_idx % 3
+            bx  = ch_right_x + col*(btn_s+btn_gap)
+            by  = ch_top_y - row*(btn_s+btn_gap) - btn_s
+            if bx <= rx <= bx+btn_s and by <= ry <= by+btn_s:
+                return {'zone': 'channel_btn',
+                        'rack_idx': i, 'ch_idx': local_idx,
+                        'group_idx': group_idx}
+
+    # Collapsed channel buttons
+    if rack.collapsed:
+        assigned = get_rack_channels(rack)
+        btn_x    = rack_x + 250*ui_scale
+        btn_y    = rack_y + rh/2 - 8*ui_scale
+        btn_w    = 20*ui_scale
+        btn_h    = 16*ui_scale
+        btn_gap  = 4*ui_scale
+        offset   = group_idx * 9
+        for j, abs_ch in enumerate(assigned):
+            bx = btn_x + j*(btn_w+btn_gap)
+            if bx <= rx <= bx+btn_w and btn_y <= ry <= btn_y+btn_h:
+                return {'zone': 'channel_btn',
+                        'rack_idx': i, 'ch_idx': abs_ch - offset,
+                        'group_idx': group_idx}
+
+    # BOOSTER rack hit zones
+    if not rack.collapsed and rack.effect_type == "BOOSTER":
+        body_h_bo   = rh - RACK_RAIL_H * ui_scale
+        left_w_bo   = rw * 0.25
+        centre_w_bo = rw * 0.50
+        centre_x_bo = rack_x + left_w_bo
+        bar_pad_bo  = 8 * ui_scale
+        bar_x_bo    = centre_x_bo + bar_pad_bo
+        bar_w_bo    = centre_w_bo - bar_pad_bo * 2
+        ctrl_h_bo   = min(body_h_bo * 0.26, 26 * ui_scale)
+        apply_y_bo  = rack_y + 4 * ui_scale
+        lim_w_bo    = 88 * ui_scale
+        apply_w_bo  = bar_w_bo - lim_w_bo - 6 * ui_scale
+        apply_x_bo  = bar_x_bo
+        lim_x_bo    = apply_x_bo + apply_w_bo + 6 * ui_scale
+
+        if (apply_x_bo <= rx <= apply_x_bo + apply_w_bo and
+                apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+            return {'zone': 'booster_apply', 'rack_idx': i}
+        if (lim_x_bo <= rx <= lim_x_bo + lim_w_bo and
+                apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+            return {'zone': 'booster_limiter', 'rack_idx': i}
+
+        grid_bot_bo = apply_y_bo + ctrl_h_bo + 4 * ui_scale
+        grid_top_bo = rack_y + body_h_bo * 0.68
+        grid_h_bo   = grid_top_bo - grid_bot_bo
+        cols_bo, rows_bo = 3, 2
+        btn_w_bo = (bar_w_bo - (cols_bo-1)*3*ui_scale) / cols_bo
+        btn_h_bo = max(ui_scale, (grid_h_bo - (rows_bo-1)*3*ui_scale) / rows_bo)
+        presets_bo = [6/40, 12/40, 18/40, 24/40, 30/40, 1.0]
+        for pi, norm in enumerate(presets_bo):
+            col_i = pi % cols_bo
+            row_i = pi // cols_bo
+            bx    = bar_x_bo + col_i * (btn_w_bo + 3*ui_scale)
+            by    = grid_bot_bo + row_i * (btn_h_bo + 3*ui_scale)
+            if bx <= rx <= bx + btn_w_bo and by <= ry <= by + btn_h_bo:
+                return {'zone': 'booster_preset', 'rack_idx': i,
+                        'boost_norm': norm}
+
+        right_x_bo  = rack_x + left_w_bo + centre_w_bo
+        rpad_bo     = 6 * ui_scale
+        rx2_bo      = right_x_bo + rpad_bo
+        rw2_bo      = left_w_bo - rpad_bo * 2
+        stepper_h   = 18 * ui_scale
+        stepper_y   = apply_y_bo + ctrl_h_bo + 6 * ui_scale
+        if (rx2_bo <= rx <= rx2_bo + rw2_bo and
+                stepper_y <= ry <= stepper_y + stepper_h):
+            third = rw2_bo / 3.0
+            if rx <= rx2_bo + third:
+                return {'zone': 'booster_ch_minus', 'rack_idx': i}
+            elif rx >= rx2_bo + rw2_bo - third:
+                return {'zone': 'booster_ch_plus', 'rack_idx': i}
+
+    # MIXDOWN rack hit zones
+    if not rack.collapsed and rack.effect_type == "MIXDOWN":
+        s         = ui_scale
+        pad_mx    = 10 * s
+        CH_W      = 100 * s
+        C_W       = 200 * s
+        A_W       = 160 * s
+        A_X       = rack_x
+        B_X       = rack_x + A_W
+        C_X_abs   = rack_x + rw - CH_W - C_W
+        a_xi      = A_X + pad_mx;  a_wi = A_W - 2*pad_mx
+        b_xi      = B_X + pad_mx;  b_wi = C_X_abs - B_X - 2*pad_mx
+        body_top  = rack_y + rh - RACK_RAIL_H * s
+        tog_h     = 20 * s
+        row_h     = 20 * s
+        btn_h2    = 26 * s
+
+        mode_btn_h = 24 * s
+        mix_y  = body_top - pad_mx - 17*s - mode_btn_h
+        bake_y = mix_y - mode_btn_h - 4*s
+        if a_xi <= rx <= a_xi + a_wi:
+            if mix_y <= ry <= mix_y + mode_btn_h:
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p0', 'value': 0.0}
+            if bake_y <= ry <= bake_y + mode_btn_h:
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p0', 'value': 1.0}
+
+        is_bake_ht   = rack.p0 > 0.5
+        is_custom_ht = rack.p4 > 0.5
+        b_top = body_top - pad_mx
+
+        def bnxt(h):
+            nonlocal b_top; b_top -= h; return b_top
+
+        bnxt(4*s); bnxt(13*s)
+        path_h2   = 22*s; path_y2 = bnxt(path_h2 + 3*s)
+        browse_w2 = 60*s
+        path_bw2  = b_wi - browse_w2 - 4*s
+        br_x2     = b_xi + path_bw2 + 4*s
+
+        if path_y2 <= ry <= path_y2 + path_h2:
+            if br_x2 <= rx <= br_x2 + browse_w2:
+                return {'zone': 'mixdown_browse', 'rack_idx': i}
+            if b_xi <= rx <= b_xi + b_wi:
+                return {'zone': 'mixdown_browse', 'rack_idx': i}
+
+        bnxt(6*s); bnxt(13*s)
+        ty2 = bnxt(tog_h + 2*s)
+        col3_w2 = (b_wi - 2*4*s) / 3; col3_g2 = 4*s
+        if ty2 <= ry <= ty2 + tog_h:
+            if b_xi <= rx <= b_xi + col3_w2:
+                mid = b_xi + col3_w2/2
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p1', 'value': 1.0 if rx >= mid else 0.0}
+            sr_x0 = b_xi + col3_w2 + col3_g2
+            if sr_x0 <= rx <= sr_x0 + col3_w2:
+                third = col3_w2 / 3
+                rel   = rx - sr_x0
+                val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p2', 'value': val}
+            bd_x0 = b_xi + 2*(col3_w2 + col3_g2)
+            if bd_x0 <= rx <= bd_x0 + col3_w2:
+                third = col3_w2 / 3
+                rel   = rx - bd_x0
+                val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p3', 'value': val}
+
+        bnxt(6*s); bnxt(13*s)
+        rng_y2 = bnxt(tog_h + 2*s)
+        if b_xi <= rx <= b_xi + b_wi and rng_y2 <= ry <= rng_y2 + tog_h:
+            mid = b_xi + b_wi/2
+            return {'zone': 'mixdown_set', 'rack_idx': i,
+                    'param': 'p4', 'value': 1.0 if rx >= mid else 0.0}
+        if is_custom_ht:
+            bnxt(2*s); bnxt(20*s + 2*s)
+        else:
+            bnxt(2*s); bnxt(8*s + 3*s)
+
+        bnxt(6*s); bnxt(13*s)
+        if is_bake_ht:
+            bnxt(2*s); opt0_y = bnxt(row_h)
+            bnxt(2*s); opt1_y = bnxt(row_h)
+            if b_xi <= rx <= b_xi + b_wi:
+                if opt0_y <= ry <= opt0_y + row_h:
+                    return {'zone': 'mixdown_set', 'rack_idx': i,
+                            'param': 'p7', 'value': 0.0}
+                if opt1_y <= ry <= opt1_y + row_h:
+                    return {'zone': 'mixdown_set', 'rack_idx': i,
+                            'param': 'p7', 'value': 1.0}
+        else:
+            bnxt(2*s); src_y = bnxt(row_h)
+            hw2 = b_wi/2 - 2*s
+            src_x = b_xi + hw2 + 4*s
+            if src_x <= rx <= src_x + hw2 and src_y <= ry <= src_y + row_h:
+                cur_val = rack.p7
+                nxt_val = (0.0 if cur_val > 0.75
+                           else 0.5 if cur_val < 0.25 else 1.0)
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p7', 'value': nxt_val}
+
+        bnxt(3*s); bnxt(8*s + 3*s)
+        bnxt(6*s)
+        btn_y2 = bnxt(btn_h2 + 4*s)
+        if b_xi <= rx <= b_xi + b_wi and btn_y2 <= ry <= btn_y2 + btn_h2:
+            return {'zone': 'mixdown_render', 'rack_idx': i}
+
+    return {'zone': 'rack_body', 'rack_idx': i}
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -4189,20 +4198,23 @@ def handle_click(hit, context):
     if zone == 'popup_effect':
         _popup_open = False
         etype = hit['effect_type']
+        g     = hit.get('group_idx', 0)
         rack  = context.scene.pb_racks.add()
         rack.effect_type = etype
         rack.collapsed   = False
+        rack.group_idx   = g
         init_rack_defaults(rack)
-        print(f"[RACKS] added {etype} rack")
+        print(f"[RACKS] added {etype} rack (group {g})")
         return True
 
     if zone == 'add_rack':
-        # Open popup — store click position and draw BELOW it
-        _popup_open = True
+        global _popup_group_idx
+        # Open popup — store click position and which group was clicked
+        _popup_open      = True
+        _popup_group_idx = hit.get('group_idx', 0)
         click_y = hit.get('click_y', 200.0)
         click_x = hit.get('click_x', 200.0)
         popup_h = (len(EFFECT_TYPES) * 28 + 10) * _UI_SCALE + 24 * _UI_SCALE
-        # Draw below the click point, centred horizontally on click
         _popup_x = click_x - 100*_UI_SCALE
         _popup_y = click_y - popup_h - 4*_UI_SCALE
         return True
@@ -4411,15 +4423,16 @@ def handle_click(hit, context):
         return True
 
     if zone == 'channel_btn':
-        i      = hit['rack_idx']
-        ch_idx = hit['ch_idx']
-        racks  = getattr(context.scene, "pb_racks", [])
+        i        = hit['rack_idx']
+        ch_idx   = hit['ch_idx']   # LOCAL index 0-8 within the group
+        racks    = getattr(context.scene, "pb_racks", [])
         if i < len(racks):
-            attr = f'ch{ch_idx}'
-            rack = racks[i]
+            attr  = f'ch{ch_idx}'
+            rack  = racks[i]
             setattr(rack, attr, not getattr(rack, attr, False))
             state = 'assigned' if getattr(rack, attr) else 'removed'
-            print(f"[RACKS] ch{ch_idx+1} {state} from rack {i} — reprocessing")
+            abs_ch = getattr(rack, 'group_idx', 0) * 9 + ch_idx
+            print(f"[RACKS] ch{abs_ch+1} {state} from rack {i} — reprocessing")
             _trigger_reprocess(i, rack, context)
         return True
 

@@ -328,39 +328,27 @@ def _draw_gr_meter_band(bx, by, bw, bh, gr_db, scale, signal_norm=0.0):
 
 
 def _draw_channel_buttons(rx, ry, rack, scale):
-    """Draw channel assignment buttons — one per active VSE channel.
-    Channels are laid out in rows of 3, only showing channels that
-    actually have strips in the VSE sequence editor.
+    """Draw channel assignment buttons — always exactly 9 per rack group.
+
+    ch0–ch8 are LOCAL indices within the rack's group.
+    The label shows the absolute VSE channel number (group_idx*9 + local + 1).
     """
     btn_s = CH_BTN_SIZE * scale
     gap   = 4 * scale
     fs    = max(1, int(10*scale))
 
-    # Show DEFAULT_CHANNELS minimum buttons, expand if higher channels exist
-    try:
-        from Loader import DEFAULT_CHANNELS
-    except Exception:
-        DEFAULT_CHANNELS = 9
-
-    scene   = bpy.context.scene
-    highest = 0
-    if scene and scene.sequence_editor:
-        for s in scene.sequence_editor.sequences_all:
-            if s.type == "SOUND" and s.sound:
-                highest = max(highest, s.channel - 1)
-
-    num_buttons = max(DEFAULT_CHANNELS, highest + 1)
-    active      = list(range(num_buttons))
+    group_idx = getattr(rack, 'group_idx', 0)
+    offset    = group_idx * 9   # absolute VSE channel offset
 
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    for col_idx, ch_idx in enumerate(active):
-        row = col_idx // 3
-        col = col_idx % 3
+    for local_idx in range(9):
+        row = local_idx // 3
+        col = local_idx % 3
         bx  = rx + col * (btn_s + gap)
         by  = ry - row * (btn_s + gap) - btn_s
 
-        attr     = f'ch{ch_idx}' if ch_idx < 9 else None
-        assigned = getattr(rack, attr, False) if attr else False
+        attr     = f'ch{local_idx}'
+        assigned = getattr(rack, attr, False)
 
         if assigned:
             bg = (0.0, 0.18, 0.10, 1.0)
@@ -376,7 +364,8 @@ def _draw_channel_buttons(rx, ry, rack, scale):
         batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
         shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
 
-        label = str(ch_idx + 1)
+        # Label shows absolute VSE channel number
+        label = str(offset + local_idx + 1)
         tw    = _text_width(label, fs)
         _draw_text(label, bx + btn_s/2 - tw/2,
                    by + btn_s/2 - fs/2, fs, tc)

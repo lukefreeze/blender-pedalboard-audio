@@ -1165,6 +1165,8 @@ def _hj_wire_effects(channel_idx, scene):
             params[:5] = [rack.p0, rack.p1, rack.p2, rack.p3, rack.p4]
             hj.set_effect_slot(channel_idx, slot_idx, engine.FX_DELAY_PARAM, params)
             slot_idx += 1
+        elif etype == "MIXDOWN":
+            pass   # no live DSP — renders offline via rack_mixdown._start_render
 
         if slot_idx >= 8:
             break
@@ -1183,6 +1185,11 @@ def _hj_load_all_channels(scene):
     if not hj: return
 
     if not scene or not scene.sequence_editor: return
+
+    # Clear ALL channels first — this ensures any channel whose strip was
+    # deleted from the VSE stops playing immediately rather than continuing
+    # with a stale playlist from a previous play-start.
+    hj.clear_all_channels()
 
     channels = set()
     for s in scene.sequence_editor.sequences_all:
