@@ -128,7 +128,10 @@ _active_jobs  = {}   # ai_idx -> Thread
 _cancel_flags = {}   # ai_idx -> bool
 
 _pending_finish = {}   # ai_idx -> info dict
-_piper_output_wave = {}  # ai_idx -> list[float] waveform for display
+_piper_output_wave    = {}  # ai_idx -> list[float] waveform for display
+_piper_output_path    = {}  # ai_idx -> str wav path (module-level fallback)
+_piper_preview_handle = {}  # ai_idx -> aud.Handle
+_piper_preview_settings = {}  # ai_idx -> dict of settings at last preview generate
 
 
 def is_processing(ai_idx):
@@ -140,17 +143,83 @@ def get_output_wave(ai_idx):
     return _piper_output_wave.get(ai_idx, [])
 
 
+def _get_preview_settings(rack):
+    """Return a dict of the settings that affect preview output."""
+    return {
+        'text': (getattr(rack, 'ai_text', '') or '').strip(),
+        'p0':   round(float(getattr(rack, 'p0', 0.5)), 4),
+        'p1':   round(float(getattr(rack, 'p1', 0.667)), 4),
+        'p2':   round(float(getattr(rack, 'p2', 0.8)), 4),
+        'p3':   round(float(getattr(rack, 'p3', 0.5)), 4),
+        'p4':   int(getattr(rack, 'p4', 0)),
+    }
+
+
+def preview_piper(ai_idx, context):
+    """Preview TTS without adding to VSE timeline.
+
+    - If currently previewing: stop playback.
+    - If settings unchanged and temp file exists: replay from beginning.
+    - If settings changed or no temp file: regenerate then auto-play.
+    """
+    import bpy as _bpy, tempfile as _tf
+    scene    = context.scene if context else _bpy.context.scene
+    ai_racks = getattr(scene, "pb_ai_racks", []) if scene else []
+    if ai_idx >= len(ai_racks):
+        return
+
+    rack = ai_racks[ai_idx]
+
+    # Stop any in-progress generation
+    if is_processing(ai_idx):
+        print(f"[PIPER] rack {ai_idx} still generating, please wait")
+        return
+
+    # Stop current playback if previewing
+    handle = _piper_preview_handle.get(ai_idx)
+    if handle is not None:
+        try:
+            handle.stop()
+        except Exception:
+            pass
+        _piper_preview_handle.pop(ai_idx, None)
+        rack.ai_status = "READY"
+        print(f"[PIPER] rack {ai_idx} preview stopped")
+        return
+
+    # Check if settings changed since last preview
+    current_settings = _get_preview_settings(rack)
+    last_settings    = _piper_preview_settings.get(ai_idx)
+    preview_wav      = os.path.join(_tf.gettempdir(),
+                                    f"pb_piper_preview_{ai_idx}.wav")
+    settings_changed = (last_settings != current_settings)
+    file_exists      = os.path.exists(preview_wav)
+
+    if not settings_changed and file_exists:
+        # Replay existing temp file — no regeneration needed
+        try:
+            from core.audio import play_oneshot
+            new_handle = play_oneshot(preview_wav)
+            _piper_preview_handle[ai_idx] = new_handle
+            rack.ai_status = "PREVIEWING"
+            print(f"[PIPER] rack {ai_idx} replaying preview (no changes)")
+        except Exception as e:
+            print(f"[PIPER] replay error: {e}")
+    else:
+        # Settings changed or no cached file — regenerate
+        print(f"[PIPER] rack {ai_idx} generating preview"
+              f"{'  (settings changed)' if settings_changed else ''}...")
+        _piper_preview_settings[ai_idx] = current_settings
+        generate_piper(ai_idx, context, preview_only=True)
+
+
 # ---------------------------------------------------------------------------
 # Main generate function
 # ---------------------------------------------------------------------------
-def generate_piper(ai_idx, context):
+def generate_piper(ai_idx, context, preview_only=False):
     """
     Generate speech for AI rack ai_idx in a background thread.
-    Reads rack.ai_text for the script.
-    p0 = speed norm (0-1 → length_scale 2.0-0.5)
-    p1 = noise_scale (0-1, default 0.667)
-    p2 = noise_w     (0-1, default 0.8)
-    p3 = volume norm (0-1 → -12..+12 dB post gain)
+    preview_only=True: write to separate temp file, auto-play, skip VSE placement.
     """
     if is_processing(ai_idx):
         print(f"[PIPER] rack {ai_idx} already processing")
@@ -208,7 +277,10 @@ def generate_piper(ai_idx, context):
 
     # ── Temp output path ──────────────────────────────────────────────────
     tmp_dir    = tempfile.gettempdir()
-    output_wav = os.path.join(tmp_dir, f"pb_piper_out_{ai_idx}.wav")
+    if preview_only:
+        output_wav = os.path.join(tmp_dir, f"pb_piper_preview_{ai_idx}.wav")
+    else:
+        output_wav = os.path.join(tmp_dir, f"pb_piper_out_{ai_idx}.wav")
 
     scene_name = scene.name
 
@@ -268,11 +340,13 @@ def generate_piper(ai_idx, context):
             # Build waveform for display
             wave_data = _wav_to_waveform(output_wav)
             _piper_output_wave[ai_idx] = wave_data
+            _piper_output_path[ai_idx] = output_wav
 
-            print(f"[PIPER] rack {ai_idx} DONE — {output_wav}")
+            print(f"[PIPER] rack {ai_idx} {'PREVIEW' if preview_only else 'DONE'} — {output_wav}")
             _finish(ai_idx, scene_name, "DONE",
                     output_wav=output_wav,
-                    target_ch_idx=target_ch_idx)
+                    target_ch_idx=target_ch_idx,
+                    preview_only=preview_only)
 
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -344,17 +418,54 @@ def _wav_to_waveform(wav_path, n_slots=80):
         return []
 
 
+def _register_preview_watchdog(ai_idx, scene_name):
+    """Register a timer that polls until the preview handle goes inactive,
+    then resets ai_status back to READY so the PREVIEW button is ready again."""
+    import bpy as _bpy
+
+    def _watchdog():
+        handle = _piper_preview_handle.get(ai_idx)
+        if handle is None:
+            return None  # already stopped manually
+        still_playing = False
+        try:
+            still_playing = bool(handle.status)
+        except Exception:
+            pass
+        if not still_playing:
+            # Playback finished naturally — clean up and reset status
+            _piper_preview_handle.pop(ai_idx, None)
+            try:
+                scene = _bpy.data.scenes.get(scene_name)
+                if scene:
+                    ai_racks = getattr(scene, "pb_ai_racks", [])
+                    if ai_idx < len(ai_racks):
+                        ai_racks[ai_idx].ai_status = "READY"
+                        print(f"[PIPER] rack {ai_idx} preview finished — ready")
+                for window in _bpy.context.window_manager.windows:
+                    for area in window.screen.areas:
+                        if area.type == 'NODE_EDITOR':
+                            area.tag_redraw()
+            except Exception:
+                pass
+            return None  # unregister timer
+        return 0.1  # check again in 100ms
+
+    _bpy.app.timers.register(_watchdog, first_interval=0.1)
+
+
 # ---------------------------------------------------------------------------
 # Finish / timer
 # ---------------------------------------------------------------------------
 def _finish(ai_idx, scene_name, status, output_wav=None,
-            target_ch_idx=None, error_msg=None):
+            target_ch_idx=None, error_msg=None, preview_only=False):
     _pending_finish[ai_idx] = {
-        'status':       status,
-        'output_wav':   output_wav,
+        'status':        status,
+        'output_wav':    output_wav,
         'target_ch_idx': target_ch_idx,
-        'error_msg':    error_msg,
-        'scene_name':   scene_name,
+        'error_msg':     error_msg,
+        'scene_name':    scene_name,
+        'preview_only':  preview_only,
     }
 
 
@@ -391,10 +502,28 @@ def _apply_finish(ai_idx, info):
         elif info['status'] == "DONE":
             output_wav    = info.get('output_wav')
             target_ch_idx = info.get('target_ch_idx')
+            preview_only  = info.get('preview_only', False)
             if output_wav:
-                rack.ai_output_path = output_wav
-                _place_output_in_vse(scene, ai_idx, output_wav,
-                                     target_ch_idx, rack)
+                if preview_only:
+                    # Play immediately, don't add to VSE
+                    # When playback ends the handle becomes inactive;
+                    # a watchdog timer resets status back to READY.
+                    rack.ai_status = "PREVIEWING"
+                    try:
+                        from core.audio import play_oneshot
+                        handle = play_oneshot(output_wav)
+                        _piper_preview_handle[ai_idx] = handle
+                        print(f"[PIPER] rack {ai_idx} auto-playing preview")
+                        # Register a watchdog to reset status when playback ends
+                        _register_preview_watchdog(ai_idx, scene.name)
+                    except Exception as e:
+                        print(f"[PIPER] auto-play failed: {e}")
+                        rack.ai_status = "READY"
+                else:
+                    rack.ai_output_path = output_wav
+                    _piper_output_path[ai_idx] = output_wav
+                    _place_output_in_vse(scene, ai_idx, output_wav,
+                                         target_ch_idx, rack)
 
     except Exception as e:
         print(f"[PIPER] _apply_finish error: {e}")

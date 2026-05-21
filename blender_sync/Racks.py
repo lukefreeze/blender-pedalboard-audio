@@ -107,13 +107,11 @@ EFFECT_TYPES = [
 
 # AI rack type identifiers — separate namespace from DSP racks
 AI_RACK_TYPES = [
-    ("DEEPFILTERNET", "DeepFilterNet — AI Noise Reduction"),
     ("PIPER_TTS",     "Piper TTS — Text to Speech"),
     ("RVC",           "Voice Conversion kNN-VC (Beta)"),
     ("RESEMBLE",      "VoiceFixer — Speech Restoration (Beta)"),
-    ("WHISPER",       "Whisper — Speech to Text"),
-    ("DEMUCS",        "Demucs — Source Separation"),
-    ("MATCHERING",    "Matchering — AI Mastering"),
+    ("WHISPER",       "Whisper — Speech to Text (Beta)"),
+    ("DEMUCS",        "Demucs — Source Separation (Beta)"),
 ]
 
 EFFECT_PARAMS = {
@@ -299,21 +297,7 @@ PRESET_DATA['BOOSTER'] = [
 # p0: 0=no attenuation, 1=max attenuation (-40dB limit)
 # p1: 0=always process, 1=only process silence gaps
 # p2: 0.5=0dB post gain, 0=−12dB, 1=+12dB
-AI_PRESET_DATA = {
-    'DEEPFILTERNET': [
-        # (name, [p0_atten, p1_sensitiv, p2_postgain_norm])
-        ('Dialogue Clean',    [0.60, 0.80, 0.50]),   # Voice recording, moderate noise removal
-        ('Heavy Denoise',     [0.90, 0.60, 0.50]),   # Heavy background noise, music/HVAC
-        ('Gentle Touch',      [0.30, 0.90, 0.50]),   # Slight hiss reduction, preserve character
-        ('Interview Audio',   [0.65, 0.75, 0.50]),   # Field interview, wind/traffic noise
-        ('Podcast Voice',     [0.55, 0.85, 0.52]),   # Studio podcast with room noise
-        ('Outdoor Recording', [0.80, 0.65, 0.50]),   # Wind, traffic, crowd reduction
-        ('Phone / Voip',      [0.75, 0.70, 0.54]),   # Codec artifacts, background chatter
-        ('Music Stems',       [0.40, 0.55, 0.50]),   # Stems with bleed — conservative
-        ('Max Denoise',       [1.00, 0.50, 0.50]),   # Aggressive — may affect voice quality
-        ('Bypass',            [0.00, 1.00, 0.50]),   # No processing — diagnostic use
-    ],
-}
+AI_PRESET_DATA = {}
 # Piper TTS presets are voice names — discovered at runtime from voices/ folder
 # These are fallback display names if the folder can't be scanned
 AI_PRESET_DATA['PIPER_TTS'] = [
@@ -452,7 +436,7 @@ class PB_RackSettings(bpy.types.PropertyGroup):
 # ---------------------------------------------------------------------------
 class PB_AIRackSettings(bpy.types.PropertyGroup):
     """Property group for a single AI rack instance."""
-    ai_type:   bpy.props.StringProperty(default="DEEPFILTERNET")
+    ai_type:   bpy.props.StringProperty(default="WHISPER")
     enabled:   bpy.props.BoolProperty(default=True)
     collapsed: bpy.props.BoolProperty(default=False)
     # Channel assignment — which channels feed into this AI rack
@@ -4570,11 +4554,9 @@ def _get_ai_rack_height(rack, scale):
     if rack.collapsed:
         return RACK_COLLAPSED_H * scale
     heights = {
-        "DEEPFILTERNET": 340,
         "WHISPER":       280,
         "DEMUCS":        300,
         "PIPER_TTS":     320,
-        "MATCHERING":    280,
         "RVC":           360,
         "RESEMBLE":      340,
     }
@@ -4938,14 +4920,7 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
         _draw_text(lbl_c, bx + ch_btn_s/2 - tw_c/2,
                    by + ch_btn_h/2 - fs_ci/2, fs_ci, bc)
 
-    if atype == "DEEPFILTERNET":
-        try:
-            from ui.racks.rack_deepfilternet import _draw_deepfilternet_body
-            _draw_deepfilternet_body(rx, ry, rw, rh, rack, ai_idx, scale)
-        except Exception as e:
-            print(f"[AI RACKS] draw error rack {ai_idx}: {e}")
-
-    elif atype == "PIPER_TTS":
+    if atype == "PIPER_TTS":
         try:
             from ui.racks.rack_piper import _draw_piper_body
             _draw_piper_body(rx, ry, rw, rh, rack, ai_idx, scale)
@@ -5237,48 +5212,77 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             _sp_x_p  = rack_x + _marg_p
             _sp_w_p  = (rack_x + rw * 0.52) - rack_x - _marg_p*2
 
-            # SCRIPT TEXT AREA click — activates text input
-            _ta_y_p = _uy_p + _fs_lbl_p2 + 6*scale if False else _uy_p
-            _fs_lbl_p2 = max(1, int(8*scale))
+            # SCRIPT TEXT AREA click
             _ta_top_p  = _uy_p + _uh_p
-            _ta_bot_p  = _uy_p + 28*scale   # above buttons
+            _ta_bot_p  = _uy_p + 28*scale
             if (_sp_x_p <= mouse_x <= _sp_x_p+_sp_w_p and
                     _ta_bot_p <= mouse_y <= _ta_top_p):
                 return {'zone': 'ai_piper_text', 'ai_idx': ai_idx}
 
+            # Button row geometry — mirrors rack_piper.py exactly
+            _gw_p  = min(80*scale, _sp_w_p*0.48)
+            _gh_p  = max(16*scale, 20*scale)
+            _gx_p  = _sp_x_p + 4*scale
+            _gy_p  = _uy_p + 4*scale
+
             # GENERATE button
-            _gw_p = min(80*scale, _sp_w_p*0.48)
-            _gh_p = max(16*scale, 20*scale)
-            _gx_p = _sp_x_p + 4*scale
-            _gy_p = _uy_p + 4*scale
             if _gx_p <= mouse_x <= _gx_p+_gw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
                 return {'zone': 'ai_process', 'ai_idx': ai_idx, 'ai_type': 'PIPER_TTS'}
 
-            # CLEAR button
-            _clw_p = min(45*scale, _sp_w_p*0.28)
-            _clx_p = _gx_p + _gw_p + 4*scale
+            # PREVIEW button (next to GENERATE)
+            _pvw_p = min(60*scale, _sp_w_p*0.36)
+            _pvx_p = _gx_p + _gw_p + 4*scale
+            if _pvx_p <= mouse_x <= _pvx_p+_pvw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
+                return {'zone': 'ai_piper_preview', 'ai_idx': ai_idx}
+
+            # CLEAR button (after PREVIEW)
+            _clw_p = min(38*scale, _sp_w_p*0.22)
+            _clx_p = _pvx_p + _pvw_p + 4*scale
             if _clx_p <= mouse_x <= _clx_p+_clw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
                 return {'zone': 'ai_piper_clear', 'ai_idx': ai_idx}
 
-            # Voice cards
-            _spl_x_p = rack_x + rw * 0.52
-            _vp_x_p  = _spl_x_p + _marg_p*0.5
-            _vp_w_p  = rack_x + rw - _spl_x_p - _marg_p*1.5
-            _cd_h_p  = max(24*scale, _uh_p * 0.22)
-            _cg_p    = 3*scale
+            # Voice panel geometry
+            _spl_x_p  = rack_x + rw * 0.52
+            _vp_x_p   = _spl_x_p + _marg_p*0.5
+            _vp_w_p   = rack_x + rw - _spl_x_p - _marg_p*1.5
+            _vp_y_p   = _uy_p
+            _vp_h_p   = _uh_p
             _fs_lbl_p = max(1, int(8*scale))
-            _vs_p    = _uy_p + _uh_p - _fs_lbl_p - 8*scale
+            _arr_h_p  = 14*scale
+
+            # ▲ up arrow
+            _arr_top_y_p = _vp_y_p + _vp_h_p - _fs_lbl_p - 8*scale - _arr_h_p
+            if (_vp_x_p <= mouse_x <= _vp_x_p+_vp_w_p and
+                    _arr_top_y_p <= mouse_y <= _arr_top_y_p+_arr_h_p):
+                return {'zone': 'ai_piper_scroll', 'ai_idx': ai_idx, 'dir': -1}
+
+            # ▼ down arrow
+            _arr_bot_y_p = _vp_y_p + 2*scale
+            if (_vp_x_p <= mouse_x <= _vp_x_p+_vp_w_p and
+                    _arr_bot_y_p <= mouse_y <= _arr_bot_y_p+_arr_h_p):
+                return {'zone': 'ai_piper_scroll', 'ai_idx': ai_idx, 'dir': 1}
+
+            # Voice cards (with scroll offset from p5)
+            _cd_h_p   = max(22*scale, _vp_h_p * 0.20)
+            _cg_p     = 2*scale
+            _cards_area_p = _vp_h_p - _fs_lbl_p - 8*scale - _arr_h_p*2 - 4*scale
+            _max_vis_p    = max(1, int(_cards_area_p / (_cd_h_p + _cg_p)))
+            _v_scroll_p   = int(getattr(rack, 'p5', 0.0))
             try:
                 from core.ai_piper import get_voices as _gv_p
                 _vlist_p = _gv_p()
             except Exception:
                 _vlist_p = []
-            for _vi in range(min(4, len(_vlist_p))):
-                _cy_c = _vs_p - _vi*(_cd_h_p+_cg_p) - _cd_h_p
-                if _cy_c < _uy_p + 2*scale: break
+            _v_start_y_p = _arr_top_y_p - _cg_p
+            for _slot in range(_max_vis_p):
+                _vi = _v_scroll_p + _slot
+                if _vi >= len(_vlist_p): break
+                _cy_c = _v_start_y_p - _slot*(_cd_h_p+_cg_p) - _cd_h_p
+                if _cy_c < _vp_y_p + _arr_h_p + 2*scale: break
                 if (_vp_x_p+4*scale <= mouse_x <= _vp_x_p+_vp_w_p-4*scale and
                         _cy_c <= mouse_y <= _cy_c+_cd_h_p):
-                    return {'zone': 'ai_piper_voice', 'ai_idx': ai_idx, 'voice_idx': _vi}
+                    return {'zone': 'ai_piper_voice', 'ai_idx': ai_idx,
+                            'voice_idx': _vi}
 
             # Piper knobs
             import math as _math_p
@@ -5291,41 +5295,6 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
                 _kx_p = _cs_p + _kw_p*(_ki+0.5)
                 if _math_p.sqrt((mouse_x-_kx_p)**2+(mouse_y-_ky_p)**2) < _kr_p:
                     return {'zone': 'ai_piper_knob', 'ai_idx': ai_idx, 'knob_idx': _ki}
-
-        # PROCESS button — mirrors _draw_deepfilternet_body geometry exactly
-        if rack.ai_type == "DEEPFILTERNET" and not rack.collapsed:
-            rail_ht_p  = RACK_RAIL_H * scale
-            body_bot_p = rack_y
-            body_top_p = rack_y + rack_h - rail_ht_p
-            body_h_p   = body_top_p - body_bot_p
-            sbar_h_p   = max(18*scale, body_h_p * 0.07)
-            lower_bot_p = body_bot_p + sbar_h_p + 2*scale
-            lower_h_p   = body_h_p * 0.30
-            centre_w_p  = rw * 0.26
-            margin_p    = 8*scale
-            side_w_p    = (rw - centre_w_p - margin_p * 4) * 0.5
-            centre_x_p  = rack_x + margin_p + side_w_p + margin_p
-            p_w  = centre_w_p * 0.76
-            p_h  = min(lower_h_p * 0.52, 24*scale)
-            p_x  = centre_x_p + (centre_w_p - p_w) * 0.5
-            p_y  = lower_bot_p + (lower_h_p - p_h) * 0.5
-            if p_x <= mouse_x <= p_x+p_w and p_y <= mouse_y <= p_y+p_h:
-                return {'zone': 'ai_process', 'ai_idx': ai_idx,
-                        'ai_type': rack.ai_type}
-
-            # DeepFilterNet knob hit testing — mirrors _draw_deepfilternet_body
-            import math as _math_ht
-            wave_h_p    = body_top_p - (lower_bot_p + lower_h_p) - 4*scale
-            wave_y_p    = lower_bot_p + lower_h_p + 2*scale
-            knob_y_p    = lower_bot_p + lower_h_p * 0.55
-            knob_r_p    = min(13*scale, lower_h_p * 0.36) + 10*scale  # hit tolerance
-            kw_p        = side_w_p / 3
-            wave_in_x_p = rack_x + margin_p
-            for ki in range(3):
-                kx_p = wave_in_x_p + kw_p * (ki + 0.5)
-                dist = _math_ht.sqrt((mouse_x - kx_p)**2 + (mouse_y - knob_y_p)**2)
-                if dist < knob_r_p:
-                    return {'zone': 'ai_dnf_knob', 'ai_idx': ai_idx, 'knob_idx': ki}
 
         # RVC: setup guide button hit test
         if rack.ai_type == "RVC" and not rack.collapsed:
@@ -6001,15 +5970,7 @@ def handle_ai_rack_click(hit, context):
         if i < len(ai_racks):
             rack  = ai_racks[i]
             atype = rack.ai_type
-            if atype == "DEEPFILTERNET":
-                try:
-                    from core.ai_deepfilternet import process_deepfilternet
-                    process_deepfilternet(i, context)
-                except Exception as e:
-                    print(f"[AI RACKS] DeepFilterNet launch failed: {e}")
-                    import traceback; traceback.print_exc()
-                    rack.ai_status = "ERROR"
-            elif atype == "PIPER_TTS":
+            if atype == "PIPER_TTS":
                 try:
                     from core.ai_piper import generate_piper
                     generate_piper(i, context)
@@ -6099,10 +6060,6 @@ def handle_ai_rack_click(hit, context):
                 setattr(ai_racks[i], prop, float(min(32, cur + 1)))
         return True
 
-    # ai_dnf_knob drag is handled in interaction.py — consume here
-    if zone == 'ai_dnf_knob':
-        return True
-
     # Piper text area click — activate text field
     if zone == 'ai_piper_text':
         ai_racks = getattr(context.scene, "pb_ai_racks", [])
@@ -6138,6 +6095,28 @@ def handle_ai_rack_click(hit, context):
         if i < len(ai_racks):
             ai_racks[i].p4 = float(hit['voice_idx'])
             print(f"[PIPER] rack {i} voice → {hit['voice_idx']}")
+        return True
+
+    # Piper preview button — play last generated output
+    if zone == 'ai_piper_preview':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            try:
+                from core.ai_piper import preview_piper
+                preview_piper(i, context)
+            except Exception as e:
+                print(f"[PIPER] preview failed: {e}")
+        return True
+
+    # Piper voice scroll arrows — dir=-1 scroll up, dir=1 scroll down
+    if zone == 'ai_piper_scroll':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            current = int(getattr(ai_racks[i], 'p5', 0.0))
+            ai_racks[i].p5 = float(max(0, current + hit['dir']))
+            print(f"[PIPER] rack {i} scroll → {int(ai_racks[i].p5)}")
         return True
 
     # Piper knob drag handled in interaction.py — consume here
