@@ -58,20 +58,17 @@ def _find_system_python():
     global _PYTHON_CMD
     if _PYTHON_CMD:
         return _PYTHON_CMD
-    for cmd in [["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"],
-                ["python"], ["python3"]]:
-        try:
-            r = subprocess.run(
-                cmd + ["-c", "import demucs; print('ok')"],
-                capture_output=True, timeout=6, text=True)
-            if r.returncode == 0 and "ok" in r.stdout:
-                _PYTHON_CMD = cmd
-                print(f"[DEMUCS] system Python: {' '.join(cmd)}")
-                return _PYTHON_CMD
-        except Exception:
-            continue
+    try:
+        from core.ai_python_finder import find_python_with as _fpw
+        pkg = "demucs"
+        cmd = _fpw(pkg)
+        if cmd:
+            _PYTHON_CMD = cmd
+            print(f"[DEMUCS] system Python: {' '.join(cmd)}")
+            return _PYTHON_CMD
+    except Exception as _e:
+        print(f"[DEMUCS] finder error: {_e}")
     return None
-
 
 def _get_runner_path():
     addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

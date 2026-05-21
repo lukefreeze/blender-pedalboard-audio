@@ -4338,6 +4338,8 @@ def handle_click(hit, context):
             cur = int(getattr(racks[i], 'p2', 0))
             racks[i].p2 = float(min(32, cur + 1))
         return True
+
+    if zone == 'rack_badge':
         i = hit['rack_idx']
         if _reorder_open and _reorder_rack_idx == i:
             # Already open for this rack — close it

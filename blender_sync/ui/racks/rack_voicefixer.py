@@ -54,33 +54,88 @@ _MODE_DESCS  = [
 ]
 
 # Dep check — background thread, never on draw thread
-_vf_dep_cache      = {"ok": False, "checked": False}
+_vf_dep_cache      = {"ok": False, "checked": False, "checking": False}
 _vf_check_running  = False
+
+
+def _get_python_candidates():
+    """Return ordered list of Python commands to try.
+    Includes common install locations so Blender finds system Python
+    even when it doesn't inherit the user's PATH on Windows/Mac/Linux.
+    """
+    import platform
+    candidates = []
+    if platform.system() == "Windows":
+        # Common Windows install locations
+        import os
+        for ver in ["312", "311", "310", "39"]:
+            for base in [
+                os.path.expanduser(f"~\\AppData\\Local\\Programs\\Python\\Python{ver}\\python.exe"),
+                f"C:\\Python{ver}\\python.exe",
+                f"C:\\Program Files\\Python{ver}\\python.exe",
+            ]:
+                if os.path.exists(base):
+                    candidates.append([base])
+        # Also try py launcher and plain python
+        candidates += [["py", f"-3.{ver[-2:]}"] for ver in ["312","311","310"]]
+        candidates += [["python"], ["python3"]]
+    else:
+        # Mac / Linux — common locations
+        import os
+        for path in [
+            "/usr/local/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/bin/python3",
+        ]:
+            if os.path.exists(path):
+                candidates.append([path])
+        candidates += [["python3"], ["python"]]
+    return candidates
 
 
 def _run_dep_check():
     global _vf_check_running
-    import subprocess
-    candidates = [["py","-3.12"],["py","-3.11"],["py","-3.10"],["python"],["python3"]]
     found = False
-    for cmd in candidates:
-        try:
-            r = subprocess.run(cmd + ["-c", "import voicefixer; print('ok')"],
-                               capture_output=True, timeout=6)
-            if r.returncode == 0 and b"ok" in r.stdout:
-                found = True
-                break
-        except Exception:
-            continue
-    _vf_dep_cache["ok"]      = found
-    _vf_dep_cache["checked"] = True
-    _vf_check_running        = False
+    try:
+        from core.ai_python_finder import find_python_with as _fpw
+        # Use pip show instead of importing voicefixer directly — importing
+        # pulls in torch which takes 2-3s just for the import check.
+        import subprocess, platform
+        from core.ai_python_finder import (
+            _win_python_paths, _mac_python_paths, _linux_python_paths)
+        sys = platform.system()
+        candidates = (_win_python_paths() if sys == "Windows"
+                      else _mac_python_paths() if sys == "Darwin"
+                      else _linux_python_paths())
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd + ["-m", "pip", "show", "voicefixer"],
+                    capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    found = True
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[VOICEFIXER] dep check error: {e}")
+    _vf_dep_cache["ok"]       = found
+    _vf_dep_cache["checked"]  = True
+    _vf_dep_cache["checking"] = False
+    _vf_check_running         = False
+    print(f"[VOICEFIXER] dep check complete: {'found' if found else 'not found'}")
+    _vf_dep_cache["ok"]       = found
+    _vf_dep_cache["checked"]  = True
+    _vf_dep_cache["checking"] = False
+    _vf_check_running         = False
+    print(f"[VOICEFIXER] dep check complete: {'found' if found else 'not found'}")
 
 
 def _check_voicefixer():
     global _vf_check_running
     if not _vf_dep_cache["checked"] and not _vf_check_running:
-        _vf_check_running = True
+        _vf_check_running         = True
+        _vf_dep_cache["checking"] = True
         import threading
         threading.Thread(target=_run_dep_check, daemon=True).start()
     return _vf_dep_cache["ok"]
@@ -159,8 +214,21 @@ def _draw_voicefixer_body(rx, ry, rw, rh, rack, ai_idx, scale):
     sh = gpu.shader.from_builtin("UNIFORM_COLOR")
 
     if not _check_voicefixer():
-        bx,by,bw,bh = _draw_setup_warning(rx, ry, rw, rh, scale)
-        try: rack['vf_setup_btn'] = (bx,by,bw,bh)
+        if _vf_dep_cache["checking"]:
+            # Background check still running — show brief status, not full warning
+            rail_h   = RACK_RAIL_H * scale
+            body_bot = ry
+            body_top = ry + rh - rail_h
+            body_h   = body_top - body_bot
+            _draw_rect(rx, body_bot, rw, body_h, _BG)
+            fs = max(1, int(8 * scale))
+            msg = "Checking VoiceFixer installation..."
+            tw  = _text_width(msg, fs)
+            _draw_text(msg, rx + rw/2 - tw/2, body_bot + body_h/2 - fs/2,
+                       fs, _TEXT_DIM)
+            return
+        bx, by, bw, bh = _draw_setup_warning(rx, ry, rw, rh, scale)
+        try: rack['vf_setup_btn'] = (bx, by, bw, bh)
         except Exception: pass
         return
 

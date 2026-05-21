@@ -582,7 +582,30 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
 
             while (frames_needed > 0) {
                 int cur_seg = channels_[ch].cur_segment;
-                if (cur_seg < 0 || cur_seg >= channels_[ch].n_segments) break;
+
+                // cur_segment == -1 means no file is open yet (either never
+                // opened, or playhead was before all segments at seek time).
+                // Scan forward to find a segment the playhead has reached.
+                if (cur_seg < 0) {
+                    int found = -1;
+                    for (int si = 0; si < channels_[ch].n_segments; ++si) {
+                        const HijackerSegment& s = channels_[ch].segments[si];
+                        double seg_end = s.timeline_pos_s + s.duration_s;
+                        if (playhead_s_ >= s.timeline_pos_s && playhead_s_ < seg_end) {
+                            found = si;
+                            break;
+                        }
+                    }
+                    if (found >= 0) {
+                        double seek_within = playhead_s_ - channels_[ch].segments[found].timeline_pos_s;
+                        _open_segment(ch, found, seek_within);
+                    } else {
+                        break;  // playhead not yet at any segment
+                    }
+                    continue;   // re-check cur_segment after opening
+                }
+
+                if (cur_seg >= channels_[ch].n_segments) break;
 
                 const HijackerSegment& seg = channels_[ch].segments[cur_seg];
                 double seg_timeline_end = seg.timeline_pos_s + seg.duration_s;
@@ -623,10 +646,21 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
             continue;
         }
 
-        // Apply fader volume PRE-DSP
-        if (fabsf(vol - 1.0f) > 0.0001f) {
+        // Apply volume PRE-DSP so the compressor sees the correct level.
+        // Use the current segment's volume (strip.volume baked in at load time)
+        // combined with the channel fader volume. This means two strips on the
+        // same channel with different strip.volumes will compress differently,
+        // matching what the user set on each strip in the VSE.
+        float seg_vol = 1.0f;
+        {
+            int cur = channels_[ch].cur_segment;
+            if (cur >= 0 && cur < channels_[ch].n_segments)
+                seg_vol = channels_[ch].segments[cur].volume;
+        }
+        float total_vol = vol * seg_vol;
+        if (fabsf(total_vol - 1.0f) > 0.0001f) {
             for (int i = 0; i < (int)frames_per_buffer * 2; ++i)
-                ch_buf[i] *= vol;
+                ch_buf[i] *= total_vol;
         }
 
         // Apply DSP effect chain

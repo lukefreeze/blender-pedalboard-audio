@@ -236,46 +236,21 @@ def _draw_deepfilternet_body(rx, ry, rw, rh, rack, ai_idx, scale):
         if assigned:
             ch_idx = assigned[0]
             try:
-                # Try full FFT timeline first (populated after engine processes)
-                from Loader import _fft_timeline_full, _fft_timeline
-                import numpy as _np
-                tl = _fft_timeline_full.get(ch_idx) or _fft_timeline.get(ch_idx)
-                if tl and tl.get('snapshots'):
-                    snaps = tl['snapshots']
-                    n_s   = 80
-                    step  = max(1, len(snaps) // n_s)
-                    for i in range(0, len(snaps), step):
-                        v = float(_np.mean(snaps[i]))
-                        input_wave.append(min(1.0, max(0.0, v)))
+                # Read input waveform from the shared live meter ring buffer
+                # (same buffer used by the noise gate rack — populated every
+                # draw call from hj.get_meter_rms during playback).
+                from ui.racks.rack_noisegate import _NG_RMS_HISTORY
+                buf = _NG_RMS_HISTORY.get(ch_idx)
+                if buf and len(buf) > 1:
+                    # Extract just the rms values in order, normalise to 0-1
+                    vals = [rms for _, rms in buf]
+                    n_s  = 80
+                    step = max(1, len(vals) // n_s)
+                    for i in range(0, len(vals), step):
+                        input_wave.append(min(1.0, max(0.0, float(vals[i]))))
                     input_wave = input_wave[:n_s]
             except Exception:
                 pass
-            if not input_wave:
-                try:
-                    # Fallback: use envelope cache — get_envelope returns (rms_list, peak_list)
-                    import bpy as _bpy
-                    from core.meters import get_envelope
-                    scene_w = _bpy.context.scene
-                    fps_w   = scene_w.render.fps / scene_w.render.fps_base if scene_w else 24.0
-                    all_rms = []
-                    if scene_w and scene_w.sequence_editor:
-                        for _s in scene_w.sequence_editor.sequences_all:
-                            if (_s.type == "SOUND" and _s.sound
-                                    and (_s.channel - 1) == ch_idx):
-                                fp = _bpy.path.abspath(_s.sound.filepath)
-                                rms_list, _ = get_envelope(fp, fps_w)
-                                if rms_list:
-                                    all_rms.extend(rms_list)
-                    if all_rms:
-                        import numpy as _np2
-                        env_arr = _np2.array(all_rms, dtype=_np2.float32)
-                        n_s  = 80
-                        step = max(1, len(env_arr) // n_s)
-                        for i in range(0, len(env_arr), step):
-                            input_wave.append(float(min(1.0, env_arr[i] * 3.0)))
-                        input_wave = input_wave[:n_s]
-                except Exception as _env_e:
-                    pass
             try:
                 from core.ai_deepfilternet import get_output_wave
                 output_wave = get_output_wave(ch_idx)

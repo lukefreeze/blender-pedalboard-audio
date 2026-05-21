@@ -52,37 +52,52 @@ _DONE       = "DONE"
 _ERROR      = "ERROR"
 
 # Dep check — background thread only, never on draw thread
-_dep_cache         = {"ok": False, "checked": False}
+_dep_cache         = {"ok": False, "checked": False, "checking": False}
 _dep_check_running = False
 
 
 def _run_dep_check():
     global _dep_check_running
-    import subprocess
-    candidates = [
-        ["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"],
-        ["python"], ["python3"],
-    ]
-    found = False
-    for cmd in candidates:
-        try:
-            r = subprocess.run(
-                cmd + ["-c", "import torch, torchaudio; print('ok')"],
-                capture_output=True, timeout=6)
-            if r.returncode == 0 and b"ok" in r.stdout:
-                found = True
-                break
-        except Exception:
-            continue
-    _dep_cache["ok"]      = found
-    _dep_cache["checked"] = True
-    _dep_check_running    = False
-
+    ok = False
+    try:
+        import subprocess, platform
+        from core.ai_python_finder import (
+            _win_python_paths, _mac_python_paths, _linux_python_paths)
+        sys_name = platform.system()
+        candidates = (_win_python_paths() if sys_name == "Windows"
+                      else _mac_python_paths() if sys_name == "Darwin"
+                      else _linux_python_paths())
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd + ["-m", "pip", "show", "torch"],
+                    capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    ok = True
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[KNNVC] dep check error: {e}")
+    _dep_cache["ok"]       = ok
+    _dep_cache["checked"]  = True
+    _dep_cache["checking"] = False
+    _dep_check_running             = False
+    print(f"[KNNVC] dep check complete: {'found' if ok else 'not found'}")
+    try:
+        import bpy
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type in ('NODE_EDITOR', 'SEQUENCE_EDITOR'):
+                    area.tag_redraw()
+    except Exception:
+        pass
 
 def _check_deps():
     global _dep_check_running
     if not _dep_cache["checked"] and not _dep_check_running:
         _dep_check_running = True
+        _dep_cache["checking"] = True
         import threading
         t = threading.Thread(target=_run_dep_check, daemon=True)
         t.start()

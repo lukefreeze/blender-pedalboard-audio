@@ -36,9 +36,11 @@ RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 # 80 samples = same window width as the old timeline approach.
 # ---------------------------------------------------------------------------
 import collections as _coll
-_NG_RMS_HISTORY  = {}   # ch_idx -> deque of float RMS values — UNUSED, kept for compat
-_NG_GATE_HISTORY = {}   # ch_idx -> dict {frame: bool} gate open state per timeline frame
-_NG_HISTORY_LEN  = 80
+# Ring buffer per channel — stores (frame, rms) pairs from live engine meter.
+# Updated every draw call. Holds N_WIN samples = ~5s of history at 24fps.
+_NG_RMS_HISTORY  = {}   # ch_idx -> deque of (frame, rms_value)
+_NG_GATE_HISTORY = {}   # ch_idx -> dict {frame: bool} gate open state
+_NG_HISTORY_LEN  = 120  # frames of history — matches N_WIN display window
 
 
 def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
@@ -145,65 +147,55 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
 
     try:
         import bpy as _bpy
-        from core.meters import _envelope_cache, get_envelope as _get_env
         assigned = get_rack_channels(rack)
         if not assigned:
             raise ValueError("no ch")
         ch = list(assigned)[0]
 
         scene = _bpy.context.scene
-        if not scene or not scene.sequence_editor:
-            raise ValueError("no seq editor")
+        if not scene:
+            raise ValueError("no scene")
 
         fps   = scene.render.fps / scene.render.fps_base
         cur_f = scene.frame_current
 
-        # Find sound strips on this channel
-        strips_on_ch = [
-            s for s in scene.sequence_editor.sequences_all
-            if s.type == "SOUND" and s.sound and (s.channel - 1) == ch
-        ]
-        if not strips_on_ch:
-            raise ValueError("no strips on ch")
+        try:
+            from Loader import get_engine as _get_eng_ng2
+            _eng2 = _get_eng_ng2()
+            if _eng2:
+                _hj2 = _eng2.get_engine()
+                if _hj2:
+                    live_rms = float(_hj2.get_meter_rms(ch))
+                    if ch not in _NG_RMS_HISTORY:
+                        _NG_RMS_HISTORY[ch] = _coll.deque(maxlen=_NG_HISTORY_LEN)
+                    _NG_RMS_HISTORY[ch].append((cur_f, live_rms))
+        except Exception:
+            pass
 
-        # Window: N_WIN frames centred on cur_f, scrolling left→right
-        N_WIN  = 120   # frames to show — more = more detail and wider context
+        # Build frame→rms lookup from ring buffer
+        N_WIN  = 120
         half   = N_WIN // 2
         f_start = cur_f - half
         f_end   = f_start + N_WIN
 
-        # Build per-frame levels from envelope cache (pre-built, pre-gate)
-        # Use peak_list (not rms_list) — peaks show transient spikes clearly.
-        # rms_list is smoothed and makes the waveform look like a blob.
-        # _envelope_cache[fp] = (rms_list, peak_list)
         rms_by_frame = {}
-        for strip in strips_on_ch:
-            fp = _bpy.path.abspath(strip.sound.filepath)
-            if fp not in _envelope_cache:
-                _get_env(fp, fps)
-            env = _envelope_cache.get(fp)
-            if env is None or len(env) < 2:
-                continue
-            peak_list = env[1]   # peak per frame — spikier than RMS
-            fs = int(strip.frame_start)
-            fo = int(getattr(strip, "frame_offset_start", 0))
-            for fi in range(f_start, f_end):
-                file_f = fi - fs + fo
-                if 0 <= file_f < len(peak_list):
-                    rms_by_frame[fi] = float(peak_list[file_f])
+        buf = _NG_RMS_HISTORY.get(ch)
+        if buf:
+            for frame_i, rms_i in buf:
+                rms_by_frame[frame_i] = rms_i
 
-        rms_vals     = [rms_by_frame.get(f_start + i, 0.0) for i in range(N_WIN)]
-        playhead_slot = half   # playhead always centred
+        rms_vals      = [rms_by_frame.get(f_start + i, 0.0) for i in range(N_WIN)]
+        playhead_slot = half
 
-        # Threshold in same linear scale as envelope RMS (0..1 amplitude)
+        # Threshold in same linear scale as RMS (0..1)
         thr_lin_disp = 10.0 ** (thr_db / 20.0)
-        thr_lin      = thr_lin_disp   # used by gate envelope drawing below
+        thr_lin      = thr_lin_disp
 
         rms_cur = rms_by_frame.get(cur_f, 0.0)
         if gr_db_cur == 0.0:
             gate_open_now = rms_cur >= thr_lin_disp
 
-        # px widths based on fps — 1 frame = 1000/fps ms
+        # px widths based on fps
         ms_per_frame = 1000.0 / fps
         px_per_frame = disp_w / max(N_WIN - 1, 1)
         atk_px  = max(2.0, (atk_ms  / ms_per_frame) * px_per_frame)

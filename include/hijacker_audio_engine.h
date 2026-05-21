@@ -30,6 +30,8 @@ struct HijackerSegment {
     double file_offset_s  = 0.0;  // where in the file audio starts
     double duration_s     = 0.0;  // how long this segment plays
     double timeline_pos_s = 0.0;  // when it starts on the timeline
+    float  volume         = 1.0f; // strip.volume baked in — per-segment gain
+                                  // applied pre-DSP so the compressor sees it
 };
 
 // ---------------------------------------------------------------------------

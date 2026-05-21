@@ -1,10 +1,12 @@
 # =============================================================================
 # core/meters.py
-# Peak envelope building, VU meter timer, and peak-hold ballistics.
+# VU meter timer and peak-hold ballistics.
+#
+# Meter levels come directly from the C++ engine (get_meter_rms / get_meter_peak)
+# which are updated every audio callback (~10ms). No envelope pre-building needed.
 # =============================================================================
 
 import bpy
-import struct
 
 from core.constants import (
     MAX_CHANNELS, DEFAULT_CHANNELS, METER_POLL_INTERVAL,
@@ -14,135 +16,17 @@ from core.engine import get_engine
 
 
 # Module-level meter state (read by ui/mixer/mixer_hud.py for drawing)
-_engine_levels         = [0.0] * MAX_CHANNELS
-_peak_hold             = [0.0] * MAX_CHANNELS
-_peak_hold_timer       = [0.0] * MAX_CHANNELS
+_engine_levels          = [0.0] * MAX_CHANNELS
+_peak_hold              = [0.0] * MAX_CHANNELS
+_peak_hold_timer        = [0.0] * MAX_CHANNELS
 _meter_timer_registered = False
-
-# Envelope cache: {filepath -> (rms_list, peak_list)}
-_envelope_cache = {}
-
-# These are set by Loader.py so meters.py can read ui state without circular import
-_get_pb_ui_enabled = lambda: False   # replaced in Loader.py
-
-def _build_envelope(filepath, fps):
-    """
-    Read the audio file once, build two arrays per video frame:
-      envelope_rms  — RMS level (drives the animated bar, reflects loudness)
-      envelope_peak — true peak  (drives the peak-hold dot)
-    Returns (rms_list, peak_list).
-    RMS varies much more than peak across a track, giving the
-    jumping-up-and-down behaviour you see in professional meters.
-
-    WAV files (including float32 from the BOOSTER) are read directly with
-    Python's wave module to avoid aud misinterpreting the sample format.
-    All other formats go through aud.
-    """
-    import math as _math
-    try:
-        fp_lower = filepath.lower()
-        if fp_lower.endswith('.wav'):
-            # Read WAV directly — handles int16, int32, and float32 correctly
-            import wave as _wave
-            try:
-                with _wave.open(filepath, 'r') as wf:
-                    n_ch     = wf.getnchannels()
-                    samp_w   = wf.getsampwidth()
-                    sample_rate = wf.getframerate()
-                    n_frames = wf.getnframes()
-                    raw      = wf.readframes(n_frames)
-            except Exception as e:
-                print(f"[ENVELOPE] WAV read failed: {e}")
-                return [], []
-
-            n_ch  = max(1, n_ch)
-            if samp_w == 2:
-                n_samp  = len(raw) // 2
-                samples = struct.unpack_from(f'{n_samp}h', raw)
-                samples = [s / 32768.0 for s in samples]
-            elif samp_w == 3:
-                # 24-bit PCM — 3 bytes per sample, little-endian signed
-                n_samp  = len(raw) // 3
-                samples = []
-                for si in range(n_samp):
-                    b0, b1, b2 = raw[si*3], raw[si*3+1], raw[si*3+2]
-                    val = b0 | (b1 << 8) | (b2 << 16)
-                    if val >= 0x800000:   # sign-extend
-                        val -= 0x1000000
-                    samples.append(val / 8388608.0)
-            elif samp_w == 4:
-                n_samp = len(raw) // 4
-                # Try float32 first (used by BOOSTER output)
-                try:
-                    candidate = struct.unpack_from(f'{n_samp}f', raw)
-                    # float32 audio is in [-1, 1]; int32 values would be huge
-                    if n_samp > 0 and max(abs(candidate[0]), abs(candidate[min(100, n_samp-1)])) <= 2.0:
-                        samples = list(candidate)
-                    else:
-                        samples = [s / 2147483648.0 for s in struct.unpack_from(f'{n_samp}i', raw)]
-                except Exception:
-                    samples = [s / 2147483648.0 for s in struct.unpack_from(f'{n_samp}i', raw)]
-            elif samp_w == 1:
-                samples = [(b - 128) / 128.0 for b in raw]
-            else:
-                print(f"[ENVELOPE] unsupported WAV sampwidth {samp_w}")
-                return [], []
-            num_ch = n_ch
-        else:
-            # Non-WAV: use aud (handles MP3, FLAC, OGG, etc.)
-            import aud
-            raw      = aud.Sound.file(filepath).data()
-            n_floats = len(raw) // 4
-            if n_floats == 0:
-                return [], []
-            samples     = struct.unpack_from(f'{n_floats}f', raw)
-            specs       = aud.Sound.file(filepath).specs
-            sample_rate = int(specs[0])
-            num_ch      = max(1, int(specs[1]))
-
-        spf = max(1, int(sample_rate * num_ch / fps))
-
-        rms_env  = []
-        peak_env = []
-        i        = 0
-        total    = len(samples)
-        while i < total:
-            end      = min(i + spf, total)
-            peak     = 0.0
-            rms_sum  = 0.0
-            count    = end - i
-            for j in range(i, end):
-                v = samples[j]
-                if v > peak:  peak = v
-                if -v > peak: peak = -v
-                rms_sum += v * v
-            rms = _math.sqrt(rms_sum / count) if count > 0 else 0.0
-            rms_env.append(min(rms, 1.0))
-            peak_env.append(min(peak, 1.0))
-            i += spf
-
-        filename = filepath.replace('\\','/').split('/')[-1]
-        print(f"[ENVELOPE] {filename}: {len(rms_env)} frames "
-              f"({round(len(rms_env)/fps,1)}s) RMS+peak")
-        return rms_env, peak_env
-    except Exception as e:
-        print(f"[ENVELOPE] failed: {e}")
-        import traceback; traceback.print_exc()
-        return [], []
-
-
-def get_envelope(filepath, fps):
-    """Return cached (rms_envelope, peak_envelope) tuple, building if needed."""
-    if filepath not in _envelope_cache:
-        print(f"[ENVELOPE] building: {filepath}")
-        _envelope_cache[filepath] = _build_envelope(filepath, fps)
-    return _envelope_cache[filepath]
 
 
 # ---------------------------------------------------------------------------
 # Meter timer
 # Runs independently so meters animate even without mouse movement.
-# Reads peak from envelope at current frame — accurate to timeline cursor.
+# Reads directly from the C++ engine — accurate for any file length,
+# no truncation issues, no memory overhead.
 # ---------------------------------------------------------------------------
 def _meter_timer():
     global _engine_levels, _peak_hold, _peak_hold_timer
@@ -157,14 +41,12 @@ def _meter_timer():
         if not scene or not scene.sequence_editor:
             return METER_POLL_INTERVAL
 
-        current_frame = scene.frame_current
-        fps           = scene.render.fps / scene.render.fps_base
-        tracks        = getattr(scene, "pb_sync_tracks", [])
-        is_playing    = bool(bpy.context.screen and
-                             bpy.context.screen.is_animation_playing)
+        fps    = scene.render.fps / scene.render.fps_base
+        tracks = getattr(scene, "pb_sync_tracks", [])
+        is_playing = bool(bpy.context.screen and
+                          bpy.context.screen.is_animation_playing)
 
-        # Auto-detect new channels — sync if VSE has strips on channels
-        # beyond what we currently have tracks for
+        # Auto-detect new channels — round up to next multiple of 9
         if scene.sequence_editor:
             highest = max((s.channel for s in scene.sequence_editor.sequences_all
                            if s.type == "SOUND" and s.sound), default=0)
@@ -176,80 +58,48 @@ def _meter_timer():
                 for area in bpy.context.screen.areas:
                     area.tag_redraw()
 
-        # Look 2 frames ahead when playing to compensate for audio hardware
-        # clock running slightly ahead of Blender's UI frame counter.
-        # This keeps the meter visually in sync with what you hear.
-        if is_playing:
-            current_frame = current_frame + 2
+        # Read live meter levels from C++ engine
+        engine = get_engine()
+        hj     = engine.get_engine() if engine else None
 
-        # --- Freeze meters when paused and cursor is not moving ---
-        # Compare to last known frame; only update if playing or scrubbing.
-        last_frame = getattr(_meter_timer, '_last_frame', None)
-        cursor_moved = (last_frame != current_frame)
-        _meter_timer._last_frame = current_frame
+        new_rms  = [0.0] * MAX_CHANNELS
+        new_peak = [0.0] * MAX_CHANNELS
 
-        if not is_playing and not cursor_moved:
-            # Nothing changed — just keep redrawing so HUD stays visible
-            # but don't recalculate levels (no flicker).
+        if hj:
+            for i in range(MAX_CHANNELS):
+                new_rms[i]  = hj.get_meter_rms(i)
+                new_peak[i] = hj.get_meter_peak(i)
+
+        # Feed the shared waveform ring buffer — used by noise gate and
+        # deepfilternet racks. Populated here so the buffer fills during
+        # playback regardless of which racks are currently visible.
+        if is_playing and hj:
             try:
-                for window in bpy.context.window_manager.windows:
-                    for area in window.screen.areas:
-                        if area.type == "NODE_EDITOR":
-                            area.tag_redraw()
-            except Exception: pass
-            return METER_POLL_INTERVAL
+                import collections as _coll
+                from ui.racks.rack_noisegate import (
+                    _NG_RMS_HISTORY, _NG_HISTORY_LEN)
+                for i in range(MAX_CHANNELS):
+                    if new_rms[i] > 0.0 or i in _NG_RMS_HISTORY:
+                        if i not in _NG_RMS_HISTORY:
+                            _NG_RMS_HISTORY[i] = _coll.deque(
+                                maxlen=_NG_HISTORY_LEN)
+                        _NG_RMS_HISTORY[i].append((current_frame, new_rms[i]))
+            except Exception:
+                pass
 
-        # --- Read RMS and peak from pre-built envelopes ---
-        new_rms  = [0.0] * MAX_CHANNELS   # drives the animated bar
-        new_peak = [0.0] * MAX_CHANNELS   # drives the peak-hold dot
-
-        for strip in scene.sequence_editor.sequences_all:
-            if strip.type != "SOUND" or not strip.sound: continue
-            if strip.mute: continue
-
-            idx = strip.channel - 1
-            if idx < 0 or idx >= MAX_CHANNELS: continue
-            if idx < len(tracks) and tracks[idx].mute: continue
-
-            # Use actual timeline start (same formula as build function)
-            actual_start_frame = strip.frame_final_end - strip.frame_final_duration
-            if not (actual_start_frame <= current_frame <= strip.frame_final_end):
-                continue
-
-            filepath = bpy.path.abspath(strip.sound.filepath)
-            rms_env, peak_env = get_envelope(filepath, fps)
-            if not rms_env: continue
-
-            frame_offset = int(current_frame - actual_start_frame)
-            if not (0 <= frame_offset < len(rms_env)): continue
-
-            # Scale by the pedalboard fader volume, not strip.volume.
-            # strip.volume is no longer updated by the fader — the engine
-            # manages playback volume through its own handle. Read the fader
-            # value from pb_sync_tracks instead.
-            if idx < len(tracks):
-                vol = tracks[idx].volume
-            else:
-                vol = strip.volume   # fallback for channels outside pb range
-            scaled_rms  = rms_env[frame_offset]  * vol
-            scaled_peak = peak_env[frame_offset] * vol if peak_env else scaled_rms
-
-            if scaled_rms  > new_rms[idx]:  new_rms[idx]  = scaled_rms
-            if scaled_peak > new_peak[idx]: new_peak[idx] = scaled_peak
-
-        # --- Apply ballistics ---
-        # Faster decay when playing (like a real VU meter),
-        # slower when scrubbing so you can see the level clearly.
-        decay = METER_DECAY * (2.0 if is_playing else 0.5)
-
+        # Zero out muted channels
         for i in range(MAX_CHANNELS):
             if i < len(tracks) and tracks[i].mute:
                 new_rms[i] = new_peak[i] = 0.0
 
+        # Apply ballistics
+        decay = METER_DECAY * (2.0 if is_playing else 0.5)
+
+        for i in range(MAX_CHANNELS):
             rms  = min(new_rms[i],  1.0)
             peak = min(new_peak[i], 1.0)
 
-            # Peak-hold dot uses true peak
+            # Peak-hold dot
             if peak >= _peak_hold[i]:
                 _peak_hold[i]       = peak
                 _peak_hold_timer[i] = 0.0
@@ -258,27 +108,16 @@ def _meter_timer():
                 if _peak_hold_timer[i] > PEAK_HOLD_TIME:
                     _peak_hold[i] = max(0.0, _peak_hold[i] - decay)
 
-            # Bar uses RMS — instant attack, smooth decay
+            # Bar — instant attack, smooth decay
             _engine_levels[i] = (rms if rms > _engine_levels[i]
                                   else max(0.0, _engine_levels[i] - decay))
 
-        # Mirror meter levels to C++ engine state and read GR levels
-        engine = get_engine()
-        if engine:
+        # Read GR levels from C++ engine for rack display
+        if hj:
             try:
-                hj = engine.get_engine()
-                if not hj: raise Exception("no engine instance")
-                s  = hj.get_state()
-                ml = list(s.meter_levels)
-                for i in range(min(MAX_CHANNELS, len(ml))):
-                    ml[i] = _engine_levels[i]
-                s.meter_levels = ml
-
-                # Read GR levels back from C++ for rack display
-                # Racks.py reads _gr_levels to drive GR meters
+                s = hj.get_state()
                 try:
                     from Racks import _gr_levels, get_rack_channels
-                    scene = bpy.context.scene
                     racks = getattr(scene, "pb_racks", []) if scene else []
                     for ri, rack in enumerate(racks):
                         if not rack.enabled: continue
@@ -291,21 +130,21 @@ def _meter_timer():
                                     _gr_levels.setdefault(ri, {})[ch] = (
                                         gr_vals[0] / 24.0 if gr_vals else 0.0)
                                 elif rack.effect_type == "COMP_MULTI":
-                                    for b in range(min(4, len(gr_vals))):
-                                        _gr_levels.setdefault(ri, {})[ch] = (
-                                            max(gr_vals) / 24.0)
+                                    _gr_levels.setdefault(ri, {})[ch] = (
+                                        max(gr_vals) / 24.0 if gr_vals else 0.0)
                             except Exception:
                                 pass
                 except Exception:
                     pass
-
-            except Exception: pass
+            except Exception:
+                pass
 
         # Update rack LED states
         try:
             from Racks import update_led_states
             update_led_states(is_playing)
-        except Exception: pass
+        except Exception:
+            pass
 
     except Exception as e:
         print(f"[METER] timer error: {e}")
@@ -316,7 +155,8 @@ def _meter_timer():
             for area in window.screen.areas:
                 if area.type == "NODE_EDITOR":
                     area.tag_redraw()
-    except Exception: pass
+    except Exception:
+        pass
 
     return METER_POLL_INTERVAL
 
@@ -328,15 +168,24 @@ def _ensure_meter_timer():
         _meter_timer_registered = True
         print("[METER] timer registered")
 
+
 def _cancel_meter_timer():
     global _meter_timer_registered
     if _meter_timer_registered:
-        try: bpy.app.timers.unregister(_meter_timer)
-        except Exception: pass
+        try:
+            bpy.app.timers.unregister(_meter_timer)
+        except Exception:
+            pass
         _meter_timer_registered = False
 
-
-
-
-
 # ---------------------------------------------------------------------------
+# Legacy stubs — kept so Loader.py and audio.py imports don't break.
+# Envelope building is no longer used; meters read from the C++ engine.
+# ---------------------------------------------------------------------------
+_envelope_cache = {}
+
+def get_envelope(filepath, fps):
+    return [], []
+
+def prebuild_envelopes():
+    pass

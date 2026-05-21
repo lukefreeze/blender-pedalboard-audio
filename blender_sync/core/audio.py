@@ -597,9 +597,14 @@ def _pb_build_channel_sound(channel_idx, start_seconds):
 
 
 def _pb_channel_volume(channel_idx):
-    """Calculate the engine volume for a channel.
-    strip.volume already has fader and gain baked in via apply_fader/gain_to_channel.
-    Values above 1.0 are valid — the engine passes them through for amplification."""
+    """Return the channel fader volume for hj.set_volume().
+
+    strip.volume = original_strip_vol × fader × gain (all baked together).
+    seg.volume already carries the per-strip original volume (strip.volume / fader).
+    So hj.set_volume() only needs the fader — otherwise it would be double-applied.
+
+    Mute/solo short-circuit to 0.0 as before.
+    """
     scene  = bpy.context.scene
     tracks = getattr(scene, "pb_sync_tracks", []) if scene else []
 
@@ -610,11 +615,9 @@ def _pb_channel_volume(channel_idx):
     if soloed and channel_idx not in soloed:
         return 0.0
 
-    if not scene or not scene.sequence_editor: return 1.0
-    strips = [s for s in scene.sequence_editor.sequences_all
-              if s.type == "SOUND" and (s.channel - 1) == channel_idx]
-    if not strips: return 1.0
-    return max(s.volume for s in strips)
+    if channel_idx < len(tracks):
+        return tracks[channel_idx].volume
+    return 1.0
 
 
 def _pb_wire_rack_to_engine(channel_idx):
@@ -1088,11 +1091,26 @@ def _hj_build_segment_playlist(channel_idx, scene):
         if not wav_path or not os.path.exists(wav_path):
             continue
 
+        # Per-segment volume = strip.volume / fader_volume
+        # strip.volume is the combined product of: original VSE strip volume ×
+        # all fader moves × all gain moves. The fader is tracked separately in
+        # pb_sync_tracks[ch].volume and applied channel-wide via hj.set_volume().
+        # Dividing out the fader here means seg.volume carries only the per-strip
+        # original difference — so two strips at vol=1 and vol=3 on the same
+        # channel will genuinely play at different levels, while the fader still
+        # scales both uniformly via hj.set_volume without being double-applied.
+        scene2    = bpy.context.scene
+        tracks2   = getattr(scene2, "pb_sync_tracks", []) if scene2 else []
+        fader_vol = tracks2[channel_idx].volume if channel_idx < len(tracks2) else 1.0
+        fader_vol = max(fader_vol, 0.001)
+        seg_vol   = float(strip.volume) / fader_vol
+
         segments.append({
             'filepath':       wav_path,
             'file_offset_s':  file_offset_s,
             'duration_s':     duration_s,
             'timeline_pos_s': timeline_pos_s,
+            'volume':         seg_vol,
         })
 
     return segments
@@ -1186,11 +1204,6 @@ def _hj_load_all_channels(scene):
 
     if not scene or not scene.sequence_editor: return
 
-    # Clear ALL channels first — this ensures any channel whose strip was
-    # deleted from the VSE stops playing immediately rather than continuing
-    # with a stale playlist from a previous play-start.
-    hj.clear_all_channels()
-
     channels = set()
     for s in scene.sequence_editor.sequences_all:
         if s.type == "SOUND" and s.sound:
@@ -1212,6 +1225,7 @@ def _hj_load_all_channels(scene):
             s.file_offset_s  = seg['file_offset_s']
             s.duration_s     = seg['duration_s']
             s.timeline_pos_s = seg['timeline_pos_s']
+            s.volume         = seg.get('volume', 1.0)
             seg_objects.append(s)
 
         hj.set_channel_playlist(ch, seg_objects)
@@ -1655,6 +1669,7 @@ def _pb_reprocess_channel(channel_idx):
             s.file_offset_s  = seg['file_offset_s']
             s.duration_s     = seg['duration_s']
             s.timeline_pos_s = seg['timeline_pos_s']
+            s.volume         = seg.get('volume', 1.0)
             seg_objects.append(s)
         hj.set_channel_playlist(channel_idx, seg_objects)
 

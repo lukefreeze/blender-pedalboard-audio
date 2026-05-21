@@ -70,7 +70,7 @@ STEM_CH_PROPS = {"drums": "p4", "bass": "p5", "vocals": "p6", "other": "p7"}
 # ---------------------------------------------------------------------------
 # Dependency check — runs once in background, cached for session
 # ---------------------------------------------------------------------------
-_dm_dep_cache     = {"ok": False, "checked": False}
+_dm_dep_cache     = {"ok": False, "checked": False, "checking": False}
 _dm_check_running = False
 
 _WARN_BG     = (0.02, 0.05, 0.02, 1.0)
@@ -81,28 +81,46 @@ _WARN_DIM    = (0.15, 0.50, 0.20, 1.0)
 
 def _run_dep_check():
     global _dm_check_running
-    import subprocess
-    candidates = [["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"],
-                  ["python"], ["python3"]]
-    found = False
-    for cmd in candidates:
-        try:
-            r = subprocess.run(cmd + ["-c", "import demucs; print('ok')"],
-                               capture_output=True, timeout=6)
-            if r.returncode == 0 and b"ok" in r.stdout:
-                found = True
-                break
-        except Exception:
-            continue
-    _dm_dep_cache["ok"]      = found
-    _dm_dep_cache["checked"] = True
-    _dm_check_running        = False
-
+    ok = False
+    try:
+        import subprocess, platform
+        from core.ai_python_finder import (
+            _win_python_paths, _mac_python_paths, _linux_python_paths)
+        sys_name = platform.system()
+        candidates = (_win_python_paths() if sys_name == "Windows"
+                      else _mac_python_paths() if sys_name == "Darwin"
+                      else _linux_python_paths())
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd + ["-m", "pip", "show", "demucs"],
+                    capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    ok = True
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[DEMUCS] dep check error: {e}")
+    _dm_dep_cache["ok"]       = ok
+    _dm_dep_cache["checked"]  = True
+    _dm_dep_cache["checking"] = False
+    _dm_check_running             = False
+    print(f"[DEMUCS] dep check complete: {'found' if ok else 'not found'}")
+    try:
+        import bpy
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type in ('NODE_EDITOR', 'SEQUENCE_EDITOR'):
+                    area.tag_redraw()
+    except Exception:
+        pass
 
 def _check_demucs():
     global _dm_check_running
     if not _dm_dep_cache["checked"] and not _dm_check_running:
         _dm_check_running = True
+        _dm_dep_cache["checking"] = True
         import threading
         threading.Thread(target=_run_dep_check, daemon=True).start()
     return _dm_dep_cache["ok"]

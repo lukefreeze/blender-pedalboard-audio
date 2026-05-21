@@ -142,26 +142,38 @@ def get_system_fonts():
 
 
 # ── Dependency check ───────────────────────────────────────────────────────────
-_dep_cache   = {"ok": False, "checked": False}
+_dep_cache = {"ok": False, "checked": False, "checking": False}
 _dep_running = False
 
 
 def _dep_worker():
     global _dep_running
-    candidates = [["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"],
-                  ["python"], ["python3"]]
     ok = False
-    for cmd in candidates:
-        try:
-            r = subprocess.run(cmd + ["-c", "import faster_whisper; print('ok')"],
-                               capture_output=True, timeout=6)
-            if r.returncode == 0 and b"ok" in r.stdout:
-                ok = True; break
-        except Exception:
-            continue
-    _dep_cache["ok"]      = ok
-    _dep_cache["checked"] = True
-    _dep_running          = False
+    try:
+        import subprocess, platform
+        from core.ai_python_finder import (
+            _win_python_paths, _mac_python_paths, _linux_python_paths)
+        sys_name = platform.system()
+        candidates = (_win_python_paths() if sys_name == "Windows"
+                      else _mac_python_paths() if sys_name == "Darwin"
+                      else _linux_python_paths())
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd + ["-m", "pip", "show", "faster-whisper"],
+                    capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    ok = True
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[WHISPER] dep check error: {e}")
+    _dep_cache["ok"]       = ok
+    _dep_cache["checked"]  = True
+    _dep_cache["checking"] = False
+    _dep_running           = False
+    print(f"[WHISPER] dep check complete: {'found' if ok else 'not found'}")
     try:
         import bpy
         for window in bpy.context.window_manager.windows:
@@ -170,14 +182,13 @@ def _dep_worker():
                     area.tag_redraw()
     except Exception:
         pass
-
-
 def _check_dep():
     global _dep_running
     if _dep_cache["checked"]:
         return _dep_cache["ok"]
     if not _dep_running:
-        _dep_running = True
+        _dep_running           = True
+        _dep_cache["checking"] = True
         threading.Thread(target=_dep_worker, daemon=True).start()
     return False
 
@@ -278,6 +289,15 @@ def _draw_whisper_body(rx, ry, rw, rh, rack, ai_idx, scale):
     _box(rx, body_bot, rw, body_h, _BORDER)
 
     if not _check_dep():
+        if _dep_cache["checking"]:
+            # Still checking — show brief status instead of full warning
+            fs = max(1, int(8 * scale))
+            msg = "Checking Whisper installation..."
+            from ui.mixer.draw_utils import text_width as _tw
+            tw = _tw(msg, fs)
+            _draw_text(msg, rx + rw/2 - tw/2, body_bot + body_h/2 - fs/2,
+                       fs, (0.4, 0.5, 0.6, 1.0))
+            return
         _draw_warning(rx, body_bot, rw, body_h, scale)
         return
 

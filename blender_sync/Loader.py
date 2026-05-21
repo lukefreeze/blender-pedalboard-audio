@@ -67,7 +67,6 @@ from core.audio import (
     _apply_effect_chain, _pb_wire_rack_to_engine, _pb_reprocess_channel,
     apply_fader_to_channel, apply_gain_to_channel,
     sync_vse_mute, sync_vse_solo,
-    prebuild_envelopes,
     _pb_channels, _pb_proc_wav_cache, _pb_full_wav_cache,
     _fft_timeline, _fft_timeline_full, _gr_timeline, _gr_timeline_full,
     _gate_timeline, _gate_timeline_full, _fft_timeline_eq_input,
@@ -77,8 +76,6 @@ from core.audio import (
 from core.meters import (
     _meter_timer, _ensure_meter_timer, _cancel_meter_timer,
     _engine_levels, _peak_hold, _peak_hold_timer,
-    get_envelope,
-    _envelope_cache,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,7 +181,6 @@ class VSE_OT_TogglePBGui(bpy.types.Operator):
             save_ui_state()
             bpy.ops.vse.pb_interaction("INVOKE_DEFAULT")
             _ensure_meter_timer()
-            prebuild_envelopes()
             _pb_engine_enable()
             # Ensure tracks exist even on blank scenes
             try:
@@ -243,7 +239,6 @@ def on_load_post(filepath, *args):
     from core.engine import reset_engine
     from core.audio  import _pb_engine_disable as _disable
     _disable()
-    _envelope_cache.clear()
     clear_texture_cache()
     reset_engine()
     load_ui_state()
@@ -255,7 +250,6 @@ def _deferred_invoke():
     try:
         bpy.ops.vse.pb_interaction("INVOKE_DEFAULT")
         _ensure_meter_timer()
-        prebuild_envelopes()
         _pb_engine_enable()
         # Ensure tracks are synced even on blank scenes
         try:

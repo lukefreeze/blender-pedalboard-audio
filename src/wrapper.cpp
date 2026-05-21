@@ -152,7 +152,8 @@ PYBIND11_MODULE(hijacker_engine, m)
                 strncpy(s.filepath, p.c_str(), 511); s.filepath[511] = 0; })
         .def_readwrite("file_offset_s",  &HijackerSegment::file_offset_s)
         .def_readwrite("duration_s",     &HijackerSegment::duration_s)
-        .def_readwrite("timeline_pos_s", &HijackerSegment::timeline_pos_s);
+        .def_readwrite("timeline_pos_s", &HijackerSegment::timeline_pos_s)
+        .def_readwrite("volume",         &HijackerSegment::volume);
 
     // ── HijackerEngine ────────────────────────────────────────────────────
     py::class_<HijackerEngine>(m, "Engine")
