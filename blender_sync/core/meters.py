@@ -45,8 +45,11 @@ def _meter_timer():
         tracks = getattr(scene, "pb_sync_tracks", [])
         is_playing = bool(bpy.context.screen and
                           bpy.context.screen.is_animation_playing)
+        current_frame = scene.frame_current
 
-        # Auto-detect new channels — round up to next multiple of 9
+        # Auto-detect new channels — round up to next multiple of 9.
+        # Only call sync once per detection — if len(tracks) still doesn't
+        # match after sync, wait for next timer tick rather than looping.
         if scene.sequence_editor:
             highest = max((s.channel for s in scene.sequence_editor.sequences_all
                            if s.type == "SOUND" and s.sound), default=0)

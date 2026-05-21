@@ -756,8 +756,8 @@ def _sync_tracks_to_vse(scene, reset_values=False):
             if s.type == "SOUND" and s.sound:
                 highest_strip_channel = max(highest_strip_channel, s.channel)
 
-    # Always show at least DEFAULT_CHANNELS faders
-    needed = max(DEFAULT_CHANNELS, highest_strip_channel)
+    # Always show at least DEFAULT_CHANNELS faders, rounded up to next group of 9
+    needed = max(DEFAULT_CHANNELS, ((highest_strip_channel + 8) // 9) * 9)
 
     existing = len(scene.pb_sync_tracks)
 
