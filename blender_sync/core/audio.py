@@ -102,7 +102,7 @@ import time as _time
 import math as _math
 
 # Audio engine state
-_pb_device        = None    # aud.Device — Blender's real output device
+_pb_original_device = 'OpenAL'  # restored on HUD close
 _pb_channels      = {}      # channel_idx -> dict (see _pb_start_channel)
 _pb_start_wall    = 0.0     # wall clock time when play was pressed
 _pb_start_frame   = 0       # scene frame when play was pressed
@@ -136,47 +136,71 @@ _gate_timeline_full= {}
 
 
 
-def _pb_get_device():
-    global _pb_device
-    if _pb_device is None:
-        import aud
-        _pb_device = aud.Device()
-    return _pb_device
+# ---------------------------------------------------------------------------
+# One-shot preview playback — plays a WAV file without touching aud.Device()
+# or the Hijacker engine.  Uses platform-native playback in a subprocess so
+# there is zero risk of conflicting with WASAPI.
+# Returns a handle object with a .stop() method and .status property so
+# callers (rack previews, watchdog timers) work the same as before.
+# ---------------------------------------------------------------------------
+
+class _OneshotHandle:
+    """Thin wrapper around a subprocess so callers get stop()/status."""
+    def __init__(self, proc):
+        self._proc = proc
+
+    @property
+    def status(self):
+        """True while audio is still playing."""
+        return self._proc is not None and self._proc.poll() is None
+
+    def stop(self):
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
 
 
-# ---------------------------------------------------------------------------
-# One-shot preview playback — plays a WAV file through the pedalboard engine
-# device without touching VSE or the main playback state.
-# Called by kNN-VC, Piper, and any other rack that needs audio preview.
-# ---------------------------------------------------------------------------
-_oneshot_handles = []  # keep references alive so GC doesn't kill playback
+_oneshot_handles = []  # keep references alive
+
 
 def play_oneshot(filepath):
-    """Play a WAV file once through the pedalboard audio device.
-    Safe to call at any time — does not interrupt VSE playback.
-    Returns the aud.Handle so caller can stop it early if needed.
+    """Play a WAV file without touching aud.Device or the Hijacker engine.
+    Returns an _OneshotHandle with stop() and .status.
+    Safe to call at any time — no WASAPI conflict possible.
     """
     global _oneshot_handles
+    # Trim dead handles
+    _oneshot_handles = [h for h in _oneshot_handles if h.status]
     try:
-        import aud
-        device = _pb_get_device()
-        sound  = aud.Sound.file(filepath)
-        handle = device.play(sound)
-        # Keep a reference — trim dead handles while we're here
-        _oneshot_handles = [h for h in _oneshot_handles if h.status]
+        import sys, subprocess
+        if sys.platform == 'win32':
+            # PowerShell Media.SoundPlayer — plays WAV, exits when done
+            cmd = [
+                'powershell', '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+                f'(New-Object Media.SoundPlayer "{filepath}").PlaySync()'
+            ]
+        elif sys.platform == 'darwin':
+            cmd = ['afplay', filepath]
+        else:
+            cmd = ['aplay', filepath]
+        proc   = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
+        handle = _OneshotHandle(proc)
         _oneshot_handles.append(handle)
+        print(f"[AUDIO] play_oneshot: {filepath}")
         return handle
     except Exception as e:
         print(f"[AUDIO] play_oneshot error: {e}")
-        return None
+        return _OneshotHandle(None)
 
 
 def stop_all_oneshots():
     """Stop any currently playing one-shot previews."""
     global _oneshot_handles
     for h in _oneshot_handles:
-        try: h.stop()
-        except Exception: pass
+        h.stop()
     _oneshot_handles = []
 
 
@@ -460,8 +484,8 @@ def _pb_build_channel_sound(channel_idx, start_seconds):
     # Respect preview range if active
     seq_start_s = (scene.frame_preview_start if scene.use_preview_range
                    else scene.frame_start) / fps
-    seq_end_s   = (scene.frame_preview_end if scene.use_preview_range
-                   else scene.frame_end) / fps
+    seq_end_s   = ((scene.frame_preview_end if scene.use_preview_range
+                    else scene.frame_end) + 1) / fps
 
     tracks = getattr(scene, "pb_sync_tracks", [])
     track  = tracks[channel_idx] if channel_idx < len(tracks) else None
@@ -792,8 +816,8 @@ def _pb_reprocess_channel(channel_idx):
     # which drifts after loops and repeated reprocesses
     seq_start_s = ((scene.frame_preview_start if scene.use_preview_range
                     else scene.frame_start) / fps)
-    seq_end_s   = ((scene.frame_preview_end   if scene.use_preview_range
-                    else scene.frame_end)   / fps)
+    seq_end_s   = (((scene.frame_preview_end   if scene.use_preview_range
+                    else scene.frame_end) + 1) / fps)
     current_pos = max(seq_start_s,
                       min(seq_end_s - 0.1,
                           scene.frame_current / fps))
@@ -1023,7 +1047,10 @@ def _hj_build_segment_playlist(channel_idx, scene):
 
     fps       = scene.render.fps / scene.render.fps_base
     seq_start = scene.frame_start / fps
-    seq_end   = scene.frame_end   / fps
+    # Add one full frame to seq_end so the last frame plays completely.
+    # scene.frame_end is the last frame NUMBER — audio clamped to exactly
+    # frame_end/fps cuts off the final frame before it finishes playing.
+    seq_end   = (scene.frame_end + 1) / fps
 
     strips = sorted(
         [s for s in scene.sequence_editor.sequences_all
@@ -1203,6 +1230,13 @@ def _hj_load_all_channels(scene):
     if not hj: return
 
     if not scene or not scene.sequence_editor: return
+
+    # Clear ALL channels first — this is critical.
+    # Without this, deleting a strip from the VSE leaves the engine playing
+    # the old cached playlist for that channel on the next play-start,
+    # because _hj_build_segment_playlist only iterates channels that still
+    # have strips and never explicitly clears channels that no longer do.
+    hj.clear_all_channels()
 
     channels = set()
     for s in scene.sequence_editor.sequences_all:

@@ -367,9 +367,51 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     card_name_w = left_w - 8*scale - prev_btn_w - 4*scale
     max_vis  = max(1, int((hint_y - add_sep_y - 6*scale) / (card_h + card_gap)))
 
+    # Scroll offset
+    scroll_ofs = int(rack.get('rvc_scroll', 0))
+    scroll_ofs = max(0, min(scroll_ofs, max(0, len(voices) - 1)))
+
+    # ▲/▼ scroll arrows
+    arr_sz = max(12*scale, fs_lbl + 4*scale)
+    arr_x  = lx + left_w - arr_sz*2 - 6*scale
+    arr_y  = hint_y - 1*scale
+    can_up = scroll_ofs > 0
+    can_dn = len(voices) > 0 and (scroll_ofs + max_vis) < len(voices)
+
+    # ▲ up arrow
+    up_col = _ACCENT if can_up else _ACCENT_DIM
+    _draw_rect(arr_x, arr_y, arr_sz, arr_sz, _PANEL)
+    _up_tri = [
+        (arr_x + arr_sz*0.50, arr_y + arr_sz*0.72),
+        (arr_x + arr_sz*0.20, arr_y + arr_sz*0.28),
+        (arr_x + arr_sz*0.80, arr_y + arr_sz*0.28),
+    ]
+    _ub = batch_for_shader(sh, "TRI_FAN", {"pos": _up_tri})
+    sh.bind(); sh.uniform_float("color", up_col); _ub.draw(sh)
+
+    # ▼ down arrow
+    dn_x   = arr_x + arr_sz + 2*scale
+    dn_col = _ACCENT if can_dn else _ACCENT_DIM
+    _draw_rect(dn_x, arr_y, arr_sz, arr_sz, _PANEL)
+    _dn_tri = [
+        (dn_x + arr_sz*0.50, arr_y + arr_sz*0.28),
+        (dn_x + arr_sz*0.20, arr_y + arr_sz*0.72),
+        (dn_x + arr_sz*0.80, arr_y + arr_sz*0.72),
+    ]
+    _db = batch_for_shader(sh, "TRI_FAN", {"pos": _dn_tri})
+    sh.bind(); sh.uniform_float("color", dn_col); _db.draw(sh)
+
+    # Stash arrow hit boxes and max_vis for hit test
+    try:
+        rack['rvc_arr_up']  = (arr_x, arr_y, arr_sz, arr_sz)
+        rack['rvc_arr_dn']  = (dn_x,  arr_y, arr_sz, arr_sz)
+        rack['rvc_max_vis'] = max_vis
+    except Exception:
+        pass
+
     if voices:
         for slot in range(max_vis):
-            vi = slot
+            vi = slot + scroll_ofs
             if vi >= len(voices): break
             name, wav_path = voices[vi]
             cy_card = hint_y - fs_lbl - 4*scale - slot*(card_h+card_gap) - card_h
@@ -533,7 +575,20 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     conv_x  = cx + 4*scale
     prev_x  = conv_x + conv_w + 4*scale
 
-    c_lbl = "CONVERTING..." if status == _PROCESSING else "CONVERT"
+    # Label reflects state: GENERATING during convert, GENERATE when ready,
+    # or PLACE (if preview output exists and just needs placing on timeline)
+    _has_out_gen = False
+    try:
+        from core.ai_knnvc import has_rack_output as _hro
+        _has_out_gen = _hro(ai_idx)
+    except Exception:
+        pass
+    if status == _PROCESSING:
+        c_lbl = "GENERATING..."
+    elif _has_out_gen:
+        c_lbl = "PLACE ON TRACK"
+    else:
+        c_lbl = "GENERATE"
     c_bg  = (0.08,0.02,0.12,1.0) if status == _PROCESSING else (0.10,0.03,0.15,1.0)
     _draw_rect(conv_x, btn_y2, conv_w, btn_h2, c_bg)
     evs = [(conv_x,btn_y2),(conv_x+conv_w,btn_y2),(conv_x+conv_w,btn_y2+btn_h2),
@@ -580,11 +635,12 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     oc_x   = cx + 5*scale + lbl_tw + arr_w + 2*scale
 
     _draw_rect(cx+5*scale+lbl_tw, row2_y, arr_w, row2_h, _PANEL)
-    mv_l = [(cx+5*scale+lbl_tw+arr_w*0.7, row2_y+row2_h*0.2),
-            (cx+5*scale+lbl_tw+arr_w*0.3, row2_y+row2_h*0.5),
-            (cx+5*scale+lbl_tw+arr_w*0.7, row2_y+row2_h*0.8)]
-    al = batch_for_shader(sh,"LINE_STRIP",{"pos":mv_l})
-    sh.bind(); sh.uniform_float("color",_ACCENT_DIM); al.draw(sh)
+    _ax = cx+5*scale+lbl_tw
+    mv_l = [(_ax+arr_w*0.65, row2_y+row2_h*0.18),
+            (_ax+arr_w*0.28, row2_y+row2_h*0.50),
+            (_ax+arr_w*0.65, row2_y+row2_h*0.82)]
+    al = batch_for_shader(sh,"TRI_FAN",{"pos":mv_l})
+    sh.bind(); sh.uniform_float("color",_ACCENT); al.draw(sh)
 
     _draw_rect(oc_x, row2_y, oc_s, row2_h, _PANEL)
     ocvs = [(oc_x,row2_y),(oc_x+oc_s,row2_y),(oc_x+oc_s,row2_y+row2_h),
@@ -597,11 +653,11 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
 
     plus_x = oc_x + oc_s + 2*scale
     _draw_rect(plus_x, row2_y, arr_w, row2_h, _PANEL)
-    mv_r = [(plus_x+arr_w*0.3, row2_y+row2_h*0.2),
-            (plus_x+arr_w*0.7, row2_y+row2_h*0.5),
-            (plus_x+arr_w*0.3, row2_y+row2_h*0.8)]
-    ar = batch_for_shader(sh,"LINE_STRIP",{"pos":mv_r})
-    sh.bind(); sh.uniform_float("color",_ACCENT_DIM); ar.draw(sh)
+    mv_r = [(plus_x+arr_w*0.35, row2_y+row2_h*0.18),
+            (plus_x+arr_w*0.72, row2_y+row2_h*0.50),
+            (plus_x+arr_w*0.35, row2_y+row2_h*0.82)]
+    ar = batch_for_shader(sh,"TRI_FAN",{"pos":mv_r})
+    sh.bind(); sh.uniform_float("color",_ACCENT); ar.draw(sh)
 
     # ── RIGHT PANEL: knobs ────────────────────────────────────────────────────
     rx2 = right_x; ry2 = work_bot; rh2 = work_h

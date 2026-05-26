@@ -65,7 +65,8 @@ STEM_ICONS = {
     "guitar": "GTR",
 }
 STEM_BITS = {"drums": 0, "bass": 1, "vocals": 2, "other": 3, "piano": 4, "guitar": 5}
-STEM_CH_PROPS = {"drums": "p4", "bass": "p5", "vocals": "p6", "other": "p7"}
+STEM_CH_PROPS = {"drums": "p4", "bass": "p5", "vocals": "p6", "other": "p7",
+                 "piano": "p8", "guitar": "p9"}
 
 # ---------------------------------------------------------------------------
 # Dependency check — runs once in background, cached for session
@@ -228,6 +229,25 @@ def _draw_demucs_body(rx, ry, rw, rh, rack, ai_idx, scale):
         try: rack['dm_setup_btn'] = (bx, by, bw, bh)
         except Exception: pass
         return
+
+    # One-time init guard — runs exactly once per rack instance.
+    # PB_AIRackSettings shares FloatProperty slots across all AI rack types,
+    # so a new Demucs rack inherits whatever defaults Whisper left behind:
+    #   p4=40 (font size), p6=2 (position), p7=1 (VAD on)
+    # These look like valid channel numbers 1 and 2, so a simple range check
+    # isn't enough. Instead we use a custom property flag 'dm_ch_init' that
+    # is set to True once we've explicitly zeroed all channel output props.
+    # After that the user's manual channel choices are never touched.
+    if not rack.get('dm_ch_init'):
+        for _prop in ("p4", "p5", "p6", "p7", "p8", "p9"):
+            try:
+                setattr(rack, _prop, 0.0)
+            except Exception:
+                pass
+        try:
+            rack['dm_ch_init'] = True
+        except Exception:
+            pass
     model_idx  = max(0, min(int(getattr(rack, "p0", 1.0)), len(MODELS) - 1))
     model      = MODELS[model_idx]
     preview    = float(getattr(rack, "p1", 0.0)) > 0.5

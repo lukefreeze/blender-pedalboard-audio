@@ -49,6 +49,8 @@ struct HijackerChannel {
     FILE*  file_handle     = nullptr;
     int    file_sr         = 44100;
     int    file_nch        = 2;
+    int    file_bps        = 16;    // bits per sample: 16, 24, or 32
+    int    file_fmt_tag    = 1;     // 1=PCM, 3=IEEE float
     long   file_data_start = 0;    // byte offset of PCM data in WAV
     long   file_n_frames   = 0;    // total frames in file
 

@@ -520,18 +520,61 @@ def _apply_finish(ai_idx, info):
                         print(f"[PIPER] auto-play failed: {e}")
                         rack.ai_status = "READY"
                 else:
-                    rack.ai_output_path = output_wav
-                    _piper_output_path[ai_idx] = output_wav
-                    _place_output_in_vse(scene, ai_idx, output_wav,
-                                         target_ch_idx, rack)
+                    persistent = _place_output_in_vse(scene, ai_idx, output_wav,
+                                                       target_ch_idx, rack)
+                    rack.ai_output_path        = persistent or output_wav
+                    _piper_output_path[ai_idx] = persistent or output_wav
 
     except Exception as e:
         print(f"[PIPER] _apply_finish error: {e}")
 
 
+def _get_persistent_output_dir():
+    """Return a persistent output folder next to the saved .blend file.
+
+    Falls back to a 'piper_output' subfolder inside the addon directory if
+    the project has not been saved yet, so the file is never in the OS temp dir.
+    """
+    blend_path = bpy.data.filepath
+    if blend_path:
+        project_dir = os.path.dirname(os.path.abspath(blend_path))
+        out_dir = os.path.join(project_dir, "piper_output")
+    else:
+        out_dir = os.path.join(_ADDON_DIR, "piper_output")
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def _persist_output(tmp_wav, ai_idx):
+    """Copy *tmp_wav* from the temp dir into the project's piper_output folder.
+
+    Returns the new persistent path, or *tmp_wav* unchanged if the copy fails.
+    Uses a timestamped filename so repeated generates never overwrite each other.
+    """
+    import shutil, time as _t
+    try:
+        out_dir   = _get_persistent_output_dir()
+        timestamp = _t.strftime("%Y%m%d_%H%M%S")
+        dest_name = f"piper_rack{ai_idx}_{timestamp}.wav"
+        dest_path = os.path.join(out_dir, dest_name)
+        shutil.copy2(tmp_wav, dest_path)
+        print(f"[PIPER] output saved to project folder: {dest_path}")
+        return dest_path
+    except Exception as e:
+        print(f"[PIPER] WARNING: could not copy to project folder ({e}), "
+              f"using temp path — file may be lost on reboot")
+        return tmp_wav
+
+
 def _place_output_in_vse(scene, ai_idx, output_wav, target_ch_idx, rack):
     """Place the generated WAV as a new strip on the target VSE channel."""
     try:
+        # Copy to project folder so the file is not lost when the OS clears temp.
+        # _persist_output returns the new path; falls back to output_wav on error.
+        persistent_wav = _persist_output(output_wav, ai_idx)
+        # Update the module-level path so has_output / status display stays accurate
+        _piper_output_path[ai_idx] = persistent_wav
+
         if not scene.sequence_editor:
             scene.sequence_editor_create()
         seq = scene.sequence_editor
@@ -555,7 +598,7 @@ def _place_output_in_vse(scene, ai_idx, output_wav, target_ch_idx, rack):
 
         new_strip = seq.sequences.new_sound(
             name        = strip_name,
-            filepath    = output_wav,
+            filepath    = persistent_wav,
             channel     = target_ch,
             frame_start = place_frame,
         )
@@ -572,7 +615,10 @@ def _place_output_in_vse(scene, ai_idx, output_wav, target_ch_idx, rack):
                 if area.type in ('SEQUENCE_EDITOR', 'NODE_EDITOR'):
                     area.tag_redraw()
 
+        return persistent_wav
+
     except Exception as e:
         import traceback
         print(f"[PIPER] VSE placement failed: {e}")
         traceback.print_exc()
+        return None

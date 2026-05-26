@@ -23,13 +23,52 @@ import threading
 import time
 import bpy
 
-_active_jobs      = {}   # ai_idx -> Thread
-_cancel_flags     = {}   # ai_idx -> bool
-_pending_finish   = {}   # ai_idx -> info dict
-_rack_output_path = {}   # ai_idx -> output wav path (current session only)
-_rack_preview_state = {} # ai_idx -> aud.Handle
+_active_jobs        = {}   # ai_idx -> Thread
+_cancel_flags       = {}   # ai_idx -> bool
+_pending_finish     = {}   # ai_idx -> info dict
+_rack_output_path   = {}   # ai_idx -> persisted output wav path
+_rack_preview_path  = {}   # ai_idx -> temp preview wav path (preview_only runs)
+_rack_preview_state = {}   # ai_idx -> aud.Handle
 
 _PYTHON_CMD = None
+
+
+def _get_persistent_output_dir():
+    """Return a persistent output folder next to the saved .blend file.
+
+    Falls back to a 'voicefixer_output' subfolder inside the addon directory
+    if the project has not been saved yet — never the OS temp dir.
+    """
+    blend_path = bpy.data.filepath
+    if blend_path:
+        project_dir = os.path.dirname(os.path.abspath(blend_path))
+        out_dir = os.path.join(project_dir, "voicefixer_output")
+    else:
+        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out_dir = os.path.join(addon_dir, "voicefixer_output")
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def _persist_output(tmp_wav, ai_idx):
+    """Copy *tmp_wav* into the project's voicefixer_output folder.
+
+    Returns the new persistent path, or *tmp_wav* if the copy fails.
+    Timestamped filename prevents overwriting previous outputs.
+    """
+    import shutil
+    try:
+        out_dir   = _get_persistent_output_dir()
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        dest_name = f"voicefixer_rack{ai_idx}_{timestamp}.wav"
+        dest_path = os.path.join(out_dir, dest_name)
+        shutil.copy2(tmp_wav, dest_path)
+        print(f"[VOICEFIXER] output saved to project folder: {dest_path}")
+        return dest_path
+    except Exception as e:
+        print(f"[VOICEFIXER] WARNING: could not copy to project folder ({e}), "
+              f"using temp path — file may be lost on reboot")
+        return tmp_wav
 
 
 def _find_system_python():
@@ -59,12 +98,25 @@ def is_processing(ai_idx):
 
 
 def set_rack_output(ai_idx, wav_path):
+    """Record a persisted output path. Called after _persist_output."""
     _rack_output_path[ai_idx] = wav_path
     _rack_preview_state.pop(ai_idx, None)
 
 
+def set_rack_preview(ai_idx, wav_path):
+    """Record the temp path from a preview_only run."""
+    _rack_preview_path[ai_idx] = wav_path
+
+
 def has_rack_output(ai_idx):
-    path = _rack_output_path.get(ai_idx)
+    """True if a persisted (or temp preview) output exists for this rack."""
+    path = _rack_output_path.get(ai_idx) or _rack_preview_path.get(ai_idx)
+    return bool(path and os.path.exists(path))
+
+
+def has_preview_output(ai_idx):
+    """True if a preview-only run has produced audio that hasn't been placed yet."""
+    path = _rack_preview_path.get(ai_idx)
     return bool(path and os.path.exists(path))
 
 
@@ -79,7 +131,16 @@ def is_rack_previewing(ai_idx):
 
 
 def preview_voicefixer(ai_idx, context):
-    """Toggle playback of the last VoiceFixer output."""
+    """Toggle preview of VoiceFixer output.
+
+    Behaviour:
+    - If already previewing → stop.
+    - If already processing → do nothing (will auto-play on finish).
+    - If preview output exists from a previous preview run → play it.
+    - Otherwise → run processing with preview_only=True; auto-plays on finish,
+      does NOT place on VSE timeline.
+    """
+    # Stop if already playing
     if is_rack_previewing(ai_idx):
         handle = _rack_preview_state.get(ai_idx)
         if handle:
@@ -89,17 +150,26 @@ def preview_voicefixer(ai_idx, context):
         print(f"[VOICEFIXER] preview stopped: rack={ai_idx}")
         return
 
-    wav_path = _rack_output_path.get(ai_idx)
-    if not wav_path or not os.path.exists(wav_path):
-        print(f"[VOICEFIXER] preview: no output for rack {ai_idx} — run ENHANCE first")
+    # Already processing — do nothing, _apply_finish will auto-play
+    if is_processing(ai_idx):
+        print(f"[VOICEFIXER] preview: processing already running, waiting")
         return
-    try:
-        from core.audio import play_oneshot
-        handle = play_oneshot(wav_path)
-        _rack_preview_state[ai_idx] = handle
-        print(f"[VOICEFIXER] preview: {os.path.basename(wav_path)}")
-    except Exception as e:
-        print(f"[VOICEFIXER] preview error: {e}")
+
+    # Play existing preview output if settings haven't changed
+    wav_path = _rack_preview_path.get(ai_idx)
+    if wav_path and os.path.exists(wav_path):
+        try:
+            from core.audio import play_oneshot
+            handle = play_oneshot(wav_path)
+            _rack_preview_state[ai_idx] = handle
+            print(f"[VOICEFIXER] preview: replaying {os.path.basename(wav_path)}")
+        except Exception as e:
+            print(f"[VOICEFIXER] preview error: {e}")
+        return
+
+    # No output yet — run processing in preview_only mode
+    print(f"[VOICEFIXER] preview: no output yet, starting processing (preview only)")
+    enhance_voicefixer(ai_idx, context, preview_only=True)
 
 
 def _redraw_timer():
@@ -121,25 +191,48 @@ def _apply_finish(ai_idx, info):
         rack.ai_status = info["status"]
 
         if info["status"] == "DONE" and info.get("output_path"):
-            output_path = info["output_path"]
-            seq = scene.sequence_editor
-            if not seq:
-                scene.sequence_editor_create()
+            output_path  = info["output_path"]
+            preview_only = info.get("preview_only", False)
+
+            if preview_only:
+                # Store temp path so PREVIEW button can replay it and
+                # ENHANCE button can persist + place it without re-processing.
+                set_rack_preview(ai_idx, output_path)
+                rack.ai_status = "DONE"
+                # Auto-play so the user hears the result immediately
+                try:
+                    from core.audio import play_oneshot
+                    handle = play_oneshot(output_path)
+                    _rack_preview_state[ai_idx] = handle
+                    print(f"[VOICEFIXER] rack {ai_idx}: preview ready, auto-playing")
+                except Exception as pe:
+                    print(f"[VOICEFIXER] auto-play error: {pe}")
+            else:
+                # Full enhance: persist to project folder then place on VSE
+                persistent_path = _persist_output(output_path, ai_idx)
+                set_rack_output(ai_idx, persistent_path)
+                # Clear preview path — the persisted file supersedes it
+                _rack_preview_path.pop(ai_idx, None)
+
                 seq = scene.sequence_editor
+                if not seq:
+                    scene.sequence_editor_create()
+                    seq = scene.sequence_editor
 
-            active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
-            target_ch  = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
-            target_ch  = max(1, min(9, target_ch))
+                active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
+                target_ch  = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
+                target_ch  = max(1, min(9, target_ch))
 
-            place_frame = info.get("strip_frame_start", scene.frame_current)
-            strip_name  = f"VF_{ai_idx}_{int(time.time()) % 100000}"
-            seq.sequences.new_sound(
-                name=strip_name,
-                filepath=output_path,
-                channel=target_ch,
-                frame_start=place_frame,
-            )
-            print(f"[VOICEFIXER] placed strip '{strip_name}' on ch{target_ch} at frame {place_frame}")
+                place_frame = info.get("strip_frame_start", scene.frame_current)
+                strip_name  = f"VF_{ai_idx}_{int(time.time()) % 100000}"
+                seq.sequences.new_sound(
+                    name=strip_name,
+                    filepath=persistent_path,
+                    channel=target_ch,
+                    frame_start=place_frame,
+                )
+                print(f"[VOICEFIXER] placed strip '{strip_name}' on ch{target_ch} "
+                      f"at frame {place_frame}")
 
             for window in bpy.context.window_manager.windows:
                 for area in window.screen.areas:
@@ -150,8 +243,13 @@ def _apply_finish(ai_idx, info):
         import traceback; traceback.print_exc()
 
 
-def enhance_voicefixer(ai_idx, context):
-    """Start VoiceFixer restoration in a background thread."""
+def enhance_voicefixer(ai_idx, context, preview_only=False):
+    """Start VoiceFixer restoration in a background thread.
+
+    preview_only=True  — process audio, auto-play result, do NOT place on VSE.
+    preview_only=False — process audio (or reuse existing preview output),
+                         persist to project folder, place on VSE.
+    """
     if is_processing(ai_idx):
         print(f"[VOICEFIXER] rack {ai_idx} already processing")
         return
@@ -163,7 +261,42 @@ def enhance_voicefixer(ai_idx, context):
     if ai_idx >= len(ai_racks):
         return
 
-    rack       = ai_racks[ai_idx]
+    rack = ai_racks[ai_idx]
+
+    # ── ENHANCE fast-path: reuse existing preview output ─────────────────────
+    # If the user already clicked PREVIEW and the output is still on disk,
+    # skip re-processing — just persist and place immediately.
+    if not preview_only:
+        preview_wav = _rack_preview_path.get(ai_idx)
+        if preview_wav and os.path.exists(preview_wav):
+            print(f"[VOICEFIXER] enhance: reusing preview output, persisting + placing")
+            persistent_path = _persist_output(preview_wav, ai_idx)
+            set_rack_output(ai_idx, persistent_path)
+            _rack_preview_path.pop(ai_idx, None)
+
+            # Place on VSE
+            seq = scene.sequence_editor
+            if not seq:
+                scene.sequence_editor_create()
+                seq = scene.sequence_editor
+
+            active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
+            target_ch  = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
+            target_ch  = max(1, min(9, target_ch))
+            place_frame = scene.frame_current
+            strip_name  = f"VF_{ai_idx}_{int(time.time()) % 100000}"
+            seq.sequences.new_sound(
+                name=strip_name, filepath=persistent_path,
+                channel=target_ch, frame_start=place_frame)
+            rack.ai_status = "DONE"
+            print(f"[VOICEFIXER] placed '{strip_name}' on ch{target_ch} at frame {place_frame}")
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type in ('SEQUENCE_EDITOR', 'NODE_EDITOR'):
+                        area.tag_redraw()
+            return
+
+    # ── Full processing path ──────────────────────────────────────────────────
     python_cmd = _find_system_python()
     if not python_cmd:
         rack.ai_status = "ERROR"
@@ -213,7 +346,11 @@ def enhance_voicefixer(ai_idx, context):
     tmp_dir    = tempfile.gettempdir()
     # Export trimmed region to a temp WAV first
     src_wav    = os.path.join(tmp_dir, f"pb_vf_{ai_idx}_src_{int(time.time())}.wav")
-    output_wav = os.path.join(tmp_dir, f"pb_vf_{ai_idx}_{int(time.time())}.wav")
+    # Use a distinct filename for preview vs full so they don't collide
+    if preview_only:
+        output_wav = os.path.join(tmp_dir, f"pb_vf_{ai_idx}_preview.wav")
+    else:
+        output_wav = os.path.join(tmp_dir, f"pb_vf_{ai_idx}_{int(time.time())}.wav")
     scene_name = scene.name
 
     # Use Blender's Render Audio (sound.mixdown) — same as File > Render Audio.
@@ -274,26 +411,29 @@ def enhance_voicefixer(ai_idx, context):
                     except Exception: pass
                 elif line.startswith("DONE:"):
                     out = line.split(":", 1)[1].strip()
-                    set_rack_output(ai_idx, out)
                     _pending_finish[ai_idx] = {
                         "status": "DONE", "output_path": out,
                         "scene_name": scene_name,
-                        "strip_frame_start": strip_frame_start}
+                        "strip_frame_start": strip_frame_start,
+                        "preview_only": preview_only}
                 elif line.startswith("ERROR:"):
                     print(f"[VOICEFIXER] {line}")
                     _pending_finish[ai_idx] = {
-                        "status": "ERROR", "output_path": None, "scene_name": scene_name}
+                        "status": "ERROR", "output_path": None,
+                        "scene_name": scene_name, "preview_only": preview_only}
 
             proc.wait()
             if proc.returncode != 0 and ai_idx not in _pending_finish:
                 stderr = proc.stderr.read()
                 print(f"[VOICEFIXER] runner failed: {stderr}")
                 _pending_finish[ai_idx] = {
-                    "status": "ERROR", "output_path": None, "scene_name": scene_name}
+                    "status": "ERROR", "output_path": None,
+                    "scene_name": scene_name, "preview_only": preview_only}
         except Exception as e:
             print(f"[VOICEFIXER] worker error: {e}")
             _pending_finish[ai_idx] = {
-                "status": "ERROR", "output_path": None, "scene_name": scene_name}
+                "status": "ERROR", "output_path": None,
+                "scene_name": scene_name, "preview_only": preview_only}
 
     t = threading.Thread(target=_worker, name=f"VoiceFixer_{ai_idx}", daemon=True)
     _active_jobs[ai_idx] = t
@@ -301,4 +441,5 @@ def enhance_voicefixer(ai_idx, context):
 
     if not bpy.app.timers.is_registered(_redraw_timer):
         bpy.app.timers.register(_redraw_timer, first_interval=0.25)
-    print(f"[VOICEFIXER] rack {ai_idx} enhancement started (mode {mode})")
+    print(f"[VOICEFIXER] rack {ai_idx} {'preview' if preview_only else 'enhancement'} "
+          f"started (mode {mode})")

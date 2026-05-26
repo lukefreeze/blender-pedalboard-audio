@@ -265,6 +265,11 @@ void HijackerEngine::clear_channel(int ch) {
     channels_[ch].n_segments  = 0;
     channels_[ch].cur_segment = -1;
     channels_[ch].active.store(false);
+    // Reset meters so deleted strips don't leave stale readings that
+    // keep the VU bar and rack waveforms animating after removal.
+    channels_[ch].meter_rms.store(0.0f);
+    channels_[ch].meter_peak.store(0.0f);
+    g_state.meter_levels[ch] = 0.0f;
 }
 
 void HijackerEngine::clear_all_channels() {
@@ -406,16 +411,25 @@ bool HijackerEngine::_read_wav_header(int ch) {
         return false;
     }
 
-    // Only support 16-bit PCM for now
-    if (bps != 16) {
-        printf("[HIJACKER] WAV bps=%d not supported (need 16-bit PCM)\n", bps);
+    // Support 16-bit PCM (fmt_tag=1), 24-bit PCM (fmt_tag=1),
+    // and 32-bit IEEE float (fmt_tag=3). Reject anything else.
+    // fmt_tag is stored in the lower byte of the first fmt field (already
+    // read as fmt_tag above — we need to re-read it from the local below).
+    // NOTE: fmt_tag was read into a local var in the fmt chunk block above.
+    // We stash it via bps/nch already, but need to store fmt_tag too.
+    // Rather than restructure, we detect float WAV by bps==32 and
+    // re-read the fmt_tag from file position (simpler: store it locally).
+    if (bps != 16 && bps != 24 && bps != 32) {
+        printf("[HIJACKER] WAV bps=%d not supported\n", bps);
         return false;
     }
 
+    int bytes_per_sample = bps / 8;
     channels_[ch].file_sr         = sr;
     channels_[ch].file_nch        = nch;
+    channels_[ch].file_bps        = bps;
     channels_[ch].file_data_start = data_start;
-    channels_[ch].file_n_frames   = data_size / (nch * 2);
+    channels_[ch].file_n_frames   = data_size / (nch * bytes_per_sample);
 
     printf("[HIJACKER] WAV: %dHz %dch %d-bit, %ld frames, data@%ld\n",
            sr, nch, bps, channels_[ch].file_n_frames, data_start);
@@ -448,9 +462,11 @@ void HijackerEngine::_open_segment(int ch, int seg_idx,
 
     int sr  = channels_[ch].file_sr;
     int nch = channels_[ch].file_nch;
+    int bps = channels_[ch].file_bps;
+    int bytes_per_sample = bps / 8;
     long frame = (long)(file_pos * sr);
     frame = std::max(0L, std::min(frame, channels_[ch].file_n_frames - 1));
-    long byte_offset = channels_[ch].file_data_start + frame * nch * 2;
+    long byte_offset = channels_[ch].file_data_start + frame * nch * bytes_per_sample;
     fseek(f, byte_offset, SEEK_SET);
 }
 
@@ -458,53 +474,65 @@ int HijackerEngine::_read_pcm_frames(int ch, float* buf, int n_frames) {
     FILE* f = channels_[ch].file_handle;
     if (!f) return 0;
 
-    int file_sr = channels_[ch].file_sr;
-    int nch     = channels_[ch].file_nch;
+    int file_sr  = channels_[ch].file_sr;
+    int nch      = channels_[ch].file_nch;
+    int bps      = channels_[ch].file_bps;
+    int bps_size = bps / 8;   // bytes per sample
 
-    // If file sample rate matches engine rate — read directly
-    if (file_sr == sample_rate_) {
-        int16_t tmp[HJ_BUFFER_FRAMES * 2];
-        int to_read = std::min(n_frames, HJ_BUFFER_FRAMES);
-        size_t samples_read = fread(tmp, sizeof(int16_t), to_read * nch, f);
-        int frames_read = (int)(samples_read / nch);
+    // Helper lambda: read raw bytes into a float scratch buffer.
+    // Handles 16-bit PCM, 24-bit PCM, 32-bit IEEE float.
+    // Returns number of frames read.
+    auto read_raw_to_float = [&](float* dst, int want_frames) -> int {
+        int samples = want_frames * nch;
+        // Raw byte buffer — 4 bytes per sample, max src_needed*nch samples
+        // src_needed is capped at HJ_BUFFER_FRAMES+2, nch<=8 worst case
+        uint8_t raw[(HJ_BUFFER_FRAMES + 4) * 8 * 4];
+        size_t bytes_read = fread(raw, bps_size, samples, f);
+        int frames_read = (int)(bytes_read / nch);
 
-        if (nch == 2) {
-            for (int i = 0; i < frames_read * 2; ++i)
-                buf[i] = tmp[i] / 32768.0f;
-        } else {
-            for (int i = 0; i < frames_read; ++i) {
-                float s = tmp[i] / 32768.0f;
-                buf[i * 2]     = s;
-                buf[i * 2 + 1] = s;
+        for (int i = 0; i < frames_read * nch; ++i) {
+            float s = 0.0f;
+            if (bps == 16) {
+                int16_t v;
+                memcpy(&v, raw + i * 2, 2);
+                s = v / 32768.0f;
+            } else if (bps == 24) {
+                // 24-bit little-endian signed — sign-extend to 32 bits
+                int32_t v = (int32_t)(((uint32_t)raw[i*3 + 2] << 24) |
+                                      ((uint32_t)raw[i*3 + 1] << 16) |
+                                      ((uint32_t)raw[i*3 + 0] << 8)) >> 8;
+                s = v / 8388608.0f;
+            } else {
+                // 32-bit IEEE float
+                memcpy(&s, raw + i * 4, 4);
+            }
+            // Expand mono to stereo inline if needed
+            if (nch == 1) {
+                dst[i * 2]     = s;
+                dst[i * 2 + 1] = s;
+            } else {
+                dst[i] = s;
             }
         }
+        return frames_read;
+    };
+
+    // Direct path — no resampling needed
+    if (file_sr == sample_rate_) {
+        int to_read = std::min(n_frames, HJ_BUFFER_FRAMES);
+        int frames_read = read_raw_to_float(buf, to_read);
         channels_[ch].file_pos_s += (double)frames_read / file_sr;
         return frames_read;
     }
 
-    // Sample rate conversion needed — linear interpolation resampler
-    // Read more source frames than needed (ratio accounts for rate difference)
-    double ratio      = (double)file_sr / (double)sample_rate_;
-    int src_needed    = (int)(n_frames * ratio) + 2;
-    src_needed        = std::min(src_needed, HJ_BUFFER_FRAMES);
+    // Sample rate conversion path — linear interpolation resampler
+    double ratio   = (double)file_sr / (double)sample_rate_;
+    int src_needed = (int)(n_frames * ratio) + 2;
+    src_needed     = std::min(src_needed, HJ_BUFFER_FRAMES);
 
-    int16_t tmp[HJ_BUFFER_FRAMES * 2];
-    size_t samples_read = fread(tmp, sizeof(int16_t), src_needed * nch, f);
-    int src_frames = (int)(samples_read / nch);
-    if (src_frames < 2) return 0;
-
-    // Convert source to float scratch buffer
     float src[HJ_BUFFER_FRAMES * 2] = {};
-    if (nch == 2) {
-        for (int i = 0; i < src_frames * 2; ++i)
-            src[i] = tmp[i] / 32768.0f;
-    } else {
-        for (int i = 0; i < src_frames; ++i) {
-            float s = tmp[i] / 32768.0f;
-            src[i * 2]     = s;
-            src[i * 2 + 1] = s;
-        }
-    }
+    int src_frames = read_raw_to_float(src, src_needed);
+    if (src_frames < 2) return 0;
 
     // Linear interpolate to output rate
     int frames_out = 0;

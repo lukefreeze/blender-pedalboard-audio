@@ -51,24 +51,28 @@ STEM_LABELS = {
     "guitar": "Guitar",
 }
 STEM_BITS = {"drums": 0, "bass": 1, "vocals": 2, "other": 3, "piano": 4, "guitar": 5}
-STEM_CH_PROPS = {"drums": "p4", "bass": "p5", "vocals": "p6", "other": "p7"}
+STEM_CH_PROPS = {"drums": "p4", "bass": "p5", "vocals": "p6", "other": "p7",
+                 "piano": "p8", "guitar": "p9"}
 
 
 def _find_system_python():
     global _PYTHON_CMD
     if _PYTHON_CMD:
         return _PYTHON_CMD
-    try:
-        from core.ai_python_finder import find_python_with as _fpw
-        pkg = "demucs"
-        cmd = _fpw(pkg)
-        if cmd:
-            _PYTHON_CMD = cmd
-            print(f"[DEMUCS] system Python: {' '.join(cmd)}")
-            return _PYTHON_CMD
-    except Exception as _e:
-        print(f"[DEMUCS] finder error: {_e}")
+    for cmd in [["py", "-3.12"], ["py", "-3.11"], ["py", "-3.10"],
+                ["python"], ["python3"]]:
+        try:
+            r = subprocess.run(
+                cmd + ["-c", "import demucs; print('ok')"],
+                capture_output=True, timeout=6, text=True)
+            if r.returncode == 0 and "ok" in r.stdout:
+                _PYTHON_CMD = cmd
+                print(f"[DEMUCS] system Python: {' '.join(cmd)}")
+                return _PYTHON_CMD
+        except Exception:
+            continue
     return None
+
 
 def _get_runner_path():
     addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,25 +98,13 @@ def get_stem_channel(rack, stem):
     prop = STEM_CH_PROPS.get(stem)
     if prop:
         return int(getattr(rack, prop, 0.0))
-    # piano/guitar stored in p3 upper bits — reuse ai_output_path as JSON store
-    try:
-        extra = json.loads(getattr(rack, "ai_output_path", "") or "{}")
-        return int(extra.get(f"{stem}_ch", 0))
-    except Exception:
-        return 0
+    return 0
 
 
 def set_stem_channel(rack, stem, ch):
     prop = STEM_CH_PROPS.get(stem)
     if prop:
         setattr(rack, prop, float(ch))
-    else:
-        try:
-            extra = json.loads(getattr(rack, "ai_output_path", "") or "{}")
-        except Exception:
-            extra = {}
-        extra[f"{stem}_ch"] = ch
-        rack.ai_output_path = json.dumps(extra)
 
 
 def _redraw_timer():
@@ -200,15 +192,35 @@ def _apply_finish(ai_idx, info):
             except Exception as e:
                 print(f"[DEMUCS] strip place error for {stem}: {e}")
 
-        # Mute original
+        # Mute original — use the full mixer path so the engine and
+        # pb_sync_tracks.mute are updated, not just the VSE strip visual.
         if mute_orig and placed:
-            for strip in seq.sequences_all:
-                if (strip.type == "SOUND" and strip.sound and
-                        strip.channel == src_ch_idx + 1):
-                    strip.mute = True
-            print(f"[DEMUCS] muted original ch{src_ch_idx + 1}")
+            try:
+                from core.audio import sync_vse_mute
+                tracks = getattr(scene, "pb_sync_tracks", [])
+                if src_ch_idx < len(tracks):
+                    tracks[src_ch_idx].mute = True
+                sync_vse_mute(src_ch_idx, True)
+                print(f"[DEMUCS] muted original ch{src_ch_idx + 1} (engine + VSE)")
+            except Exception as _me:
+                # Fallback: at least set the VSE strip visual
+                for strip in seq.sequences_all:
+                    if (strip.type == "SOUND" and strip.sound and
+                            strip.channel == src_ch_idx + 1):
+                        strip.mute = True
+                print(f"[DEMUCS] mute fallback for ch{src_ch_idx + 1}: {_me}")
 
         print(f"[DEMUCS] rack {ai_idx}: placed {len(placed)} stems")
+
+        # Expand the mixer fader strips to cover the new channels.
+        # Without this, pb_sync_tracks still has only 9 entries and channels
+        # 10+ have no faders until the meter timer auto-detects them.
+        try:
+            from ui.mixer.interaction import _sync_tracks_to_vse
+            _sync_tracks_to_vse(scene, reset_values=False)
+        except Exception as e:
+            print(f"[DEMUCS] track sync error: {e}")
+
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 if area.type in ("SEQUENCE_EDITOR", "NODE_EDITOR"):

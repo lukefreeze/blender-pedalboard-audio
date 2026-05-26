@@ -43,9 +43,10 @@ _reorder_x        = 0.0
 _reorder_y        = 0.0
 
 # AI popup state — for the + ADD AI RACK selector
-_ai_popup_open = False
-_ai_popup_x    = 0.0
-_ai_popup_y    = 0.0
+_ai_popup_open    = False
+_ai_popup_x       = 0.0
+_ai_popup_y       = 0.0
+_ai_popup_group_idx = 0   # which fader group the ADD AI RACK button belongs to
 
 # ---------------------------------------------------------------------------
 # Rack dimensions (in unscaled pixels, multiplied by UI_SCALE at draw time)
@@ -439,6 +440,9 @@ class PB_AIRackSettings(bpy.types.PropertyGroup):
     ai_type:   bpy.props.StringProperty(default="WHISPER")
     enabled:   bpy.props.BoolProperty(default=True)
     collapsed: bpy.props.BoolProperty(default=False)
+    # Which fader group (0=CH1-9, 1=CH10-18, …) this rack belongs to.
+    # Controls which column it appears in and which 9 channels its rail shows.
+    group_idx: bpy.props.IntProperty(default=0)
     # Channel assignment — which channels feed into this AI rack
     ch0:  bpy.props.BoolProperty(default=False)
     ch1:  bpy.props.BoolProperty(default=False)
@@ -572,8 +576,11 @@ def get_rack_channels(rack):
 
 
 def get_ai_rack_channels(rack):
-    """Return list of assigned channel indices for an AI rack."""
-    return [i for i in range(32) if getattr(rack, f'ch{i}', False)]
+    """Return absolute 0-based VSE channel indices assigned to an AI rack.
+    ch0-ch8 are local to the rack's group; absolute = group_idx * 9 + local.
+    """
+    offset = getattr(rack, 'group_idx', 0) * 9
+    return [offset + i for i in range(9) if getattr(rack, f'ch{i}', False)]
 
 
 def get_rack_params(rack):
@@ -3424,13 +3431,17 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
         # AI processing section — drawn below DSP racks for this group
         ai_section_top_y = cur_y - 28*ui_scale
         try:
-            draw_ai_racks(rack_x, ai_section_top_y, ui_scale, group_w_unscaled)
+            draw_ai_racks(rack_x, ai_section_top_y, ui_scale, group_w_unscaled, g)
         except Exception as e:
             print(f"[AI RACKS] draw error: {e}")
 
     # Popup (drawn on top of everything — not group-specific)
     if _popup_open:
         _draw_add_popup(_popup_x, _popup_y, ui_scale)
+
+    # AI rack popup (drawn on top of everything — not group-specific)
+    if _ai_popup_open:
+        _draw_ai_add_popup(_ai_popup_x, _ai_popup_y, ui_scale)
 
     # Reorder dropdown (drawn on top of everything)
     if _reorder_open and _reorder_rack_idx >= 0:
@@ -3494,14 +3505,11 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     """Check if a rack knob was clicked.
     Returns (rack_idx, param_idx) or None.
     Only checks expanded racks — collapsed racks have no knobs.
+    Group-aware: mirrors draw_racks geometry exactly for multi-group layouts.
     """
     import math
     try:
         from Loader import FADER_TRACK_BOTTOM, NUMBOX_H, _send_section_height
-        scene = bpy.context.scene
-        if not scene: return None
-        n_racks_s = len(getattr(scene, "pb_racks", []))
-        send_h    = _send_section_height(n_racks_s, ui_scale)
     except Exception:
         return None
 
@@ -3509,96 +3517,105 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     if not scene: return None
     racks = getattr(scene, "pb_racks", [])
 
-    base_y      = region_height - 150*ui_scale - scroll_y
-    fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
-    rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
+    base_y = region_height - 150*ui_scale - scroll_y
 
-    cur_y  = rack_top_y
-    rack_x = 30*ui_scale + scroll_x
+    # Group geometry — mirrors draw_racks exactly
+    GROUP_STRIP_COUNT = 9
+    group_w_unscaled  = GROUP_STRIP_COUNT * 135 - 15   # 1200px
+    rw                = group_w_unscaled * ui_scale
 
-    # Dynamic rack width
-    nt  = max(9, len(getattr(scene, "pb_sync_tracks", [])))
-    rw  = (nt * 135 - 15) * ui_scale
+    num_tracks = len(getattr(scene, "pb_sync_tracks", []))
+    num_groups = max(1, (num_tracks + 8) // 9)
 
     knob_r = 20 * ui_scale
 
-    for i, rack in enumerate(racks):
-        if rack.collapsed:
-            rh = RACK_COLLAPSED_H * ui_scale
-            cur_y -= rh + RACK_GAP * ui_scale
+    for g in range(num_groups):
+        rack_x = (30 + g * (group_w_unscaled + 15)) * ui_scale + scroll_x
+
+        # Skip if click is outside this group's X range
+        if not (rack_x <= rx <= rack_x + rw):
             continue
 
+        group_racks = [(i, r) for i, r in enumerate(racks)
+                       if getattr(r, 'group_idx', 0) == g]
 
+        try:
+            send_h = _send_section_height(len(group_racks), ui_scale)
+        except Exception:
+            send_h = 0.0
 
-        rh = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
-              else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
-              else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
-              else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
-              else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
-              else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
-              else RACK_EXPANDED_H) * ui_scale
-        rack_y = cur_y - rh
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
 
-        if rack.effect_type == "COMP_MULTI":
-            # Multiband: hit test gain faders and 3x2 knob grid
-            # Must exactly mirror _draw_multiband_body geometry
-            body_h       = rh - RACK_RAIL_H*ui_scale
-            fader_zone_h = body_h * 0.52
-            ch_btn_w     = 108*ui_scale
-            side_margin  = ch_btn_w / 2
-            content_w    = rw - ch_btn_w - side_margin
-            band_w       = content_w / 4
-            content_x    = rack_x + side_margin / 2
-            fader_area_y = rack_y + 4*ui_scale
-            fader_area_h = fader_zone_h - 8*ui_scale
-            label_h      = 26*ui_scale
-            ctrl_y       = fader_area_y + label_h
-            ctrl_h       = fader_area_h - label_h
-            fader_strip_w = 38*ui_scale
-            knob_area_w  = band_w - fader_strip_w - 8*ui_scale
-            knob_r       = max(min(knob_area_w*0.15, 16*ui_scale), 10*ui_scale)
-            knob_label_h = 22*ui_scale
-            knob_gap     = 6*ui_scale
+        cur_y = rack_top_y
 
-            for band in range(4):
-                bx = content_x + band * band_w
+        for i, rack in group_racks:
+            if rack.collapsed:
+                rh = RACK_COLLAPSED_H * ui_scale
+                cur_y -= rh + RACK_GAP * ui_scale
+                continue
 
-                # Gain fader (p16-p19) — left strip
-                fdr_x = bx + 6*ui_scale
-                fdr_w = 10*ui_scale
-                fdr_h = ctrl_h - 26*ui_scale
-                fdr_y = ctrl_y + 2*ui_scale
-                if fdr_x <= rx <= fdr_x+fdr_w and fdr_y <= ry <= fdr_y+fdr_h:
-                    return (i, band + 16)
+            rh = (RACK_EXPANDED_H_MB  if rack.effect_type == "COMP_MULTI"
+                  else RACK_EXPANDED_H_EQ if rack.effect_type == "EQ"
+                  else RACK_EXPANDED_H_RV if rack.effect_type == "REVERB"
+                  else RACK_EXPANDED_H_NG if rack.effect_type == "NOISE_GATE"
+                  else RACK_EXPANDED_H_DL if rack.effect_type == "DELAY"
+                  else RACK_EXPANDED_H_DL if rack.effect_type == "BOOSTER"
+                  else RACK_EXPANDED_H) * ui_scale
+            rack_y = cur_y - rh
 
-                # 3x2 knob grid — must match draw exactly
-                div_x       = bx + fader_strip_w
-                knob_base_x = div_x + 4*ui_scale
-                knob_col_gap3 = knob_area_w / 3
-                kx0 = knob_base_x + knob_col_gap3 * 0.5
-                kx1 = knob_base_x + knob_col_gap3 * 1.5
-                kx2 = knob_base_x + knob_col_gap3 * 2.5
-                ky1 = ctrl_y + 4*ui_scale + knob_label_h + knob_r   # bottom row
-                ky0 = ky1 + knob_r + knob_gap + knob_label_h + knob_r  # top row
+            if rack.effect_type == "COMP_MULTI":
+                # Multiband: hit test gain faders and 3x2 knob grid
+                # Must exactly mirror _draw_multiband_body geometry
+                body_h       = rh - RACK_RAIL_H*ui_scale
+                fader_zone_h = body_h * 0.52
+                ch_btn_w     = 108*ui_scale
+                side_margin  = ch_btn_w / 2
+                content_w    = rw - ch_btn_w - side_margin
+                band_w       = content_w / 4
+                content_x    = rack_x + side_margin / 2
+                fader_area_y = rack_y + 4*ui_scale
+                fader_area_h = fader_zone_h - 8*ui_scale
+                label_h      = 26*ui_scale
+                ctrl_y       = fader_area_y + label_h
+                ctrl_h       = fader_area_h - label_h
+                fader_strip_w = 38*ui_scale
+                knob_area_w  = band_w - fader_strip_w - 8*ui_scale
+                knob_r_mb    = max(min(knob_area_w*0.15, 16*ui_scale), 10*ui_scale)
+                knob_label_h = 22*ui_scale
+                knob_gap     = 6*ui_scale
 
-                kr  = knob_r + 4*ui_scale  # hit radius with tolerance
-                if math.dist((rx,ry),(kx0,ky0)) < kr:
-                    return (i, band)        # threshold
-                if math.dist((rx,ry),(kx1,ky0)) < kr:
-                    return (i, band+4)      # ratio
-                if math.dist((rx,ry),(kx2,ky0)) < kr:
-                    return (i, band+20)     # knee
-                if math.dist((rx,ry),(kx0,ky1)) < kr:
-                    return (i, band+8)      # attack
-                if math.dist((rx,ry),(kx1,ky1)) < kr:
-                    return (i, band+12)     # release
-                if math.dist((rx,ry),(kx2,ky1)) < kr:
-                    return (i, band+16)     # gain (also reachable via fader)
-        else:
-            # EQ: 5 columns of (Gain, Freq, Q) knobs
-            if rack.effect_type == "EQ":
+                for band in range(4):
+                    bx = content_x + band * band_w
+
+                    # Gain fader (p16-p19) — left strip
+                    fdr_x = bx + 6*ui_scale
+                    fdr_w = 10*ui_scale
+                    fdr_h = ctrl_h - 26*ui_scale
+                    fdr_y = ctrl_y + 2*ui_scale
+                    if fdr_x <= rx <= fdr_x+fdr_w and fdr_y <= ry <= fdr_y+fdr_h:
+                        return (i, band + 16)
+
+                    # 3x2 knob grid — must match draw exactly
+                    div_x         = bx + fader_strip_w
+                    knob_base_x   = div_x + 4*ui_scale
+                    knob_col_gap3 = knob_area_w / 3
+                    kx0 = knob_base_x + knob_col_gap3 * 0.5
+                    kx1 = knob_base_x + knob_col_gap3 * 1.5
+                    kx2 = knob_base_x + knob_col_gap3 * 2.5
+                    ky1 = ctrl_y + 4*ui_scale + knob_label_h + knob_r_mb   # bottom row
+                    ky0 = ky1 + knob_r_mb + knob_gap + knob_label_h + knob_r_mb  # top row
+
+                    kr_mb = knob_r_mb + 4*ui_scale  # hit radius with tolerance
+                    if math.dist((rx,ry),(kx0,ky0)) < kr_mb: return (i, band)
+                    if math.dist((rx,ry),(kx1,ky0)) < kr_mb: return (i, band+4)
+                    if math.dist((rx,ry),(kx2,ky0)) < kr_mb: return (i, band+20)
+                    if math.dist((rx,ry),(kx0,ky1)) < kr_mb: return (i, band+8)
+                    if math.dist((rx,ry),(kx1,ky1)) < kr_mb: return (i, band+12)
+                    if math.dist((rx,ry),(kx2,ky1)) < kr_mb: return (i, band+16)
+
+            elif rack.effect_type == "EQ":
                 # 7-band layout: p0-p6=gain, p7-p13=freq, p14-p20=Q
-                # Geometry mirrors _draw_eq_body exactly
                 EQ7_BANDS_HT = [
                     ("L","low_shelf",80.0,0.7), ("1","peak",250.0,1.0),
                     ("2","peak",700.0,1.0),     ("3","peak",2000.0,1.0),
@@ -3625,17 +3642,17 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                 tol_eq       = 6 * ui_scale
                 for bi in range(N_BANDS_HT):
                     col_cx_eq = disp_x_eq + (bi + 0.5) * col_w_eq
-                    if math.dist((rx, ry), (col_cx_eq, row_gain_eq)) < kr_gain_eq  + tol_eq:
-                        return (i, bi)           # gain p0-p6
+                    if math.dist((rx, ry), (col_cx_eq, row_gain_eq)) < kr_gain_eq + tol_eq:
+                        return (i, bi)
                     if math.dist((rx, ry), (col_cx_eq, row_freq_eq)) < kr_small_eq + tol_eq:
-                        return (i, bi + 7)       # freq p7-p13
+                        return (i, bi + 7)
                     _, bftype_ht, _, _ = EQ7_BANDS_HT[bi]
                     if bftype_ht == "peak":
                         if math.dist((rx, ry), (col_cx_eq, row_q_eq)) < kr_small_eq + tol_eq:
-                            return (i, bi + 14)  # Q p14-p20
+                            return (i, bi + 14)
+
             elif rack.effect_type == "REVERB":
                 # 5 knobs: p0=Room, p1=Damp, p2=Wet, p3=Pre-dly, p4=Width
-                # Geometry mirrors _draw_reverb_body knob strip exactly
                 body_h_rv   = rh - RACK_RAIL_H * ui_scale
                 ch_btn_w_rv = 108 * ui_scale
                 margin_l_rv = 42 * ui_scale
@@ -3650,15 +3667,13 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                 row_knob_rv = knob_y_rv + knob_h_rv - row_slot_rv * 1.3
                 kr_rv       = min(max(13*ui_scale, col_w_rv*0.16), 20*ui_scale)
                 kr_rv       = min(kr_rv, row_slot_rv * 0.42)
-                tol_rv      = 8 * ui_scale
                 for ki in range(N_KNOBS_RV):
                     cx_rv = disp_x_rv + (ki + 0.5) * col_w_rv
-                    if math.dist((rx, ry), (cx_rv, row_knob_rv)) < kr_rv + tol_rv:
-                        return (i, ki)           # p0-p4
+                    if math.dist((rx, ry), (cx_rv, row_knob_rv)) < kr_rv + 8*ui_scale:
+                        return (i, ki)
 
             elif rack.effect_type == "NOISE_GATE":
                 # 5 knobs: p0=Threshold, p1=Attack, p2=Hold, p3=Release, p4=Range
-                # Geometry mirrors _draw_noisegate_body knob strip exactly
                 body_h_ng   = rh - RACK_RAIL_H * ui_scale
                 disp_x_ng   = rack_x + 42 * ui_scale
                 disp_w_ng   = rw - 42*ui_scale - 108*ui_scale - 8*ui_scale
@@ -3676,7 +3691,6 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
 
             elif rack.effect_type == "DELAY":
                 # 5 knobs: p0=Time, p1=Feedback, p2=Mix, p3=Spread, p4=Filter
-                # Geometry mirrors _draw_delay_body knob strip exactly
                 body_h_dl   = rh - RACK_RAIL_H * ui_scale
                 disp_x_dl   = rack_x + 42 * ui_scale
                 disp_w_dl   = rw - 42*ui_scale - 108*ui_scale - 8*ui_scale
@@ -3693,22 +3707,16 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                         return (i, ki)
 
             elif rack.effect_type == "BOOSTER":
-                # Geometry mirrors _draw_booster_body exactly:
-                #   left_x  = rack_x  (column starts at rack edge)
-                #   left_w  = rw * 0.25
-                #   knob_cx = left_x + left_w * 0.5  (centred in column)
-                #   knob_cy = body_bot + body_h * 0.52
-                #   knob_r  = min(left_w * 0.30, body_h * 0.35)
                 body_h_bo = rh - RACK_RAIL_H * ui_scale
                 left_w_bo = rw * 0.25
                 knob_cx   = rack_x + left_w_bo * 0.5
                 knob_cy   = rack_y + body_h_bo * 0.52
                 knob_r_bo = min(left_w_bo * 0.30, body_h_bo * 0.35)
                 if math.dist((rx, ry), (knob_cx, knob_cy)) < knob_r_bo + 6*ui_scale:
-                    return (i, 0)  # p0 = boost
+                    return (i, 0)
 
             else:
-                # Single band 2x3 knob grid — must mirror draw geometry exactly
+                # Single band compressor — 2x3 knob grid
                 # param_order = [0,1,5, 2,3,4] → Thr,Ratio,Knee / Atk,Rel,Makeup
                 body_top  = rack_y
                 body_bot  = rack_y + rh - RACK_RAIL_H*ui_scale
@@ -3726,7 +3734,7 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
                     if math.dist((rx, ry), (kx, ky)) < knob_r + 4*ui_scale:
                         return (i, pi)
 
-        cur_y -= rh + RACK_GAP * ui_scale
+            cur_y -= rh + RACK_GAP * ui_scale
 
     return None
 
@@ -4564,7 +4572,10 @@ def _get_ai_rack_height(rack, scale):
 
 
 def _draw_ai_channel_buttons(rx, ry, rw, rh, rack, scale):
-    """Draw channel assignment buttons on the AI rack rail (right side)."""
+    """Draw channel assignment buttons on the AI rack rail (right side).
+    Always shows exactly 9 buttons — the 9 channels belonging to this rack's group.
+    Labels show absolute VSE channel numbers (e.g. 10-18 for group 1).
+    """
     try:
         from ui.mixer.draw_utils import (
             draw_rect  as _draw_rect,
@@ -4578,13 +4589,9 @@ def _draw_ai_channel_buttons(rx, ry, rw, rh, rack, scale):
     gap   = 4 * scale
     fs    = max(1, int(10 * scale))
 
-    scene   = bpy.context.scene
-    highest = 0
-    if scene and scene.sequence_editor:
-        for s in scene.sequence_editor.sequences_all:
-            if s.type == "SOUND" and s.sound:
-                highest = max(highest, s.channel - 1)
-    num_buttons = max(9, highest + 1)
+    # Always exactly 9 buttons for this group; absolute label = group offset + local + 1
+    group_off   = getattr(rack, 'group_idx', 0) * 9
+    num_buttons = 9
 
     ch_area_x = rx + rw - 100*scale
     ch_area_y = ry + rh - RACK_RAIL_H*scale - 20*scale
@@ -4595,15 +4602,15 @@ def _draw_ai_channel_buttons(rx, ry, rw, rh, rack, scale):
         col = col_idx % 3
         bx  = ch_area_x + col * (btn_s + gap)
         by  = ch_area_y - row * (btn_s + gap) - btn_s
-        attr     = f'ch{col_idx}' if col_idx < 32 else None
-        assigned = getattr(rack, attr, False) if attr else False
+        attr     = f'ch{col_idx}'
+        assigned = getattr(rack, attr, False)
         bg = (0.0, 0.18, 0.10, 1.0) if assigned else (0.07, 0.07, 0.07, 1.0)
         bc = (0.0, 0.75, 0.45, 1.0) if assigned else (0.2, 0.2, 0.2, 1.0)
         _draw_rect(bx, by, btn_s, btn_s, bg)
         verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
         batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
         shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
-        label = str(col_idx + 1)
+        label = str(group_off + col_idx + 1)   # absolute VSE channel number
         tw    = _text_width(label, fs)
         _draw_text(label, bx+btn_s/2-tw/2, by+btn_s/2-fs/2, fs, bc)
 
@@ -4880,14 +4887,10 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     ch_btn_h   = 16*scale
     ch_btn_y   = ry + rh - 27*scale
 
-    # Discover how many channels exist in the VSE
-    scene_ch   = bpy.context.scene
-    highest_ch = 0
-    if scene_ch and scene_ch.sequence_editor:
-        for _s in scene_ch.sequence_editor.sequences_all:
-            if _s.type == "SOUND" and _s.sound:
-                highest_ch = max(highest_ch, _s.channel - 1)
-    num_ch = max(9, highest_ch + 1)
+    # Always show exactly 9 channels — the 9 that belong to this rack's group.
+    # ch0-ch8 are local indices; labels show the absolute VSE channel number.
+    group_off = getattr(rack, 'group_idx', 0) * 9
+    num_ch    = 9
 
     # Available space: from right edge of name to left edge of ON/OFF
     name_right  = badge_x + badge_w + 6*scale + _text_width(aname.upper(), fs_name) + 8*scale
@@ -4915,7 +4918,7 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
         cbat = batch_for_shader(shader, "LINE_STRIP", {"pos": cverts})
         shader.bind(); shader.uniform_float("color", bc); cbat.draw(shader)
         fs_ci = max(1, int(8*scale))
-        lbl_c = str(ci + 1)
+        lbl_c = str(group_off + ci + 1)   # absolute VSE channel number
         tw_c  = _text_width(lbl_c, fs_ci)
         _draw_text(lbl_c, bx + ch_btn_s/2 - tw_c/2,
                    by + ch_btn_h/2 - fs_ci/2, fs_ci, bc)
@@ -4960,10 +4963,11 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
             import traceback; traceback.print_exc()
 
 
-def draw_ai_racks(rx, ry, scale, area_width=None):
+def draw_ai_racks(rx, ry, scale, area_width=None, group_idx=0):
     """Draw the AI processing section — divider + all AI racks + add button.
 
     rx, ry: position where the AI section starts (top edge of divider).
+    group_idx: only draw AI racks belonging to this fader group.
     Returns total height consumed so caller can advance the layout cursor.
     """
     global _ai_popup_open, _ai_popup_x, _ai_popup_y
@@ -5009,9 +5013,12 @@ def draw_ai_racks(rx, ry, scale, area_width=None):
     if not scene:
         return total_h
 
-    ai_racks = getattr(scene, "pb_ai_racks", [])
+    all_ai_racks = getattr(scene, "pb_ai_racks", [])
+    # Only draw racks that belong to this fader group
+    group_racks = [(ai_idx, rack) for ai_idx, rack in enumerate(all_ai_racks)
+                   if getattr(rack, 'group_idx', 0) == group_idx]
 
-    for ai_idx, rack in enumerate(ai_racks):
+    for ai_idx, rack in group_racks:
         rack_h = _get_ai_rack_height(rack, scale)
         rack_y = y_cursor - rack_h
         try:
@@ -5037,10 +5044,6 @@ def draw_ai_racks(rx, ry, scale, area_width=None):
     _draw_text(add_lbl, rx + rw/2 - tw_add/2,
                add_y + add_h/2 - fs_add/2, fs_add, (0.50, 0.14, 0.08, 1.0))
     total_h += add_h
-
-    # Popup draws downward from the bottom of the add button
-    if _ai_popup_open:
-        _draw_ai_add_popup(_ai_popup_x, add_y, scale)
 
     return total_h
 
@@ -5107,11 +5110,12 @@ def _draw_ai_add_popup(px, py, scale):
 # AI rack hit test and click handler
 # ---------------------------------------------------------------------------
 def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
-                      area_width=None):
+                      area_width=None, group_idx=0):
     """Return a hit dict for AI section clicks, or None if no hit.
 
     ai_section_top_y: y at the BOTTOM of the DSP add-rack button = top of AI divider.
     rack_x: left edge of rack area.
+    group_idx: which fader group to test (only racks in this group are checked).
 
     Layout from top downward:
       [ai_section_top_y]
@@ -5129,11 +5133,14 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
     scene = bpy.context.scene
     if not scene:
         return None
-    ai_racks = getattr(scene, "pb_ai_racks", [])
+    all_ai_racks = getattr(scene, "pb_ai_racks", [])
+    # Only consider racks belonging to this group
+    ai_racks = [(ai_idx, rack) for ai_idx, rack in enumerate(all_ai_racks)
+                if getattr(rack, 'group_idx', 0) == group_idx]
 
     # Walk down past AI racks to find add_y (matches draw_ai_racks exactly)
     y_walk = y_cur
-    for rack in ai_racks:
+    for _, rack in ai_racks:
         rh = _get_ai_rack_height(rack, scale)
         y_walk -= rh + RACK_GAP * scale
     add_y = y_walk - add_h   # bottom-left of the ADD AI RACK button
@@ -5158,7 +5165,8 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
 
     # Check ADD AI RACK button
     if rack_x <= mouse_x <= rack_x + rw and add_y <= mouse_y <= add_y + add_h:
-        return {'zone': 'ai_add_click', 'bx': mouse_x, 'by': mouse_y}
+        return {'zone': 'ai_add_click', 'bx': mouse_x, 'by': mouse_y,
+                'group_idx': group_idx}
 
     # Check AI section divider bar
     div_y = ai_section_top_y - div_h
@@ -5166,7 +5174,7 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
         return {'zone': 'ai_divider'}
 
     # Check individual AI racks
-    for ai_idx, rack in enumerate(ai_racks):
+    for ai_idx, rack in ai_racks:
         rack_h   = _get_ai_rack_height(rack, scale)
         rack_y   = y_cur - rack_h
         rack_top = rack_y + rack_h
@@ -5356,11 +5364,19 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
                 return {'zone': 'ai_rvc_preview', 'ai_idx': ai_idx}
 
             # Output channel < > arrows
+            # Geometry mirrors draw exactly:
+            #   lbl_tw = _text_width("OUT CH ", fs_lbl)
+            #   left arrow at cx+5*scale+lbl_tw, value box at cx+5*scale+lbl_tw+arr_w+2*scale
+            #   right arrow at oc_x+oc_s+2*scale = cx+5*scale+lbl_tw+arr_w+2*scale+oc_s+2*scale
             _row2_h2      = max(16*scale, _work_h2*0.08)
             _row2_y2      = _btn_y2b - 2*scale - _row2_h2
             _arr_w2       = max(14*scale, _row2_h2)
             _oc_s2        = max(22*scale, _row2_h2)
-            _minus_x2     = _cent_x2 + 4*scale + 45*scale
+            _fs_lbl2_oc   = max(1, int(7*scale))
+            import blf as _blf2
+            _blf2.size(0, _fs_lbl2_oc)
+            _lbl_tw2      = _blf2.dimensions(0, "OUT CH ")[0]
+            _minus_x2     = _cent_x2 + 5*scale + _lbl_tw2
             _plus_x2      = _minus_x2 + _arr_w2 + 2*scale + _oc_s2 + 2*scale
             if (_minus_x2 <= mouse_x <= _minus_x2+_arr_w2 and
                     _row2_y2 <= mouse_y <= _row2_y2+_row2_h2):
@@ -5426,8 +5442,23 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             _card_gap2    = 2*scale
             _prev_btn_w2  = max(16*scale, _card_h2*0.7)
             _max_vis2     = max(1, int((_hint_y2 - _add_sep_y2 - 6*scale) / (_card_h2+_card_gap2)))
+            _scroll_ofs2  = int(rack.get('rvc_scroll', 0))
+
+            # Scroll arrow hit test — use stashed geometry from draw
+            _arr_up2 = rack.get('rvc_arr_up')
+            _arr_dn2 = rack.get('rvc_arr_dn')
+            if _arr_up2:
+                _ax2, _ay2, _aw2, _ah2 = _arr_up2
+                if _ax2 <= mouse_x <= _ax2+_aw2 and _ay2 <= mouse_y <= _ay2+_ah2:
+                    return {'zone': 'ai_rvc_scroll', 'ai_idx': ai_idx, 'dir': -1}
+            if _arr_dn2:
+                _dx2, _dy2, _dw2, _dh2 = _arr_dn2
+                if _dx2 <= mouse_x <= _dx2+_dw2 and _dy2 <= mouse_y <= _dy2+_dh2:
+                    return {'zone': 'ai_rvc_scroll', 'ai_idx': ai_idx, 'dir': 1}
+
             for _slot in range(_max_vis2):
-                if _slot >= len(_vlist2): break
+                _vi2 = _slot + _scroll_ofs2
+                if _vi2 >= len(_vlist2): break
                 _cy2 = _hint_y2 - _fs_lbl2 - 4*scale - _slot*(_card_h2+_card_gap2) - _card_h2
                 if _cy2 < _add_sep_y2 + 2*scale: break
                 _pb_x2 = _lx2 + _left_w2 - 4*scale - _prev_btn_w2
@@ -5435,10 +5466,10 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
                 _pb_h2 = _card_h2*0.8
                 if (_pb_x2 <= mouse_x <= _pb_x2+_prev_btn_w2 and
                         _pb_y2 <= mouse_y <= _pb_y2+_pb_h2):
-                    return {'zone': 'ai_rvc_voice_preview', 'ai_idx': ai_idx, 'voice_idx': _slot}
+                    return {'zone': 'ai_rvc_voice_preview', 'ai_idx': ai_idx, 'voice_idx': _vi2}
                 if (_lx2+4*scale <= mouse_x <= _lx2+_left_w2-4*scale and
                         _cy2 <= mouse_y <= _cy2+_card_h2):
-                    return {'zone': 'ai_rvc_voice', 'ai_idx': ai_idx, 'voice_idx': _slot}
+                    return {'zone': 'ai_rvc_voice', 'ai_idx': ai_idx, 'voice_idx': _vi2}
         # VoiceFixer hit test (RESEMBLE rack type)
         if rack.ai_type == "RESEMBLE" and not rack.collapsed:
             _mg_vf      = 8 * scale
@@ -5564,13 +5595,8 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
         ch_btn_h    = 16*scale
         ch_btn_y_ht = rack_top - 27*scale
 
-        scene_ht   = bpy.context.scene
-        highest_ht = 0
-        if scene_ht and scene_ht.sequence_editor:
-            for _s in scene_ht.sequence_editor.sequences_all:
-                if _s.type == "SOUND" and _s.sound:
-                    highest_ht = max(highest_ht, _s.channel - 1)
-        num_ch_ht = max(9, highest_ht + 1)
+        # Always exactly 9 buttons — the group's channel range
+        num_ch_ht = 9
 
         # Reproduce ch_start_x from draw code
         col_x_ht    = rack_x + 4*scale
@@ -5868,15 +5894,19 @@ def handle_ai_rack_click(hit, context):
         max_x   = hit.get('region_w', 9999.0) - popup_w
         _ai_popup_x = min(raw_x, max_x)
         _ai_popup_y = hit.get('by', 0.0)
+        # Remember which group this button belongs to so ai_add_type can set it
+        global _ai_popup_group_idx
+        _ai_popup_group_idx = hit.get('group_idx', 0)
         return True
 
     if zone == 'ai_add_type':
         atype    = hit['ai_type']
         ai_racks = context.scene.pb_ai_racks
         new_rack = ai_racks.add()
-        new_rack.ai_type = atype
-        _ai_popup_open   = False
-        print(f"[AI RACKS] added {atype} rack")
+        new_rack.ai_type   = atype
+        new_rack.group_idx = _ai_popup_group_idx
+        _ai_popup_open     = False
+        print(f"[AI RACKS] added {atype} rack (group {_ai_popup_group_idx})")
         return True
 
     if zone == 'ai_delete':
@@ -6022,8 +6052,29 @@ def handle_ai_rack_click(hit, context):
         ai_racks = getattr(context.scene, "pb_ai_racks", [])
         i = hit['ai_idx']
         if i < len(ai_racks):
-            cur = float(getattr(ai_racks[i], 'p2', 1.0))
-            ai_racks[i].p2 = 0.0 if cur > 0.5 else 1.0
+            rack    = ai_racks[i]
+            cur     = float(getattr(rack, 'p2', 1.0))
+            new_val = 0.0 if cur > 0.5 else 1.0
+            rack.p2 = new_val
+            mute_on = new_val > 0.5
+
+            # Apply the mute to the source channel via the full mixer path:
+            # pb_sync_tracks.mute + strip.mute + engine hj.set_mute/set_volume
+            try:
+                from core.audio import sync_vse_mute
+                # Source channel: local ch0-ch8 + group offset = absolute VSE channel
+                _grp_off  = getattr(rack, 'group_idx', 0) * 9
+                active_chs = [_grp_off + ci + 1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
+                if active_chs:
+                    src_ch_1based = active_chs[0]
+                    src_ch_idx    = src_ch_1based - 1   # 0-based engine index
+                    tracks = getattr(context.scene, "pb_sync_tracks", [])
+                    if src_ch_idx < len(tracks):
+                        tracks[src_ch_idx].mute = mute_on
+                    sync_vse_mute(src_ch_idx, mute_on)
+                    print(f"[DEMUCS] mute_original ch{src_ch_1based} → {mute_on}")
+            except Exception as _me:
+                print(f"[DEMUCS] mute_toggle error: {_me}")
         return True
 
     if zone == 'demucs_stem_toggle':
@@ -6153,8 +6204,57 @@ def handle_ai_rack_click(hit, context):
         i = hit['ai_idx']
         if i < len(ai_racks):
             try:
-                from core.ai_knnvc import convert_knnvc
-                convert_knnvc(i, context)
+                from core.ai_knnvc import (convert_knnvc, has_rack_output,
+                                            _rack_output_path)
+                import os, time as _t
+                scene = context.scene
+                # If a preview has already been processed, just place it on
+                # the timeline without running conversion again.
+                wav_path = _rack_output_path.get(i)
+                if not wav_path or not os.path.exists(wav_path):
+                    import glob, tempfile
+                    matches = sorted(glob.glob(
+                        os.path.join(tempfile.gettempdir(),
+                                     f"pb_knnvc_{i}_*.wav")))
+                    if matches:
+                        wav_path = matches[-1]
+                        _rack_output_path[i] = wav_path
+
+                if wav_path and os.path.exists(wav_path):
+                    # Copy to project folder so the file survives temp-dir cleanup
+                    try:
+                        from core.ai_knnvc import _persist_output, _rack_output_path
+                        wav_path = _persist_output(wav_path, i)
+                        _rack_output_path[i] = wav_path
+                    except Exception as _pe:
+                        print(f"[KNNVC] WARNING: persist failed: {_pe}")
+                    # Place on timeline
+                    print(f"[KNNVC] generate: placing output on timeline")
+                    rack = ai_racks[i]
+                    seq  = scene.sequence_editor
+                    if not seq:
+                        scene.sequence_editor_create()
+                        seq = scene.sequence_editor
+                    _grp_off_kn = getattr(rack, 'group_idx', 0) * 9
+                    active_chs = [_grp_off_kn + ci + 1 for ci in range(9)
+                                  if getattr(rack, f"ch{ci}", False)]
+                    target_ch  = int(getattr(rack, "p3", 0.0)) or                                  (active_chs[0]+1 if active_chs else 2)
+                    target_ch  = max(1, min(9, target_ch))
+                    place_frame = scene.frame_start
+                    strip_name  = f"kNNVC_{i}_{int(_t.time()) % 100000}"
+                    seq.sequences.new_sound(
+                        name=strip_name, filepath=wav_path,
+                        channel=target_ch, frame_start=place_frame)
+                    rack.ai_status = "DONE"
+                    print(f"[KNNVC] placed '{strip_name}' on ch{target_ch}"
+                          f" at frame {place_frame}")
+                    for window in context.window_manager.windows:
+                        for area in window.screen.areas:
+                            if area.type in ('SEQUENCE_EDITOR','NODE_EDITOR'):
+                                area.tag_redraw()
+                else:
+                    # No preview yet - run full conversion and place on done
+                    convert_knnvc(i, context, preview_only=False)
             except Exception as e:
                 print(f"[KNNVC] convert failed: {e}")
                 import traceback; traceback.print_exc()
@@ -6269,6 +6369,25 @@ def handle_ai_rack_click(hit, context):
                 except Exception as e:
                     print(f"[KNNVC] add_voice failed: {e}")
                     import traceback; traceback.print_exc()
+        return True
+
+    # RVC scroll arrows
+    if zone == 'ai_rvc_scroll':
+        ai_racks = getattr(context.scene, "pb_ai_racks", [])
+        i = hit['ai_idx']
+        if i < len(ai_racks):
+            rack_s = ai_racks[i]
+            direction = hit.get('dir', 1)
+            cur_scroll = int(rack_s.get('rvc_scroll', 0))
+            max_vis_s  = int(rack_s.get('rvc_max_vis', 1))
+            try:
+                from ui.racks.rack_knnvc import _discover_ref_voices as _gv3
+                n_voices = len(_gv3(i))
+            except Exception:
+                n_voices = 0
+            new_scroll = cur_scroll + direction
+            new_scroll = max(0, min(new_scroll, max(0, n_voices - max_vis_s)))
+            rack_s['rvc_scroll'] = new_scroll
         return True
 
     # RVC setup guide button

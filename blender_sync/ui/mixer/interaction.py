@@ -491,49 +491,67 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     from ui.mixer.channel_strip import send_section_height as _ssh_ai
 
                     scene_ai   = context.scene
-                    n_racks_ai = len(getattr(scene_ai, "pb_racks", []))
-                    send_h_ai  = _ssh_ai(n_racks_ai, UI_SCALE)
+                    base_y_ai  = region.height - 150*UI_SCALE - SCROLL_Y
 
-                    base_y_ai    = region.height - 150*UI_SCALE - SCROLL_Y
-                    fader_bot_ai = base_y_ai - _FTB*UI_SCALE - send_h_ai
-                    rack_top_ai  = fader_bot_ai - (_NBH + _rk_ai.RACK_MARGIN_TOP)*UI_SCALE
+                    # Group geometry — mirrors draw_racks exactly
+                    _GW_UNSCALED = 9 * 135 - 15   # 1200px per group
+                    _GW          = _GW_UNSCALED * UI_SCALE
+                    num_tracks_ai = len(getattr(scene_ai, "pb_sync_tracks", []))
+                    num_groups_ai = max(1, (num_tracks_ai + 8) // 9)
 
-                    # Walk down past all DSP racks to find where AI section starts
-                    dsp_racks = getattr(scene_ai, "pb_racks", [])
-                    cur_y_ai  = rack_top_ai
-                    for _ri in dsp_racks:
-                        if _ri.collapsed:
-                            _rh = _rk_ai.RACK_COLLAPSED_H * UI_SCALE
-                        elif _ri.effect_type == "COMP_MULTI":
-                            _rh = _rk_ai.RACK_EXPANDED_H_MB * UI_SCALE
-                        elif _ri.effect_type == "EQ":
-                            _rh = _rk_ai.RACK_EXPANDED_H_EQ * UI_SCALE
-                        elif _ri.effect_type == "REVERB":
-                            _rh = _rk_ai.RACK_EXPANDED_H_RV * UI_SCALE
-                        elif _ri.effect_type == "NOISE_GATE":
-                            _rh = _rk_ai.RACK_EXPANDED_H_NG * UI_SCALE
-                        elif _ri.effect_type == "DELAY":
-                            _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
-                        elif _ri.effect_type == "BOOSTER":
-                            _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
-                        elif _ri.effect_type == "MIXDOWN":
-                            _rh = _rk_ai.RACK_EXPANDED_H_MX * UI_SCALE
-                        else:
-                            _rh = _rk_ai.RACK_EXPANDED_H * UI_SCALE
-                        cur_y_ai -= _rh + _rk_ai.RACK_GAP * UI_SCALE
-
-                    # ai_section_top_y must match draw_racks exactly:
-                    # draw_racks passes cur_y - 28*ui_scale (bottom of DSP add button)
-                    # so we subtract the same 28px DSP add-rack button height here.
-                    ai_section_top_y = cur_y_ai - 28*UI_SCALE
-
-                    num_tracks_ai = max(9, len(getattr(scene_ai, "pb_sync_tracks", [])))
-                    rack_w_ai     = num_tracks_ai * 135 - 15
-                    rack_x_ai     = 30*UI_SCALE + SCROLL_X
+                    dsp_racks_all = getattr(scene_ai, "pb_racks", [])
 
                     ai_hit_test, ai_handle_click = _get_ai_racks_funcs()
-                    ai_hit = ai_hit_test(rx, ry, ai_section_top_y,
-                                         rack_x_ai, UI_SCALE, rack_w_ai)
+                    ai_hit = None
+
+                    for _g_ai in range(num_groups_ai):
+                        rack_x_ai = (30 + _g_ai * (_GW_UNSCALED + 15)) * UI_SCALE + SCROLL_X
+
+                        # Skip group if click is outside its X range
+                        if not (rack_x_ai <= rx <= rack_x_ai + _GW):
+                            continue
+
+                        # Group-local DSP racks determine Y position
+                        group_dsp = [r for r in dsp_racks_all
+                                     if getattr(r, 'group_idx', 0) == _g_ai]
+                        n_group_dsp = len(group_dsp)
+                        send_h_ai   = _ssh_ai(n_group_dsp, UI_SCALE)
+
+                        fader_bot_ai = base_y_ai - _FTB*UI_SCALE - send_h_ai
+                        rack_top_ai  = fader_bot_ai - (_NBH + _rk_ai.RACK_MARGIN_TOP)*UI_SCALE
+
+                        # Walk down past this group's DSP racks
+                        cur_y_ai = rack_top_ai
+                        for _ri in group_dsp:
+                            if _ri.collapsed:
+                                _rh = _rk_ai.RACK_COLLAPSED_H * UI_SCALE
+                            elif _ri.effect_type == "COMP_MULTI":
+                                _rh = _rk_ai.RACK_EXPANDED_H_MB * UI_SCALE
+                            elif _ri.effect_type == "EQ":
+                                _rh = _rk_ai.RACK_EXPANDED_H_EQ * UI_SCALE
+                            elif _ri.effect_type == "REVERB":
+                                _rh = _rk_ai.RACK_EXPANDED_H_RV * UI_SCALE
+                            elif _ri.effect_type == "NOISE_GATE":
+                                _rh = _rk_ai.RACK_EXPANDED_H_NG * UI_SCALE
+                            elif _ri.effect_type == "DELAY":
+                                _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
+                            elif _ri.effect_type == "BOOSTER":
+                                _rh = _rk_ai.RACK_EXPANDED_H_DL * UI_SCALE
+                            elif _ri.effect_type == "MIXDOWN":
+                                _rh = _rk_ai.RACK_EXPANDED_H_MX * UI_SCALE
+                            else:
+                                _rh = _rk_ai.RACK_EXPANDED_H * UI_SCALE
+                            cur_y_ai -= _rh + _rk_ai.RACK_GAP * UI_SCALE
+
+                        # ai_section_top_y = bottom of DSP add-rack button
+                        ai_section_top_y = cur_y_ai - 28*UI_SCALE
+
+                        ai_hit = ai_hit_test(rx, ry, ai_section_top_y,
+                                             rack_x_ai, UI_SCALE, _GW_UNSCALED,
+                                             _g_ai)
+                        if ai_hit:
+                            break   # found a hit in this group
+
                     if ai_hit:
                         # Inject scale and region width so popup can clamp its x
                         ai_hit['scale']    = UI_SCALE

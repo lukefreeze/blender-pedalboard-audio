@@ -79,27 +79,43 @@ def _apply_finish(ai_idx, info):
 
         if info["status"] == "DONE" and info.get("output_path"):
             output_path = info["output_path"]
-            seq = scene.sequence_editor
-            if not seq:
-                scene.sequence_editor_create()
+
+            if info.get("preview_only"):
+                # Preview-only: output is ready for playback but not yet on timeline.
+                # Auto-start playback so the user hears it immediately.
+                print(f"[KNNVC] rack {ai_idx}: preview ready, auto-playing")
+                try:
+                    from core.audio import play_oneshot
+                    handle = play_oneshot(output_path)
+                    _rack_preview_state[ai_idx] = handle
+                except Exception as pe:
+                    print(f"[KNNVC] auto-play error: {pe}")
+            else:
+                # Generate mode: copy to project folder then place the strip
+                persistent_path = _persist_output(output_path, ai_idx)
+                # Update the stored path so has_rack_output still works
+                _rack_output_path[ai_idx] = persistent_path
+
                 seq = scene.sequence_editor
+                if not seq:
+                    scene.sequence_editor_create()
+                    seq = scene.sequence_editor
 
-            # Read active channels from rack attributes
-            active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
-            target_ch  = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
-            target_ch  = max(1, min(9, target_ch))
+                active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
+                target_ch  = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
+                target_ch  = max(1, min(9, target_ch))
 
-            place_frame = scene.frame_current
-            strip_name  = f"kNNVC_{ai_idx}_{int(time.time()) % 100000}"
-            seq.sequences.new_sound(
-                name=strip_name,
-                filepath=output_path,
-                channel=target_ch,
-                frame_start=place_frame,
-            )
-            print(f"[KNNVC] placed strip '{strip_name}' on ch{target_ch} at frame {place_frame}")
+                place_frame = scene.frame_start
+                strip_name  = f"kNNVC_{ai_idx}_{int(time.time()) % 100000}"
+                seq.sequences.new_sound(
+                    name=strip_name,
+                    filepath=persistent_path,
+                    channel=target_ch,
+                    frame_start=place_frame,
+                )
+                print(f"[KNNVC] placed strip '{strip_name}' on ch{target_ch} at frame {place_frame}")
 
-            # Redraw
+            # Redraw either way
             for window in bpy.context.window_manager.windows:
                 for area in window.screen.areas:
                     if area.type in ('SEQUENCE_EDITOR','NODE_EDITOR'):
@@ -112,6 +128,47 @@ def _apply_finish(ai_idx, info):
 # Track the output path and playback handle for each rack's last conversion
 _rack_output_path   = {}   # ai_idx -> wav path from most recent conversion
 _rack_preview_state = {}   # ai_idx -> aud.Handle or None
+
+
+def _get_persistent_output_dir():
+    """Return a persistent output folder next to the saved .blend file.
+
+    If the .blend file has not been saved yet, falls back to a 'knnvc_output'
+    subfolder inside the addon directory so the file is at least not in the
+    OS temp dir.  Returns the absolute path (created if necessary).
+    """
+    blend_path = bpy.data.filepath
+    if blend_path:
+        project_dir = os.path.dirname(os.path.abspath(blend_path))
+        out_dir = os.path.join(project_dir, "knnvc_output")
+    else:
+        # Unsaved project — store next to the addon so it survives restarts
+        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out_dir = os.path.join(addon_dir, "knnvc_output")
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def _persist_output(tmp_wav, ai_idx):
+    """Copy *tmp_wav* from the temp dir into the project's knnvc_output folder.
+
+    Returns the new persistent path, or *tmp_wav* unchanged if the copy fails.
+    The destination filename includes a human-readable timestamp so files
+    accumulate safely rather than overwriting each other.
+    """
+    import shutil
+    try:
+        out_dir   = _get_persistent_output_dir()
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        dest_name = f"knnvc_rack{ai_idx}_{timestamp}.wav"
+        dest_path = os.path.join(out_dir, dest_name)
+        shutil.copy2(tmp_wav, dest_path)
+        print(f"[KNNVC] output saved to project folder: {dest_path}")
+        return dest_path
+    except Exception as e:
+        print(f"[KNNVC] WARNING: could not copy to project folder ({e}), "
+              f"using temp path — file may be lost on reboot")
+        return tmp_wav
 
 
 def set_rack_output(ai_idx, wav_path):
@@ -138,7 +195,15 @@ def has_rack_output(ai_idx):
 
 
 def preview_knnvc(ai_idx, context):
-    """Toggle playback of the last conversion output for this rack."""
+    """Toggle preview of voice conversion output for this rack.
+
+    Behaviour:
+    - If already playing -> stop.
+    - If conversion is in progress -> do nothing (already processing).
+    - Otherwise -> always re-run conversion with preview_only=True so the
+      result is always fresh. Never plays a cached file.
+      _apply_finish will auto-play when done and NOT place on timeline.
+    """
     # Stop if already playing
     if is_rack_previewing(ai_idx):
         handle = _rack_preview_state.get(ai_idx)
@@ -149,17 +214,15 @@ def preview_knnvc(ai_idx, context):
         print(f"[KNNVC] preview stopped: rack={ai_idx}")
         return
 
-    wav_path = _rack_output_path.get(ai_idx)
-    if not wav_path or not os.path.exists(wav_path):
-        print(f"[KNNVC] preview: no output for rack {ai_idx} — run CONVERT first")
+    # If conversion is already running, do nothing — it will auto-play on finish
+    if is_processing(ai_idx):
+        print(f"[KNNVC] preview: conversion already in progress, waiting")
         return
-    try:
-        from core.audio import play_oneshot
-        handle = play_oneshot(wav_path)
-        _rack_preview_state[ai_idx] = handle
-        print(f"[KNNVC] preview: {os.path.basename(wav_path)}")
-    except Exception as e:
-        print(f"[KNNVC] preview error: {e}")
+
+    # Always re-run conversion in preview_only mode to guarantee fresh output.
+    # _apply_finish will auto-play when done and NOT place on timeline.
+    print(f"[KNNVC] preview: starting fresh conversion (preview only)")
+    convert_knnvc(ai_idx, context, preview_only=True)
 
 
 # Tracks which (ai_idx, voice_idx) is currently previewing and its handle
@@ -335,8 +398,11 @@ def add_voice_from_timeline(ai_idx, context):
     print(f"[KNNVC] add_voice: extracting CH{add_ch} -> '{safe_name}.wav'")
 
 
-def convert_knnvc(ai_idx, context):
-    """Start kNN-VC voice conversion in a background thread."""
+def convert_knnvc(ai_idx, context, preview_only=False):
+    """Start kNN-VC voice conversion in a background thread.
+    preview_only=True: process audio but don't place on timeline (for PREVIEW button).
+    preview_only=False: process and place on timeline (GENERATE/CONVERT button).
+    """
     if is_processing(ai_idx):
         print(f"[KNNVC] rack {ai_idx} already processing")
         return
@@ -426,7 +492,8 @@ def convert_knnvc(ai_idx, context):
                     out = line.split(":",1)[1].strip()
                     set_rack_output(ai_idx, out)
                     _pending_finish[ai_idx] = {
-                        "status": "DONE", "output_path": out, "scene_name": scene_name}
+                        "status": "DONE", "output_path": out,
+                        "scene_name": scene_name, "preview_only": preview_only}
                 elif line.startswith("ERROR:"):
                     print(f"[KNNVC] {line}")
                     _pending_finish[ai_idx] = {
