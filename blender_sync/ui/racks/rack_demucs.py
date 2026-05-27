@@ -3,7 +3,6 @@
 # Demucs — Stem Splitter rack UI
 #
 # p0 = model index     (0=htdemucs 1=htdemucs_ft 2=htdemucs_6s 3=mdx_extra)
-# p1 = preview mode    (>0.5 = fast preview)
 # p2 = mute original   (>0.5 = mute source after split)
 # p3 = stem toggle bits (bit0=drums bit1=bass bit2=vocals bit3=other
 #                        bit4=piano bit5=guitar)
@@ -250,7 +249,6 @@ def _draw_demucs_body(rx, ry, rw, rh, rack, ai_idx, scale):
             pass
     model_idx  = max(0, min(int(getattr(rack, "p0", 1.0)), len(MODELS) - 1))
     model      = MODELS[model_idx]
-    preview    = float(getattr(rack, "p1", 0.0)) > 0.5
     mute_orig  = float(getattr(rack, "p2", 1.0)) > 0.5
     stem_bits  = int(getattr(rack, "p3", 15.0))
     status     = getattr(rack, "ai_status", "READY")
@@ -311,27 +309,10 @@ def _draw_demucs_body(rx, ry, rw, rh, rack, ai_idx, scale):
         lbl_fs = max(1, int(7*scale))
         _draw_text(m, mx+3*scale, by_m+model_btn_h/2-lbl_fs/2, lbl_fs, col)
 
-    # Run mode buttons — Preview / Full
-    mode_y  = body_bot + 24*scale
-    mode_h  = min(18*scale, body_h * 0.12)
-    half_w  = (mw - 3*scale) / 2
-
-    for pi, (lbl, is_prev) in enumerate([("PREVIEW", True), ("FULL", False)]):
-        bx_p   = mx + pi * (half_w + 3*scale)
-        active = (preview == is_prev)
-        bg_p   = (0.04, 0.14, 0.06, 1.0) if active else _PANEL
-        col_p  = _GREEN if active else _GREEN_DIM
-        _draw_rect(bx_p, mode_y, half_w, mode_h, bg_p)
-        pv = [(bx_p, mode_y), (bx_p+half_w, mode_y),
-              (bx_p+half_w, mode_y+mode_h), (bx_p, mode_y+mode_h), (bx_p, mode_y)]
-        pb = batch_for_shader(shader, "LINE_STRIP", {"pos": pv})
-        shader.bind(); shader.uniform_float("color", col_p); pb.draw(shader)
-        tw_p = _text_width(lbl, max(1, int(6*scale)))
-        _draw_text(lbl, bx_p+half_w/2-tw_p/2, mode_y+mode_h/2-max(1,int(6*scale))/2,
-                   max(1, int(6*scale)), col_p)
-
-    sub_lbl = "fast / lo-fi" if preview else "2-4 min"
-    _draw_text(sub_lbl, mx, body_bot+4*scale, max(1, int(6*scale)), _TEXT_MUTED)
+    # Timing hint — replaces the removed PREVIEW/FULL toggle
+    timing_lbl = {"htdemucs": "~1-2 min", "htdemucs_ft": "~2-4 min",
+                  "htdemucs_6s": "~2-4 min", "mdx_extra": "~2-4 min"}.get(model, "~2-4 min")
+    _draw_text(timing_lbl, mx, body_bot + 4*scale, max(1, int(6*scale)), _TEXT_MUTED)
 
     # ── CENTRE: Stem rows ─────────────────────────────────────────────────────
     cx = centre_x + 5*scale

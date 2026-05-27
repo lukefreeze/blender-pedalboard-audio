@@ -9,7 +9,6 @@ places each stem as a new VSE sound strip on its assigned channel.
 
 Params from rack (PB_AIRackSettings):
     p0  model index   (0=htdemucs, 1=htdemucs_ft, 2=htdemucs_6s, 3=mdx_extra)
-    p1  preview mode  (>0.5 = preview/fast, else full quality)
     p2  mute original (>0.5 = mute source strip after split)
     p3  stem toggles  packed bits: bit0=drums bit1=bass bit2=vocals bit3=other
                       bit4=piano bit5=guitar  (default 0b001111 = 15 = all 4 basic)
@@ -284,7 +283,6 @@ def separate_demucs(ai_idx, context):
     # Params
     model_idx  = max(0, min(int(getattr(rack, "p0", 1.0)), len(MODELS) - 1))
     model      = MODELS[model_idx]
-    preview    = float(getattr(rack, "p1", 0.0)) > 0.5
     mute_orig  = float(getattr(rack, "p2", 1.0)) > 0.5
     active_stems = get_active_stems(rack)
     stem_channels = {s: get_stem_channel(rack, s) for s in active_stems}
@@ -361,7 +359,7 @@ def separate_demucs(ai_idx, context):
             "out_dir": out_dir,
             "model":   model,
             "stems":   active_stems,
-            "preview": preview,
+            "preview": False,
         }, f)
 
     rack.ai_status        = "PROCESSING"
@@ -437,5 +435,4 @@ def separate_demucs(ai_idx, context):
     if not bpy.app.timers.is_registered(_redraw_timer):
         bpy.app.timers.register(_redraw_timer, first_interval=0.25)
 
-    print(f"[DEMUCS] rack {ai_idx} started — model={model} "
-          f"stems={active_stems} preview={preview}")
+    print(f"[DEMUCS] rack {ai_idx} started — model={model} stems={active_stems}")
