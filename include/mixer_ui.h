@@ -189,8 +189,4 @@ struct EngineState {
 
     // Legacy
     int   active_track_id = 1;
-    float gains[4]    = {1.0f, 1.0f, 1.0f, 1.0f};
-    float eq_high[4]  = {};
-    float eq_mid[4]   = {};
-    float eq_low[4]   = {};
 };

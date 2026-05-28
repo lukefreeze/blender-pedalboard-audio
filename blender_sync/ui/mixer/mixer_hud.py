@@ -20,6 +20,7 @@ from core.constants import (
     SB_TRACK_PX, SB_THUMB_PX, SB_INSET, SB_MARGIN, SB_RADIUS,
     SB_H_RANGE, SB_V_RANGE,
 )
+from core.meters import _engine_levels, _peak_hold
 
 # ---------------------------------------------------------------------------
 # UI state — imported by interaction.py and Loader.py
@@ -30,6 +31,21 @@ SCROLL_Y  = 0.0
 
 pb_ui_enabled = False
 HUD_AREA_PTR  = None
+
+
+# ---------------------------------------------------------------------------
+# Lazy cached wrapper for draw_racks
+# A plain module-level import silently binds to a stub because Racks.py is
+# registered after mixer_hud imports. Defer lookup to first call and cache.
+# ---------------------------------------------------------------------------
+_draw_racks_fn = None
+
+def _draw_racks(width, height, scroll_x, scroll_y, ui_scale):
+    global _draw_racks_fn
+    if _draw_racks_fn is None:
+        from Racks import draw_racks as _fn
+        _draw_racks_fn = _fn
+    _draw_racks_fn(width, height, scroll_x, scroll_y, ui_scale)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +118,6 @@ def draw_callback_px(self, context) -> None:
         tracks = getattr(bpy.context.scene, "pb_sync_tracks", [])
         base_y = height - 150*UI_SCALE - SCROLL_Y
 
-        # Import meter state from core/meters.py
-        from core.meters import _engine_levels, _peak_hold
-
         draw_col = 0
         for i, track in enumerate(tracks):
             group_idx = i // 9
@@ -120,8 +133,7 @@ def draw_callback_px(self, context) -> None:
 
         # Racks
         try:
-            from Racks import draw_racks
-            draw_racks(width, height, SCROLL_X, SCROLL_Y, UI_SCALE)
+            _draw_racks(width, height, SCROLL_X, SCROLL_Y, UI_SCALE)
         except Exception as e:
             print(f"[RACKS] draw error: {e}")
 

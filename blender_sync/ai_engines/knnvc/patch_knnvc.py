@@ -1,4 +1,11 @@
-path = r'C:\Users\lukeb\.cache\torch\hub\bshall_knn-vc_master\matcher.py'
+import os
+import torch
+
+_hub_dir = torch.hub.get_dir()
+path = os.path.join(_hub_dir, "bshall_knn-vc_master", "matcher.py")
+if not os.path.exists(path):
+    print(f"ERROR: matcher.py not found at {path}")
+    raise SystemExit(1)
 
 code = open(path, encoding='latin-1').read()
 

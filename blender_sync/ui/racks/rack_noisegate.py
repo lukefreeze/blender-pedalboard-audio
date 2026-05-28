@@ -7,10 +7,20 @@
 # =============================================================================
 
 import math
-import bpy
 import gpu
-import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # These drawing helpers are imported from draw_utils so the PNG bridge
 # (draw_element) can replace them with texture blits when PNGs are loaded.
@@ -58,16 +68,6 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Lazy imports — avoids circular import at module load time
     import Racks as _racks_mod
     get_rack_channels = _racks_mod.get_rack_channels
-    try:
-        import core.audio as _audio_mod
-        _fft_timeline     = _audio_mod._fft_timeline
-        _gr_timeline      = _audio_mod._gr_timeline
-        _fft_timeline_full = getattr(_audio_mod, '_fft_timeline_full', {})
-        _fft_timeline_eq_input = getattr(_audio_mod, '_fft_timeline_eq_input', {})
-        _gr_levels        = getattr(_audio_mod, '_gr_levels', {})
-    except Exception:
-        _fft_timeline = _gr_timeline = _fft_timeline_full = {}
-        _fft_timeline_eq_input = _gr_levels = {}
     import math as _mg
     ui     = scale
     rail_h = RACK_RAIL_H * ui
@@ -103,7 +103,7 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Threshold in linear amplitude (for RMS comparison)
     thr_lin = 10.0 ** (thr_db / 20.0)
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ── Display background ────────────────────────────────────────────────────
     _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.042, 0.050, 1.0))

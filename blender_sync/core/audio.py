@@ -7,17 +7,11 @@
 import os
 import sys
 import math
-import wave
-import struct
 import tempfile
+import time as _time
 
 import bpy
 
-from core.constants import (
-    MAX_CHANNELS, DEFAULT_CHANNELS, FADER_MIN, FADER_MAX,
-    GAIN_MIN, GAIN_MAX, SEND_BTN_H, SEND_BTN_GAP, SEND_MIN_SLOTS,
-    SEND_START_Y, EFFECT_ABBREV,
-)
 from core.engine import get_engine
 
 
@@ -25,27 +19,28 @@ from core.engine import get_engine
 # These timelines are read by Racks.py for waveform display.
 # They are module-level so Racks can import them directly.
 # ---------------------------------------------------------------------------
-_fft_timeline      = {}   # ch -> {snapshots, snap_frames, sr, fps, start_frame}
-_fft_timeline_full = {}   # full-track version
-_gr_timeline       = {}
-_gr_timeline_full  = {}
-_gate_timeline     = {}
-_gate_timeline_full= {}
+_fft_timeline          = {}
+_fft_timeline_full     = {}
+_gr_timeline           = {}
+_gr_timeline_full      = {}
+_gate_timeline         = {}
+_gate_timeline_full    = {}
 _fft_timeline_eq_input = {}
 
-# Active channel handles: {channel_idx: {'handle': aud.Handle, ...}}
-_pb_channels       = {}
-_pb_proc_wav_cache = {}
-_pb_full_wav_cache = {}
-_pb_eq_pending     = {}
-_pb_engine_active  = False
-_pb_original_device= 'None'
-_pb_eq_timer_registered = False
-
-_pb_start_wall     = 0.0
-_pb_start_frame    = 0
-_pb_last_frame     = 0
-_pb_last_loop_time = 0.0
+# ---------------------------------------------------------------------------
+# Audio engine state
+# ---------------------------------------------------------------------------
+_pb_original_device = 'OpenAL'  # restored on HUD close
+_pb_channels      = {}
+_pb_start_wall    = 0.0
+_pb_start_frame   = 0
+_pb_engine_active   = False
+_pb_eq_pending      = {}        # channel_idx -> scheduled rebuild time
+_pb_eq_debounce     = 0.25      # seconds to wait after last knob move before rebuilding
+_pb_last_frame      = -1        # last known frame, for loop jump detection
+_pb_last_loop_time  = 0.0       # wall time of last loop restart (cooldown)
+_pb_proc_wav_cache  = {}        # channel_idx -> last processed wav path (for instant loop restart)
+_pb_full_wav_cache  = {}        # channel_idx -> full-track wav from frame_start (clean loop replay)
 
 
 def apply_fader_to_channel(channel_idx, old_fader, new_fader):
@@ -76,64 +71,6 @@ def apply_gain_to_channel(channel_idx, old_gain, new_gain):
         if (strip.channel - 1) != channel_idx: continue
         strip.volume = max(0.001, strip.volume * ratio)
     _pb_engine_update_volume(channel_idx)
-
-
-# ---------------------------------------------------------------------------
-# Pedalboard Audio Engine
-#
-# Replaces Blender's native audio playback when the HUD is active.
-# Blender's audio device is set to None so only our engine plays.
-# VSE strip.mute and strip.volume are never touched for audio routing —
-# they remain as the user set them and the VSE looks completely normal.
-#
-# Architecture:
-#   - One aud.Handle per VSE channel
-#   - On PLAY: start all handles from correct time offset, run free
-#   - On STOP: stop all handles, snap cursor to audio position
-#   - Volume = strip.volume * fader * gain  (set on handle, not strip)
-#   - Mute/solo operate on handle.volume AND strip.mute (VSE stays correct)
-#   - EQ: biquad filter chain rebuilt when knob changes, handle restarted
-#         from wall-clock position so audio stays in sync
-#   - frame_change_post detects play/stop transitions only — never seeks
-#     during playback (audio runs on hardware clock, no timer drift)
-# ---------------------------------------------------------------------------
-
-import time as _time
-import math as _math
-
-# Audio engine state
-_pb_original_device = 'OpenAL'  # restored on HUD close
-_pb_channels      = {}      # channel_idx -> dict (see _pb_start_channel)
-_pb_start_wall    = 0.0     # wall clock time when play was pressed
-_pb_start_frame   = 0       # scene frame when play was pressed
-_pb_engine_active   = False   # True while HUD is open and engine owns audio
-_pb_original_device = 'OpenAL'  # restored on HUD close
-_pb_eq_pending      = {}        # channel_idx -> scheduled rebuild time
-_pb_eq_debounce     = 0.25      # seconds to wait after last knob move before rebuilding
-_pb_is_loop_restart = False     # True when stop was a loop transition
-_pb_stop_time       = 0.0       # wall time when stop fired
-_pb_last_frame      = -1        # last known frame, for loop jump detection
-_pb_last_loop_time  = 0.0       # wall time of last loop restart (cooldown)
-_pb_proc_wav_cache  = {}        # channel_idx -> last processed wav path (for instant loop restart)
-_pb_full_wav_cache  = {}        # channel_idx -> full-track wav from frame_start (clean loop replay)
-
-# FFT timeline — stores snapshots of per-band FFT during batch processing
-# _fft_timeline[ch] = {
-#   'snapshots': list of (n_bands, n_bins) arrays,
-#   'fps': frames per snapshot,
-#   'start_frame': timeline frame the audio starts at,
-#   'sr': sample rate
-# }
-_fft_timeline      = {}   # trimmed — from position_seconds to end
-_fft_timeline_full = {}   # full track — always from seq frame_start
-_fft_timeline_eq_input = {}  # pre-EQ signal per channel — for EQ spectrum display
-_gr_timeline       = {}
-_gr_timeline_full  = {}
-_gate_timeline     = {}   # gate open/closed + GR per channel per snapshot
-_gate_timeline_full= {}
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -449,177 +386,6 @@ def _apply_effect_chain(samples, channel_idx, sr):
         return samples, samples
 
 
-
-
-
-
-# Reads strip volumes from VSE strips (user's values, not modified by us).
-# Joins multiple strips on same channel with silence for gaps.
-# ---------------------------------------------------------------------------
-
-def _pb_build_channel_sound(channel_idx, start_seconds):
-    """
-    Build a single aud.Sound for channel_idx starting at start_seconds.
-
-    Key facts from strip properties:
-      strip.frame_start        — timeline position of strip origin (CAN BE NEGATIVE
-                                  if the strip was slid left past frame 1)
-      strip.frame_final_end    — timeline frame where audible content ends
-      strip.frame_offset_start — frames into the SOURCE FILE where audio begins
-                                  (non-zero when left edge of strip was cut)
-      strip.frame_offset_end   — frames trimmed from the END of the source file
-
-    The audible timeline window is always:
-      visible_start = max(strip.frame_start, scene.frame_start)
-      visible_end   = strip.frame_final_end   (already accounts for offsets)
-
-    The corresponding file position for any timeline frame F is:
-      file_frame = frame_offset_start + (F - strip.frame_start)
-    """
-    import aud
-    scene = bpy.context.scene
-    if not scene or not scene.sequence_editor: return None, 0.0
-
-    fps           = scene.render.fps / scene.render.fps_base
-    # Respect preview range if active
-    seq_start_s = (scene.frame_preview_start if scene.use_preview_range
-                   else scene.frame_start) / fps
-    seq_end_s   = ((scene.frame_preview_end if scene.use_preview_range
-                    else scene.frame_end) + 1) / fps
-
-    tracks = getattr(scene, "pb_sync_tracks", [])
-    track  = tracks[channel_idx] if channel_idx < len(tracks) else None
-
-    # Collect strips on this channel.
-    # Do NOT filter by strip.mute here — mute is handled via handle.volume.
-    # strip.mute is purely a VSE visual indicator controlled by the user.
-    strips = sorted(
-        [s for s in scene.sequence_editor.sequences_all
-         if s.type == "SOUND" and s.sound
-         and (s.channel - 1) == channel_idx],
-        key=lambda s: s.frame_final_end - s.frame_final_duration
-    )
-    if not strips: return None, 0.0
-
-    joined   = None
-    prev_end = start_seconds   # track where we are in output timeline seconds
-
-    for strip in strips:
-        # Visible timeline window for this strip (seconds)
-        # Clamp to sequence bounds and our start position
-        # Correct visible timeline start:
-        # frame_final_end - frame_final_duration gives the actual start frame
-        # regardless of where strip.frame_start is (which can be negative
-        # or shared between multiple strips cut from the same original).
-        # This is the only reliable way to get the visible start.
-        actual_start_frame = strip.frame_final_end - strip.frame_final_duration
-        vis_start_s = max(actual_start_frame / fps, seq_start_s)
-        vis_end_s   = min(strip.frame_final_end / fps, seq_end_s)
-
-        # Skip if entirely outside what we need
-        if vis_end_s <= start_seconds: continue
-        if vis_start_s >= seq_end_s:   continue
-
-        # Actual start of what we want from this strip
-        play_start_s = max(vis_start_s, start_seconds)
-        play_end_s   = vis_end_s
-        duration     = play_end_s - play_start_s
-        if duration < 0.001: continue
-
-        # File position corresponding to play_start_s:
-        #   file_frame = frame_offset_start + (timeline_frame - strip.frame_start)
-        # In seconds:
-        #   file_pos = (frame_offset_start / fps) + (play_start_s - strip.frame_start/fps)
-        # Correct file offset formula (verified empirically):
-        # frame_offset_start is how far into the source file the strip begins,
-        # measured from the strip origin — it already fully encodes the cut.
-        # We only add how far into the strip's VISIBLE portion we are starting,
-        # i.e. (play_start_s - vis_start_s), not from strip.frame_start.
-        file_offset_start_s = getattr(strip, 'frame_offset_start', 0.0) / fps
-        file_pos_start      = file_offset_start_s + (play_start_s - vis_start_s)
-        file_pos_end        = file_pos_start + duration
-
-        if file_pos_start < 0.0:
-            file_pos_start = 0.0
-        if file_pos_end <= file_pos_start:
-            continue
-
-        filepath = bpy.path.abspath(strip.sound.filepath)
-        try:
-            raw_sound  = aud.Sound.file(filepath)
-            strip_sound = raw_sound.limit(file_pos_start, file_pos_end)
-
-            # Build silence matching source audio spec to avoid sample rate
-            # mismatch glitches. resample+rechannel before limit is required.
-            specs   = raw_sound.specs
-            src_sr  = int(specs[0])
-            src_nch = int(specs[1])
-
-            def make_silence(duration_s):
-                return (aud.Sound.silence()
-                        .resample(src_sr, False)
-                        .rechannel(src_nch)
-                        .limit(0.0, duration_s))
-
-            if joined is None:
-                lead = play_start_s - start_seconds
-                if lead > 0.01:
-                    joined = make_silence(lead).join(strip_sound)
-                else:
-                    joined = strip_sound
-            else:
-                gap = play_start_s - prev_end
-                if gap > 0.01:
-                    joined = joined.join(make_silence(gap))
-                joined = joined.join(strip_sound)
-
-            prev_end = play_end_s
-            print(f"[ENGINE] ch{channel_idx+1} strip '{strip.name}' "
-                  f"file[{file_pos_start:.2f}→{file_pos_end:.2f}s] "
-                  f"timeline[{play_start_s:.2f}→{play_end_s:.2f}s]")
-
-        except Exception as e:
-            print(f"[ENGINE] strip build failed ch{channel_idx+1} "
-                  f"'{strip.name}': {e}")
-            continue
-
-    if joined is None: return None, 0.0
-
-    # Hard limit to sequence end — prevents audio running past loop point
-    total_duration = seq_end_s - start_seconds
-    if total_duration > 0.0:
-        joined = joined.limit(0.0, total_duration)
-    else:
-        return None, 0.0
-
-    # Apply 3-band EQ
-    try:
-        sample_rate = int(aud.Sound.file(
-            bpy.path.abspath(strips[0].sound.filepath)).specs[0])
-    except Exception:
-        sample_rate = 44100
-
-    eq_low = eq_mid = eq_high = 0.0
-    if track:
-        eq_low, eq_mid, eq_high = track.eq_low, track.eq_mid, track.eq_high
-
-    try:
-        if abs(eq_low)  > 0.1:
-            b, a = _biquad_low_shelf(eq_low,  200.0,  sample_rate)
-            joined = joined.filter(b, a)
-        if abs(eq_mid)  > 0.1:
-            b, a = _biquad_peak(eq_mid,        1000.0, sample_rate)
-            joined = joined.filter(b, a)
-        if abs(eq_high) > 0.1:
-            b, a = _biquad_high_shelf(eq_high, 8000.0, sample_rate)
-            joined = joined.filter(b, a)
-    except Exception as e:
-        print(f"[ENGINE] EQ filter failed ch{channel_idx+1}: {e}")
-
-    avg_vol = sum(s.volume for s in strips) / len(strips)
-    return joined, avg_vol
-
-
 def _pb_channel_volume(channel_idx):
     """Return the channel fader volume for hj.set_volume().
 
@@ -792,230 +558,8 @@ def _pb_wire_rack_to_engine(channel_idx):
         print(f"[WIRE] ch{channel_idx+1} no rack assigned")
 
 
-def _pb_reprocess_channel(channel_idx):
-    """Reprocess and restart a channel from current playhead position.
-    Called when rack settings change during playback."""
-    import bpy as _bpy
-    scene = _bpy.context.scene
-    if not scene: return
-    is_playing = getattr(_bpy.context.screen, 'is_animation_playing', False)
-    if not is_playing: return
-    fps = scene.render.fps / scene.render.fps_base
-
-    # Clear the wav cache so the fresh reprocess is never skipped
-    import os
-    cached = _pb_proc_wav_cache.get(channel_idx)
-    if cached:
-        try:
-            if os.path.exists(cached): os.remove(cached)
-        except Exception:
-            pass
-        _pb_proc_wav_cache.pop(channel_idx, None)
-
-    # Use scene.frame_current for position — more reliable than wall clock
-    # which drifts after loops and repeated reprocesses
-    seq_start_s = ((scene.frame_preview_start if scene.use_preview_range
-                    else scene.frame_start) / fps)
-    seq_end_s   = (((scene.frame_preview_end   if scene.use_preview_range
-                    else scene.frame_end) + 1) / fps)
-    current_pos = max(seq_start_s,
-                      min(seq_end_s - 0.1,
-                          scene.frame_current / fps))
-
-    print(f"[ENGINE] ch{channel_idx+1} reprocessing at {current_pos:.2f}s "
-          f"(frame {scene.frame_current}, "
-          f"seq {seq_start_s:.1f}s→{seq_end_s:.1f}s)")
-
-    # Sanity check — if current_pos is past end, snap to start
-    if current_pos >= seq_end_s - 0.5:
-        current_pos = seq_start_s
-        print(f"[ENGINE] ch{channel_idx+1} position past end, snapping to start")
-
-    _pb_start_channel(channel_idx, current_pos)
 
 
-def _build_timelines(channel_idx, proc_np, sr, scene_fps,
-                     position_seconds, full_track=False, raw_np=None):
-    """Build FFT and GR timelines from processed audio numpy array.
-    proc_np: processed output — used for FFT spectrum display.
-    raw_np:  unprocessed input — used for GR computation (signal before compression).
-    GR values are real soft-knee gain reduction in dB (0..24).
-    """
-    import numpy as _np2
-    snap_frames   = int(sr * 0.08)
-    BINS_PER_BAND = 32
-    CROSSOVERS    = [20, 120, 800, 5000, 20000]
-
-    # Use input audio for GR if provided, else fall back to output
-    gr_source = raw_np if raw_np is not None else proc_np
-    mono_gr   = gr_source[:, 0] if gr_source.ndim == 2 else gr_source.flatten()
-
-    # Read rack params for GR computation
-    band_params = []
-    try:
-        _scene_bt = bpy.context.scene
-        _racks_bt = getattr(_scene_bt, "pb_racks", []) if _scene_bt else []
-        from Racks import get_rack_channels as _grc_bt
-        for _rk in _racks_bt:
-            if _rk.enabled and channel_idx in _grc_bt(_rk):
-                if _rk.effect_type == "COMP_MULTI":
-                    for _b in range(4):
-                        band_params.append((
-                            -40.0 + getattr(_rk, f'p{_b}',    0.45) * 40.0,
-                             1.0  + getattr(_rk, f'p{_b+4}',  0.05) * 19.0,
-                             0.5  + getattr(_rk, f'p{_b+20}', 0.14) * 23.5,
-                        ))
-                    break
-                elif _rk.effect_type == "COMP_SINGLE":
-                    thr = -40.0 + getattr(_rk, 'p0', 0.55) * 40.0
-                    rat =  1.0  + getattr(_rk, 'p1', 0.11) * 19.0
-                    kne =  0.5  + getattr(_rk, 'p5', 0.15) * 23.5
-                    band_params = [(thr, rat, kne)] * 4
-                    break
-    except Exception:
-        pass
-
-    mono    = proc_np[:, 0] if proc_np.ndim == 2 else proc_np.flatten()
-    n_snaps = max(1, len(mono) // snap_frames)
-    fft_snaps = []
-    gr_snaps  = []
-
-    for snap_i in range(n_snaps):
-        start    = snap_i * snap_frames
-        chunk    = mono[start:start + snap_frames]
-        if len(chunk) < 128:
-            break
-        win      = _np2.hanning(len(chunk)).astype(_np2.float32)
-        fft_c    = _np2.abs(_np2.fft.rfft(chunk * win))
-        fft_c   /= (len(chunk) * 0.5 + 1e-9)
-        freq_res = sr / len(chunk)
-        n_fft    = len(fft_c)
-
-        # FFT bins per band (from processed output — for spectrum display)
-        band_fft = []
-        for b in range(4):
-            freqs = _np2.logspace(
-                _np2.log10(max(CROSSOVERS[b], 1)),
-                _np2.log10(CROSSOVERS[b+1]), BINS_PER_BAND)
-            idxs  = _np2.clip((freqs/freq_res).astype(int), 0, n_fft-1)
-            band_fft.append(_np2.clip(
-                (20*_np2.log10(fft_c[idxs]+1e-9)+80)/80,
-                0.0, 1.0).astype(_np2.float32))
-        fft_snaps.append(_np2.stack(band_fft))
-
-        # GR from C++ engine — process this chunk and read gr_levels directly
-        gr_snap = _np2.zeros(4, dtype=_np2.float32)
-        try:
-            _eng_bt = get_engine()
-            if _eng_bt:
-                chunk_raw = gr_source[start:start + snap_frames]
-                if chunk_raw.shape[0] >= 64:
-                    if chunk_raw.ndim == 1:
-                        chunk_raw = chunk_raw.reshape(-1, 1)
-                    chunk_c = _np2.ascontiguousarray(chunk_raw, dtype=_np2.float32)
-                    _eng_bt.process_buffer(channel_idx, chunk_c, sr)
-                    gv = _eng_bt.get_state().get_gr_levels(channel_idx)
-                    for b in range(4):
-                        gr_snap[b] = min(24.0, max(0.0, float(gv[b])))
-        except Exception:
-            pass
-        gr_snaps.append(gr_snap)
-
-    if not fft_snaps:
-        return
-
-    _scene_bt2 = bpy.context.scene
-    _sf_bt2 = float((_scene_bt2.frame_preview_start
-                     if _scene_bt2 and _scene_bt2.use_preview_range
-                     else (_scene_bt2.frame_start if _scene_bt2 else 1)))
-    tl = {
-        'snapshots'  : _np2.stack(fft_snaps),
-        'snap_frames': snap_frames,
-        'start_frame': _sf_bt2,
-        'sr': sr, 'fps': scene_fps,
-    }
-    gl = {
-        'snapshots'  : _np2.stack(gr_snaps),
-        'snap_frames': snap_frames,
-        'start_frame': _sf_bt2,
-        'sr': sr, 'fps': scene_fps,
-    }
-    if full_track:
-        _fft_timeline_full[channel_idx] = tl
-        _gr_timeline_full[channel_idx]  = gl
-    else:
-        _fft_timeline[channel_idx] = tl
-        _gr_timeline[channel_idx]  = gl
-
-    # --- Gate timeline: open/closed + GR per 80ms snapshot ---
-    # Uses gr_levels[ch][1]=GR magnitude, gr_levels[ch][2]=open flag
-    # written by apply_noise_gate per chunk.
-    try:
-        from Racks import get_rack_channels as _grc_gt
-        scene_gt = bpy.context.scene
-        racks_gt = getattr(scene_gt, "pb_racks", []) if scene_gt else []
-        has_gate = False
-        for r in racks_gt:
-            _rch = _grc_gt(r)
-            if r.enabled and r.effect_type == "NOISE_GATE" and channel_idx in _rch:
-                has_gate = True
-                break
-        if not has_gate:
-            print(f"[GATE_TL_SKIP] ch{channel_idx+1} full_track={full_track} "
-                  f"racks={len(racks_gt)} "
-                  f"gate_racks={[r.effect_type for r in racks_gt if r.effect_type=='NOISE_GATE']} "
-                  f"assigned={[_grc_gt(r) for r in racks_gt if r.effect_type=='NOISE_GATE']}")
-        if has_gate:
-            gate_snaps = []
-            # Reset the gate DSP state so envelope follower starts fresh
-            try:
-                engine.create_channel(channel_idx)
-                # Re-wire the gate effect so slots are set after create_channel reset
-                from Racks import get_rack_params as _grp_gt
-                for r in racks_gt:
-                    if r.enabled and r.effect_type == "NOISE_GATE" and channel_idx in _grc_gt(r):
-                        p = _grp_gt(r)
-                        engine.set_effect(channel_idx, 0, engine.FX_GATE_PARAM,
-                                          p[0], p[1], p[2], p[3], p[4], 0.0, 0.0, 0.0)
-                        break
-            except Exception:
-                pass
-            # Use raw pre-effects audio for gate timeline (same source as FFT)
-            _gate_src = raw_np if raw_np is not None else proc_np
-            inp_gt = _np2.asarray(_gate_src, dtype=_np2.float32)
-            if inp_gt.ndim == 1:
-                inp_gt = inp_gt.reshape(-1, 1)
-            n_snaps_gt = max(1, inp_gt.shape[0] // snap_frames)
-            for snap_i in range(n_snaps_gt):
-                s = snap_i * snap_frames
-                chunk_gt = inp_gt[s:s + snap_frames]
-                if chunk_gt.shape[0] < 64:
-                    break
-                chunk_gt = _np2.ascontiguousarray(chunk_gt, dtype=_np2.float32)
-                try:
-                    engine.process_buffer(channel_idx, chunk_gt, int(sr))
-                    gr_db   = float(engine.get_state().get_gr_levels(channel_idx)[1])
-                    is_open = float(engine.get_state().get_gr_levels(channel_idx)[2])
-                    # Fallback: if is_open is always 1 (state not updating),
-                    # derive from GR amount — if gate is attenuating, it's closed
-                    if is_open > 0.5 and gr_db > 2.0:
-                        is_open = 0.0
-                    gate_snaps.append(_np2.array([gr_db, is_open], dtype=_np2.float32))
-                except Exception:
-                    gate_snaps.append(_np2.array([0.0, 1.0], dtype=_np2.float32))
-            if gate_snaps:
-                gate_tl = {
-                    'snapshots'  : _np2.stack(gate_snaps),
-                    'snap_frames': snap_frames,
-                    'start_frame': _sf_bt2,
-                    'sr': float(sr), 'fps': float(scene_fps),
-                }
-                if full_track:
-                    _gate_timeline_full[channel_idx] = gate_tl
-                else:
-                    _gate_timeline[channel_idx]      = gate_tl
-    except Exception:
-        pass  # gate timeline is decorative — never block playback
 
 
 
@@ -1308,7 +852,7 @@ def _pb_start_all_from_frame(scene, frame):
     effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
                           else scene.frame_end)
 
-    if frame < effective_start or frame >= effective_end:
+    if frame < effective_start or frame > effective_end:
         frame = effective_start
         print(f"[HIJACKER] cursor outside sequence, snapping to frame {frame}")
         try: scene.frame_set(frame)
@@ -1416,8 +960,10 @@ def _pb_on_play_stop(scene, depsgraph=None):
 @bpy.app.handlers.persistent
 def _pb_loop_detect(scene, depsgraph=None):
     """
-    Watches frame_change_post for loop restarts and mid-playback seeks.
-    With the Hijacker engine, seeks are a single engine.seek() call.
+    Watches frame_change_post for genuine loop-backs and user seeks.
+    Does NOT try to keep the cursor in sync — that's the meter timer's job.
+    Does NOT act on large positive frame deltas — those are just Blender
+    running slow under draw load, not real seeks.
     """
     global _pb_last_frame, _pb_last_loop_time, _pb_start_frame
 
@@ -1438,41 +984,32 @@ def _pb_loop_detect(scene, depsgraph=None):
 
     frame_delta = current - _pb_last_frame
 
-    # Normal advance
-    if frame_delta == 0 or (0 < frame_delta <= 5):
-        _pb_last_frame = current
-        # Keep Blender's timeline cursor synced to engine playhead
-        engine = get_engine()
-        if engine:
-            hj = engine.get_engine()
-            if hj:
-                fps = scene.render.fps / scene.render.fps_base
-                ph_frame = int(hj.get_playhead_s() * fps)
-                state = hj.get_state()
-                if state:
-                    state.current_frame = ph_frame
-        return
-
     effective_start = int(scene.frame_preview_start if scene.use_preview_range
                           else scene.frame_start)
     effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
                           else scene.frame_end)
 
-    already_there   = (abs(current - _pb_start_frame) <= 3)
-    time_since_last = _time.time() - _pb_last_loop_time
-    out_of_bounds   = (current < effective_start or current >= effective_end)
-
-    if not out_of_bounds and already_there and time_since_last < 0.5:
+    # Any forward movement within the sequence is normal playback — even large
+    # deltas caused by draw-load frame skipping. Just update _pb_last_frame
+    # and let the engine play from wherever it actually is.
+    if frame_delta >= 0 and current <= effective_end:
         _pb_last_frame = current
         return
 
     fps = scene.render.fps / scene.render.fps_base
 
-    # Clamp seek target to valid range — never seek to negative time
+    already_there   = (abs(current - _pb_start_frame) <= 3)
+    time_since_last = _time.time() - _pb_last_loop_time
+
+    if already_there and time_since_last < 0.5:
+        _pb_last_frame = current
+        return
+
+    # Clamp seek target to valid range
     seek_frame = max(effective_start, min(effective_end - 1, current))
 
     if frame_delta < 0 and abs(current - effective_start) <= 2:
-        # Genuine loop back to start
+        # Genuine loop back to start (Blender looped the animation)
         print(f"[HIJACKER] loop: {_pb_last_frame}→{current}")
         _pb_last_loop_time = _time.time()
         _pb_start_frame    = effective_start
@@ -1481,21 +1018,8 @@ def _pb_loop_detect(scene, depsgraph=None):
             hj = engine.get_engine()
             if hj:
                 hj.seek(max(0.0, effective_start / fps))
-    elif out_of_bounds:
-        # Cursor jumped outside sequence — snap to start and restart
-        print(f"[HIJACKER] seek out of bounds: {_pb_last_frame}→{current}, "
-              f"snapping to frame {effective_start}")
-        _pb_last_loop_time = _time.time()
-        _pb_start_frame    = effective_start
-        try: scene.frame_set(effective_start)
-        except Exception: pass
-        engine = get_engine()
-        if engine:
-            hj = engine.get_engine()
-            if hj:
-                hj.seek(max(0.0, effective_start / fps))
-    else:
-        # Normal mid-playback seek
+    elif frame_delta < 0:
+        # User dragged the cursor backwards during playback
         print(f"[HIJACKER] seek: {_pb_last_frame}→{current}")
         _pb_last_loop_time = _time.time()
         _pb_start_frame    = seek_frame
@@ -1504,6 +1028,11 @@ def _pb_loop_detect(scene, depsgraph=None):
             hj = engine.get_engine()
             if hj:
                 hj.seek(max(0.0, seek_frame / fps))
+    # Positive delta past effective_end is handled by the meter timer
+    # using the engine's own clock — we never act on it here to avoid
+    # false stops caused by draw-load frame skipping.
+
+    _pb_last_frame = current
 
     _pb_last_frame = current
 
@@ -1773,25 +1302,3 @@ def sync_vse_solo(channel_idx, solo_state):
                 hj.set_solo(idx, soloed_ch)
                 hj.set_volume(idx, _pb_channel_volume(idx))
 
-
-# ---------------------------------------------------------------------------
-# Envelope pre-build for all strips (called on refresh / HUD enable)
-# ---------------------------------------------------------------------------
-
-def prebuild_envelopes():
-    scene = bpy.context.scene
-    if not scene or not scene.sequence_editor: return
-    fps  = scene.render.fps / scene.render.fps_base
-    seen = set()
-    for strip in scene.sequence_editor.sequences_all:
-        if strip.type != "SOUND" or not strip.sound: continue
-        filepath = bpy.path.abspath(strip.sound.filepath)
-        from core.meters import _envelope_cache, get_envelope as _get_env
-        if filepath not in seen and filepath not in _envelope_cache:
-            _get_env(filepath, fps)
-            seen.add(filepath)
-
-
-# ---------------------------------------------------------------------------
-# Peak envelope builder
-# ---------------------------------------------------------------------------

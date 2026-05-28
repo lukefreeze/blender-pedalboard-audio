@@ -12,7 +12,6 @@ Usage:
 import sys
 import os
 import argparse
-import subprocess
 
 
 def apply_patch(patch_path):

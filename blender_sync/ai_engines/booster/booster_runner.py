@@ -125,11 +125,9 @@ def main():
     sys.stdout.flush()
 
     # ── Write float32 WAV ─────────────────────────────────────────────────────
-    # Must be float32 because _build_envelope in meters.py reads aud.Sound.data()
-    # which returns float32 bytes. Writing int16 would halve the apparent sample
-    # count and make the VU meter stop after 1-2 seconds.
-    import struct as _struct
-    out_bytes = _struct.pack(f'{len(boosted)}f', *boosted)
+    # Float32 output preserves full dynamic range for the Hijacker engine.
+    # Writing int16 would cause level metering to misread the sample count.
+    out_bytes = struct.pack(f'{len(boosted)}f', *boosted)
 
     try:
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)

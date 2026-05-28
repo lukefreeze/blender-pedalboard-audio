@@ -132,16 +132,13 @@ PYBIND11_MODULE(hijacker_engine, m)
     // ── Effect type constants ─────────────────────────────────────────────
     m.attr("FX_NONE")         = (int)EffectType::NONE;
     m.attr("FX_GAIN")         = (int)EffectType::GAIN;
-    m.attr("FX_EQ_3BAND")     = (int)EffectType::EQ_3BAND;
     m.attr("FX_EQ_PARAM")     = (int)EffectType::EQ_PARAM;
     m.attr("FX_COMP_SINGLE")  = (int)EffectType::COMP_SINGLE;
     m.attr("FX_COMP_MULTI")   = (int)EffectType::COMP_MULTI;
-    m.attr("FX_REVERB")       = (int)EffectType::REVERB;
     m.attr("FX_REVERB_PARAM") = (int)EffectType::REVERB_PARAM;
     m.attr("FX_GATE_PARAM")   = (int)EffectType::GATE_PARAM;
     m.attr("FX_DELAY_PARAM")  = (int)EffectType::DELAY_PARAM;
     m.attr("MB_BANDS")        = PB_MB_BANDS;
-    m.attr("FFT_BINS")        = PB_FFT_BINS;
 
     // ── HijackerSegment ───────────────────────────────────────────────────
     py::class_<HijackerSegment>(m, "Segment")
@@ -241,13 +238,6 @@ PYBIND11_MODULE(hijacker_engine, m)
                 if(ch<0||ch>=PB_MAX_CHANNELS) throw std::out_of_range("ch");
                 return std::vector<float>(s.gr_levels[ch],s.gr_levels[ch]+PB_MB_BANDS); },
             py::arg("channel"))
-        .def("get_fft_bins",
-            [](EngineState& s, int ch, int band) -> std::vector<float> {
-                if(ch<0||ch>=PB_MAX_CHANNELS||band<0||band>=PB_MB_BANDS)
-                    throw std::out_of_range("ch/band");
-                return std::vector<float>(s.fft_bins[ch][band],
-                                          s.fft_bins[ch][band]+PB_FFT_BINS); },
-            py::arg("channel"), py::arg("band"))
         .def("get_spec_bins",
             [](EngineState& s, int ch) -> std::vector<float> {
                 if(ch<0||ch>=PB_MAX_CHANNELS)
@@ -261,9 +251,5 @@ PYBIND11_MODULE(hijacker_engine, m)
                     throw std::out_of_range("ch/slot");
                 return s.effect_chain[ch][slot]; },
             py::arg("channel"), py::arg("slot"),
-            py::return_value_policy::reference)
-        .def_property("gains",
-            [](EngineState& s){ return std::vector<float>(s.gains,s.gains+4); },
-            [](EngineState& s, std::vector<float> v){
-                for(int i=0;i<4&&i<(int)v.size();i++) s.gains[i]=v[i]; });
+            py::return_value_policy::reference);
 }

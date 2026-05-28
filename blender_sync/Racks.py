@@ -13,14 +13,23 @@ import bpy
 import gpu
 import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # ---------------------------------------------------------------------------
 # Shared state — set by Loader.py before calling draw_racks()
 # ---------------------------------------------------------------------------
 _UI_SCALE  = 1.0
-_SCROLL_X  = 0.0
-_SCROLL_Y  = 0.0
-_IS_PLAYING = False
 
 # GR levels written by the audio engine — rack reads these for GR meters
 # gr_levels[rack_idx][channel_idx] = float 0.0-1.0 (0=no reduction, 1=max)
@@ -71,26 +80,20 @@ RACK_RAIL_H         = 32           # top rail height
 # Knob layout (left section of expanded rack)
 KNOB_SECTION_W      = 360
 KNOB_START_X        = 55
-KNOB_Y_OFFSET       = 130          # from rack top
 KNOB_SPACING        = 68
 
 # Spectrum display
 SPEC_X              = 430
 SPEC_W              = 480
 SPEC_H              = 200
-SPEC_Y_OFFSET       = 50           # from rack top
 SPEC_BANDS          = 48           # number of frequency bars
 
 # GR meter section
-GR_X                = 862
 GR_BAR_W            = 12
 GR_BAR_SPACING      = 16
 
 # Channel buttons (right section)
-CH_BTN_X            = 870
 CH_BTN_SIZE         = 26
-CH_BTN_SPACING      = 28
-CH_BTN_ROWS         = 3
 
 # ---------------------------------------------------------------------------
 # Effect type definitions
@@ -153,13 +156,8 @@ EFFECT_PARAMS = {
         ("KNEE_HMD",  "HMid Knee",   0.5,  24.0,    4.0, "{:.1f}dB"),
         ("KNEE_HIGH", "High Knee",   0.5,  24.0,    4.0, "{:.1f}dB"),
     ],
-    "EQ": [
-        ("LOW",       "Low",        -24.0, 24.0,   0.0, "{:+.0f}dB"),
-        ("LOW_MID",   "Low Mid",    -24.0, 24.0,   0.0, "{:+.0f}dB"),
-        ("MID",       "Mid",        -24.0, 24.0,   0.0, "{:+.0f}dB"),
-        ("HIGH_MID",  "High Mid",   -24.0, 24.0,   0.0, "{:+.0f}dB"),
-        ("HIGH",      "High",       -24.0, 24.0,   0.0, "{:+.0f}dB"),
-    ],
+    # "EQ" entry removed — EQ rack uses its own inline EQ7_BANDS (7-band);
+    # this 5-band entry was unreachable and is intentionally omitted.
     "REVERB": [
         # Order MUST match audio engine: p0=room, p1=damp, p2=wet, p3=pre_delay, p4=width
         ("ROOM",      "Room",         0.0,  1.0,   0.5, "{:.0%}"),
@@ -317,15 +315,6 @@ AI_PRESET_DATA['PIPER_TTS'] = [
 AI_PRESETS = {k: [p[0] for p in v] for k, v in AI_PRESET_DATA.items()}
 
 
-def _get_piper_voice_presets():
-    """Return list of voice display names for the preset selector."""
-    try:
-        from core.ai_piper import get_voices
-        voices = get_voices()
-        return [name for name, _, _ in voices] if voices else ["No voices found"]
-    except Exception:
-        return ["No voices found"]
-
 
 def _load_ai_preset(rack, preset_idx):
     """Load a DeepFilterNet preset by index into rack params."""
@@ -376,29 +365,6 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     ch6:  bpy.props.BoolProperty(default=False)
     ch7:  bpy.props.BoolProperty(default=False)
     ch8:  bpy.props.BoolProperty(default=False)
-    ch9:  bpy.props.BoolProperty(default=False)
-    ch10: bpy.props.BoolProperty(default=False)
-    ch11: bpy.props.BoolProperty(default=False)
-    ch12: bpy.props.BoolProperty(default=False)
-    ch13: bpy.props.BoolProperty(default=False)
-    ch14: bpy.props.BoolProperty(default=False)
-    ch15: bpy.props.BoolProperty(default=False)
-    ch16: bpy.props.BoolProperty(default=False)
-    ch17: bpy.props.BoolProperty(default=False)
-    ch18: bpy.props.BoolProperty(default=False)
-    ch19: bpy.props.BoolProperty(default=False)
-    ch20: bpy.props.BoolProperty(default=False)
-    ch21: bpy.props.BoolProperty(default=False)
-    ch22: bpy.props.BoolProperty(default=False)
-    ch23: bpy.props.BoolProperty(default=False)
-    ch24: bpy.props.BoolProperty(default=False)
-    ch25: bpy.props.BoolProperty(default=False)
-    ch26: bpy.props.BoolProperty(default=False)
-    ch27: bpy.props.BoolProperty(default=False)
-    ch28: bpy.props.BoolProperty(default=False)
-    ch29: bpy.props.BoolProperty(default=False)
-    ch30: bpy.props.BoolProperty(default=False)
-    ch31: bpy.props.BoolProperty(default=False)
     # 8 parameter values (covers all effect types)
     p0: bpy.props.FloatProperty(default=0.0)
     p1: bpy.props.FloatProperty(default=0.0)
@@ -453,29 +419,6 @@ class PB_AIRackSettings(bpy.types.PropertyGroup):
     ch6:  bpy.props.BoolProperty(default=False)
     ch7:  bpy.props.BoolProperty(default=False)
     ch8:  bpy.props.BoolProperty(default=False)
-    ch9:  bpy.props.BoolProperty(default=False)
-    ch10: bpy.props.BoolProperty(default=False)
-    ch11: bpy.props.BoolProperty(default=False)
-    ch12: bpy.props.BoolProperty(default=False)
-    ch13: bpy.props.BoolProperty(default=False)
-    ch14: bpy.props.BoolProperty(default=False)
-    ch15: bpy.props.BoolProperty(default=False)
-    ch16: bpy.props.BoolProperty(default=False)
-    ch17: bpy.props.BoolProperty(default=False)
-    ch18: bpy.props.BoolProperty(default=False)
-    ch19: bpy.props.BoolProperty(default=False)
-    ch20: bpy.props.BoolProperty(default=False)
-    ch21: bpy.props.BoolProperty(default=False)
-    ch22: bpy.props.BoolProperty(default=False)
-    ch23: bpy.props.BoolProperty(default=False)
-    ch24: bpy.props.BoolProperty(default=False)
-    ch25: bpy.props.BoolProperty(default=False)
-    ch26: bpy.props.BoolProperty(default=False)
-    ch27: bpy.props.BoolProperty(default=False)
-    ch28: bpy.props.BoolProperty(default=False)
-    ch29: bpy.props.BoolProperty(default=False)
-    ch30: bpy.props.BoolProperty(default=False)
-    ch31: bpy.props.BoolProperty(default=False)
     # Float params
     # p0 = Attenuation limit (norm 0-1, maps -40..0 dB)
     # p1 = Sensitivity / voice activity threshold (0-1)
@@ -673,7 +616,7 @@ def _load_preset(rack, preset_idx):
 # ---------------------------------------------------------------------------
 def _draw_rect(x, y, w, h, color):
     if w <= 0 or h <= 0: return
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     batch  = batch_for_shader(shader, "TRI_STRIP",
                               {"pos": [(x,y),(x+w,y),(x,y+h),(x+w,y+h)]})
     shader.bind()
@@ -682,7 +625,7 @@ def _draw_rect(x, y, w, h, color):
 
 
 def _draw_line(x1, y1, x2, y2, color, width=1.0):
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     batch  = batch_for_shader(shader, "LINES",
                               {"pos": [(x1,y1),(x2,y2)]})
     gpu.state.line_width_set(width)
@@ -693,7 +636,7 @@ def _draw_line(x1, y1, x2, y2, color, width=1.0):
 
 
 def _draw_circle(cx, cy, r, color, filled=True):
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     segs   = 20
     if filled:
         verts = [(cx, cy)]
@@ -735,7 +678,7 @@ def _draw_knob(cx, cy, radius, norm_value, color, label, value_str, scale, label
     # Arc background (270 degrees, from ~7 o'clock to ~5 o'clock)
     arc_start = -225.0
     arc_total = 270.0
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     segs = 24
     # Active arc
     active_angle = arc_start + norm_value * arc_total
@@ -776,7 +719,7 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
     # Background
     _draw_rect(rx, ry, rw, rh, (0.04, 0.04, 0.04, 1.0))
     # Border
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
     shader.bind(); shader.uniform_float("color", (0.15,0.15,0.15,1.0))
@@ -1062,7 +1005,7 @@ def _draw_channel_buttons(rx, ry, rack, scale):
     group_idx = getattr(rack, 'group_idx', 0)
     offset    = group_idx * 9
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     for local_idx in range(9):
         row = local_idx // 3
         col = local_idx % 3
@@ -1125,7 +1068,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     band_w      = content_w / 4
     content_x   = rx + side_margin / 2
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ----------------------------------------------------------------
     # SPECTRUM DISPLAY — FabFilter style full-width GR curve
@@ -1675,7 +1618,7 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     zero_db_y = disp_y + disp_h * 0.5
     px_per_db = (disp_h * 0.5) / db_range
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # -----------------------------------------------------------------------
     # DISPLAY BACKGROUND + GRID
@@ -2029,7 +1972,7 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     knob_h      = body_h * 0.42 - 4 * ui_scale
     knob_y      = ry + 2 * ui_scale                     # bottom of body
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # Display background
     _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.07, 0.07, 0.09, 1.0))
@@ -2294,7 +2237,7 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Threshold in linear amplitude (for RMS comparison)
     thr_lin = 10.0 ** (thr_db / 20.0)
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ── Display background ────────────────────────────────────────────────────
     _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.042, 0.050, 1.0))
@@ -2635,7 +2578,7 @@ def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     delay_str  = (f"{delay_ms:.0f}ms" if delay_ms < 1000
                   else f"{delay_ms/1000:.2f}s")
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ── Display background ────────────────────────────────────────────────────
     _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.040, 0.055, 1.0))
@@ -2908,7 +2851,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
 
     # --- CHASSIS ---
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
     shader.bind()
@@ -3022,7 +2965,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     del_w = 18*scale
     del_h = 16*scale
     _draw_rect(del_x, del_y, del_w, del_h, (0.18, 0.04, 0.04, 1.0))
-    shader2 = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader2 = _get_shader()
     dv = [(del_x,del_y),(del_x+del_w,del_y),
           (del_x+del_w,del_y+del_h),(del_x,del_y+del_h),(del_x,del_y)]
     db = batch_for_shader(shader2,"LINE_STRIP",{"pos":dv})
@@ -3146,7 +3089,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     rh = RACK_COLLAPSED_H * scale
 
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
     shader.bind()
@@ -3222,7 +3165,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     cdel_w = 18*scale
     cdel_h = 14*scale
     _draw_rect(cdel_x, cdel_y, cdel_w, cdel_h, (0.18,0.04,0.04,1.0))
-    shader_d = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader_d = _get_shader()
     dv2 = [(cdel_x,cdel_y),(cdel_x+cdel_w,cdel_y),
            (cdel_x+cdel_w,cdel_y+cdel_h),(cdel_x,cdel_y+cdel_h),(cdel_x,cdel_y)]
     db2 = batch_for_shader(shader_d,"LINE_STRIP",{"pos":dv2})
@@ -3255,7 +3198,7 @@ def _draw_add_rack_button(rx, ry, scale, rack_width=None):
     _draw_rect(rx, ry, rw, rh, (0.07, 0.07, 0.07, 1.0))
 
     # Dashed border
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     segs   = 60
     verts  = []
     for i in range(segs+1):
@@ -3294,7 +3237,7 @@ def _draw_add_popup(px, py, scale):
                popup_w, popup_h, (0.0,0.0,0.0,0.5))
     # Background
     _draw_rect(popup_x, popup_y, popup_w, popup_h, (0.15,0.15,0.15,1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(popup_x, popup_y),
               (popup_x+popup_w, popup_y),
               (popup_x+popup_w, popup_y+popup_h),
@@ -3340,10 +3283,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
         _draw_rack_expanded, _draw_rack_collapsed,
         _draw_add_rack_button, _draw_add_popup,
     )
-    global _UI_SCALE, _SCROLL_X, _SCROLL_Y
+    global _UI_SCALE
     _UI_SCALE = ui_scale
-    _SCROLL_X = scroll_x
-    _SCROLL_Y = scroll_y
 
     scene = bpy.context.scene
     if not scene: return
@@ -3459,7 +3400,7 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
             dx = _reorder_x
             dy = _reorder_y - dh
 
-            shader2 = gpu.shader.from_builtin("UNIFORM_COLOR")
+            shader2 = _get_shader()
 
             # Shadow
             _draw_rect(dx+3*ui_scale, dy-3*ui_scale, dw, dh,
@@ -4596,7 +4537,7 @@ def _draw_ai_channel_buttons(rx, ry, rw, rh, rack, scale):
     ch_area_x = rx + rw - 100*scale
     ch_area_y = ry + rh - RACK_RAIL_H*scale - 20*scale
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     for col_idx in range(num_buttons):
         row = col_idx // 3
         col = col_idx % 3
@@ -4636,7 +4577,7 @@ def _draw_ai_rack_collapsed(rx, ry, rw, rh, rack, ai_idx, scale):
 
     cy = ry + rh / 2
     _draw_rect(rx, ry, rw, rh, HAL_BG)
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
     shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
@@ -4742,7 +4683,7 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     HAL_TEXT   = (0.80, 0.22, 0.14, 1.0)
 
     _draw_rect(rx, ry, rw, rh, HAL_BG)
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
     shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
@@ -4988,7 +4929,7 @@ def draw_ai_racks(rx, ry, scale, area_width=None, group_idx=0):
 
     div_h = 28 * scale
     _draw_rect(rx, ry - div_h, rw, div_h, (0.06, 0.04, 0.04, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     div_verts = [(rx, ry-div_h), (rx+rw, ry-div_h),
                  (rx+rw, ry), (rx, ry), (rx, ry-div_h)]
     div_batch = batch_for_shader(shader, "LINE_STRIP", {"pos": div_verts})
@@ -5079,7 +5020,7 @@ def _draw_ai_add_popup(px, py, scale):
                (0.0, 0.0, 0.0, 0.5))
     # Background
     _draw_rect(px, popup_bot, popup_w, popup_h, (0.10, 0.06, 0.05, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts = [(px, popup_bot), (px+popup_w, popup_bot),
              (px+popup_w, popup_top), (px, popup_top), (px, popup_bot)]
     batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})

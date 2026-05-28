@@ -12,23 +12,17 @@ from core.constants import (
     FADER_MIN, FADER_MAX, FADER_HEIGHT, FADER_HANDLE_H, FADER_HANDLE_W,
     FADER_HANDLE_X_OFF, FADER_TRACK_BOTTOM, NUMBOX_H,
     GAIN_MIN, GAIN_MAX,
-    MAX_CHANNELS, DEFAULT_CHANNELS,
+    DEFAULT_CHANNELS,
     DOUBLE_CLICK_TIME,
-    SB_TRACK_PX, SB_MARGIN,
     SEND_BTN_H, SEND_BTN_GAP, SEND_MIN_SLOTS, SEND_START_Y,
 )
 from ui.mixer.channel_strip import (
     send_section_height as _send_section_height,
-    STRIP_LEFT_MARGIN, STRIP_W, STRIP_STRIDE,
-    M_BTN_X_OFF, M_BTN_W, M_BTN_H, M_BTN_Y_OFF, S_BTN_X_OFF,
-    KNOB_GAIN_X_OFF, KNOB_GAIN_Y_OFF, KNOB_GAIN_R,
-    EQ_KNOB_X_OFF, EQ_KNOB_START_Y, EQ_KNOB_SPACING, KNOB_EQ_R,
-    KNOB_PAN_X_OFF, KNOB_PAN_R, KNOB_PAN_CLEARANCE,
 )
 from core.audio import (
     apply_fader_to_channel, apply_gain_to_channel,
-    _pb_rebuild_eq, _pb_reprocess_channel,
-    _pb_wire_rack_to_engine, sync_vse_mute, sync_vse_solo,
+    _pb_rebuild_eq,
+    sync_vse_mute, sync_vse_solo,
 )
 from core.meters import _meter_timer
 

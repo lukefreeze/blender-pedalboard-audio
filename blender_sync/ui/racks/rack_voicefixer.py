@@ -8,8 +8,6 @@
 # =============================================================================
 
 import os
-import time
-import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
@@ -119,11 +117,6 @@ def _run_dep_check():
                 continue
     except Exception as e:
         print(f"[VOICEFIXER] dep check error: {e}")
-    _vf_dep_cache["ok"]       = found
-    _vf_dep_cache["checked"]  = True
-    _vf_dep_cache["checking"] = False
-    _vf_check_running         = False
-    print(f"[VOICEFIXER] dep check complete: {'found' if found else 'not found'}")
     _vf_dep_cache["ok"]       = found
     _vf_dep_cache["checked"]  = True
     _vf_dep_cache["checking"] = False

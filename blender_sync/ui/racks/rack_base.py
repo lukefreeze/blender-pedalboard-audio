@@ -12,8 +12,19 @@ print("[RACK_BASE] loading rack_base.py")
 import math
 import bpy
 import gpu
-import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # Rack layout constants — defined here directly to avoid circular imports.
 # (rack_base is imported BY Racks.py, so importing FROM Racks at module level
@@ -80,7 +91,7 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
     # Background
     _draw_rect(rx, ry, rw, rh, (0.04, 0.04, 0.04, 1.0))
     # Border
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
     shader.bind(); shader.uniform_float("color", (0.15,0.15,0.15,1.0))
@@ -123,9 +134,7 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
                         _hj_spec = _eng_spec.get_engine()
                         if _hj_spec and 0 <= ch_s < 32:
                             _s_spec = _hj_spec.get_state()
-                            all_bins = []
-                            for b in range(4):
-                                all_bins.extend(_s_spec.get_fft_bins(ch_s, b))
+                            all_bins = list(_s_spec.get_spec_bins(ch_s))
                             if any(v > 0 for v in all_bins):
                                 fft_flat = _np.array(all_bins, dtype=float)
         except Exception:
@@ -340,7 +349,7 @@ def _draw_channel_buttons(rx, ry, rack, scale):
     group_idx = getattr(rack, 'group_idx', 0)
     offset    = group_idx * 9   # absolute VSE channel offset
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     for local_idx in range(9):
         row = local_idx // 3
         col = local_idx % 3
@@ -404,7 +413,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
 
     # --- CHASSIS ---
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
     shader.bind()
@@ -518,7 +527,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     del_w = 18*scale
     del_h = 16*scale
     _draw_rect(del_x, del_y, del_w, del_h, (0.18, 0.04, 0.04, 1.0))
-    shader2 = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader2 = _get_shader()
     dv = [(del_x,del_y),(del_x+del_w,del_y),
           (del_x+del_w,del_y+del_h),(del_x,del_y+del_h),(del_x,del_y)]
     db = batch_for_shader(shader2,"LINE_STRIP",{"pos":dv})
@@ -674,7 +683,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
 
     # Background + border
     _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
     shader.bind()
@@ -718,7 +727,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     del_w  = 18*scale
     del_x  = rx + rw - 22*scale
     _draw_rect(del_x, btn_y, del_w, btn_h, (0.18,0.04,0.04,1.0))
-    sd = gpu.shader.from_builtin("UNIFORM_COLOR")
+    sd = _get_shader()
     dv = [(del_x,btn_y),(del_x+del_w,btn_y),(del_x+del_w,btn_y+btn_h),(del_x,btn_y+btn_h),(del_x,btn_y)]
     sd.bind(); sd.uniform_float("color",(0.6,0.1,0.1,1.0))
     batch_for_shader(sd,"LINE_STRIP",{"pos":dv}).draw(sd)
@@ -737,7 +746,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
         _draw_rect(onoff_x, btn_y, onoff_w, btn_h, (0.13, 0.0, 0.0, 1.0))
         on_col = (0.65, 0.0, 0.0, 1.0)
         on_txt = "OFF"
-    so = gpu.shader.from_builtin("UNIFORM_COLOR")
+    so = _get_shader()
     ov = [(onoff_x,btn_y),(onoff_x+onoff_w,btn_y),(onoff_x+onoff_w,btn_y+btn_h),(onoff_x,btn_y+btn_h),(onoff_x,btn_y)]
     so.bind(); so.uniform_float("color", on_col)
     batch_for_shader(so,"LINE_STRIP",{"pos":ov}).draw(so)
@@ -762,7 +771,7 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
             bc = (0.2,  0.2,  0.2,  1.0)
             tc = (0.2,  0.2,  0.2,  1.0)
         _draw_rect(bx, ch_y, ch_size, ch_size, bg)
-        sv = gpu.shader.from_builtin("UNIFORM_COLOR")
+        sv = _get_shader()
         cv = [(bx,ch_y),(bx+ch_size,ch_y),(bx+ch_size,ch_y+ch_size),(bx,ch_y+ch_size),(bx,ch_y)]
         sv.bind(); sv.uniform_float("color", bc)
         batch_for_shader(sv,"LINE_STRIP",{"pos":cv}).draw(sv)
@@ -789,33 +798,13 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
 
 def _draw_add_rack_button(rx, ry, scale, rack_width=None):
     """Draw the + ADD RACK EFFECT button."""
-    _rs = _get_racks_state()
-    EFFECT_TYPES      = _rs['EFFECT_TYPES']
-    PRESETS           = _rs['PRESETS']
-    _reorder_open     = _rs['_reorder_open']
-    _reorder_rack_idx = _rs['_reorder_rack_idx']
-    _led_states       = _rs['_led_states']
     rw  = (rack_width if rack_width is not None else RACK_WIDTH) * scale
     rh  = 28*scale
     fs  = max(1, int(10*scale))
 
     _draw_rect(rx, ry, rw, rh, (0.07, 0.07, 0.07, 1.0))
 
-    # Dashed border
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    segs   = 60
-    verts  = []
-    for i in range(segs+1):
-        t   = i/segs
-        if i % 2 == 0:
-            px = rx + t*rw
-            py = ry
-            verts.append((px, py))
-        else:
-            if verts:
-                px2 = rx + t*rw
-                verts.append((px2, ry))
-    # Simple rect border instead of true dashed (GPU line dashing is complex)
+    shader = _get_shader()
     border_verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
     batch = batch_for_shader(shader,"LINE_STRIP",{"pos":border_verts})
     shader.bind()
@@ -831,11 +820,7 @@ def _draw_add_rack_button(rx, ry, scale, rack_width=None):
 def _draw_add_popup(px, py, scale):
     """Draw the effect type selector popup."""
     _rs = _get_racks_state()
-    EFFECT_TYPES      = _rs['EFFECT_TYPES']
-    PRESETS           = _rs['PRESETS']
-    _reorder_open     = _rs['_reorder_open']
-    _reorder_rack_idx = _rs['_reorder_rack_idx']
-    _led_states       = _rs['_led_states']
+    EFFECT_TYPES = _rs['EFFECT_TYPES']
     popup_w  = 200*scale
     title_h  = 24*scale
     popup_h  = (len(EFFECT_TYPES) * 28 + 10) * scale + title_h
@@ -847,7 +832,7 @@ def _draw_add_popup(px, py, scale):
                popup_w, popup_h, (0.0,0.0,0.0,0.5))
     # Background
     _draw_rect(popup_x, popup_y, popup_w, popup_h, (0.15,0.15,0.15,1.0))
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
     verts  = [(popup_x, popup_y),
               (popup_x+popup_w, popup_y),
               (popup_x+popup_w, popup_y+popup_h),

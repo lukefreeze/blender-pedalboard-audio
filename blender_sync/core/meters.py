@@ -20,6 +20,7 @@ _engine_levels          = [0.0] * MAX_CHANNELS
 _peak_hold              = [0.0] * MAX_CHANNELS
 _peak_hold_timer        = [0.0] * MAX_CHANNELS
 _meter_timer_registered = False
+_redraw_counter         = 0   # throttle redraws to every other tick (10fps)
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,17 @@ def _meter_timer():
             for i in range(MAX_CHANNELS):
                 new_rms[i]  = hj.get_meter_rms(i)
                 new_peak[i] = hj.get_meter_peak(i)
+
+        # Update EngineState.current_frame for rack waveform display.
+        # No cursor driving — Blender's cursor stays under its own control.
+        if hj and is_playing:
+            try:
+                st = hj.get_state()
+                if st:
+                    fps_r = scene.render.fps / scene.render.fps_base
+                    st.current_frame = int(hj.get_playhead_s() * fps_r)
+            except Exception:
+                pass
 
         # Feed the shared waveform ring buffer — used by noise gate and
         # deepfilternet racks. Populated here so the buffer fills during
@@ -152,14 +164,18 @@ def _meter_timer():
     except Exception as e:
         print(f"[METER] timer error: {e}")
 
-    # Force HUD redraw
-    try:
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == "NODE_EDITOR":
-                    area.tag_redraw()
-    except Exception:
-        pass
+    # Throttled HUD redraw — every other tick (10fps) to halve GPU draw load.
+    global _redraw_counter
+    _redraw_counter += 1
+    if _redraw_counter >= 2:
+        _redraw_counter = 0
+        try:
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == "NODE_EDITOR":
+                        area.tag_redraw()
+        except Exception:
+            pass
 
     return METER_POLL_INTERVAL
 

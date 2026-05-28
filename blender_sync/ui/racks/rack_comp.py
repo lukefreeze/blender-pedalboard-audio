@@ -7,10 +7,20 @@
 # =============================================================================
 
 import math
-import bpy
 import gpu
-import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # These drawing helpers are imported from draw_utils so the PNG bridge
 # (draw_element) can replace them with texture blits when PNGs are loaded.
@@ -84,7 +94,7 @@ _MB_SHADER   = None
 def _get_mb_shader():
     global _MB_SHADER
     if _MB_SHADER is None:
-        _MB_SHADER = gpu.shader.from_builtin("UNIFORM_COLOR")
+        _MB_SHADER = _get_shader()
     return _MB_SHADER
 
 
@@ -141,16 +151,6 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Lazy imports — avoids circular import at module load time
     import Racks as _racks_mod
     get_rack_channels = _racks_mod.get_rack_channels
-    try:
-        import core.audio as _audio_mod
-        _fft_timeline     = _audio_mod._fft_timeline
-        _gr_timeline      = _audio_mod._gr_timeline
-        _fft_timeline_full = getattr(_audio_mod, '_fft_timeline_full', {})
-        _fft_timeline_eq_input = getattr(_audio_mod, '_fft_timeline_eq_input', {})
-        _gr_levels        = getattr(_audio_mod, '_gr_levels', {})
-    except Exception:
-        _fft_timeline = _gr_timeline = _fft_timeline_full = {}
-        _fft_timeline_eq_input = _gr_levels = {}
     rail_h       = RACK_RAIL_H * scale
     body_h       = rh - rail_h
     spec_zone_h  = body_h * 0.48
@@ -634,65 +634,4 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         import traceback
         print(f"[MB] band {band} draw error: {e}")
         print(traceback.format_exc())
-
-
-
-# ---------------------------------------------------------------------------
-# EQ rack body
-# ---------------------------------------------------------------------------
-
-
-def _eq_biquad_response(freq_hz, gain_db, band_filter_type, q, f_test):
-    """
-    Compute magnitude response in dB at f_test Hz for one EQ band.
-    Uses Audio EQ Cookbook biquad formulae (same as Loader.py).
-    sample_rate assumed 48000 for display purposes.
-    """
-    sr = 48000.0
-    w0 = 2.0 * math.pi * freq_hz / sr
-    wt = 2.0 * math.pi * f_test  / sr
-    cw0, sw0 = math.cos(w0), math.sin(w0)
-    cwt       = math.cos(wt)
-    swt       = math.sin(wt)
-    alpha     = sw0 / (2.0 * q)
-    A         = 10.0 ** (gain_db / 40.0)
-
-    if band_filter_type == "low_shelf":
-        sq = 2.0 * math.sqrt(A) * alpha
-        b0 = A*((A+1) - (A-1)*cw0 + sq)
-        b1 = 2*A*((A-1) - (A+1)*cw0)
-        b2 = A*((A+1) - (A-1)*cw0 - sq)
-        a0 = (A+1) + (A-1)*cw0 + sq
-        a1 = -2*((A-1) + (A+1)*cw0)
-        a2 = (A+1) + (A-1)*cw0 - sq
-    elif band_filter_type == "high_shelf":
-        sq = 2.0 * math.sqrt(A) * alpha
-        b0 = A*((A+1) + (A-1)*cw0 + sq)
-        b1 = -2*A*((A-1) + (A+1)*cw0)
-        b2 = A*((A+1) + (A-1)*cw0 - sq)
-        a0 = (A+1) - (A-1)*cw0 + sq
-        a1 = 2*((A-1) - (A+1)*cw0)
-        a2 = (A+1) - (A-1)*cw0 - sq
-    else:  # peak
-        alpha_a = sw0 / (2.0 * q)
-        b0 = 1 + alpha_a * A
-        b1 = -2 * cw0
-        b2 = 1 - alpha_a * A
-        a0 = 1 + alpha_a / A
-        a1 = -2 * cw0
-        a2 = 1 - alpha_a / A
-
-    # Evaluate H(e^jwt) via the bilinear s→z substitution
-    # |H(z)| at z=e^jwt:  num = b0 + b1*e^-jwt + b2*e^-2jwt
-    #                      den = a0 + a1*e^-jwt + a2*e^-2jwt
-    try:
-        nr = b0/a0 + (b1/a0)*cwt + (b2/a0)*math.cos(2*wt)
-        ni = -(b1/a0)*swt - (b2/a0)*math.sin(2*wt)
-        dr = 1.0   + (a1/a0)*cwt + (a2/a0)*math.cos(2*wt)
-        di = -(a1/a0)*swt - (a2/a0)*math.sin(2*wt)
-        mag_sq = (nr*nr + ni*ni) / max(1e-30, dr*dr + di*di)
-        return 10.0 * math.log10(max(1e-10, mag_sq))
-    except Exception:
-        return 0.0
-
 

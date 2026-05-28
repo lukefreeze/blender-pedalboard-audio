@@ -11,6 +11,20 @@
 import math
 import bpy
 import blf
+import gpu
+from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 from ui.mixer.draw_utils import (
     draw_rect, draw_rect_outline, draw_circle, draw_circle_knob,
@@ -19,7 +33,7 @@ from ui.mixer.draw_utils import (
 from core.constants import (
     FADER_MIN, FADER_MAX, FADER_HEIGHT, FADER_HANDLE_H, FADER_HANDLE_W,
     FADER_HANDLE_X_OFF, FADER_TRACK_BOTTOM, METER_W, METER_X_OFF,
-    NUMBOX_H, GAIN_MIN, GAIN_MAX, GAIN_DEFAULT,
+    NUMBOX_H, GAIN_MIN, GAIN_MAX,
     SEND_BTN_H, SEND_BTN_GAP, SEND_MIN_SLOTS, SEND_START_Y, EFFECT_ABBREV,
     MAX_CHANNELS,
 )
@@ -85,16 +99,6 @@ def send_section_height(n_racks: int, scale: float) -> float:
     return slots * (SEND_BTN_H + SEND_BTN_GAP) * scale
 
 
-def send_section_height_for_group(group_idx: int, scale: float) -> float:
-    """send_section_height for a specific fader group."""
-    import bpy as _bpy
-    scene = _bpy.context.scene
-    if not scene:
-        return send_section_height(0, scale)
-    all_racks = getattr(scene, "pb_racks", [])
-    n = sum(1 for r in all_racks if getattr(r, 'group_idx', 0) == group_idx)
-    return send_section_height(n, scale)
-
 
 # ---------------------------------------------------------------------------
 # Draw the send button column for one strip
@@ -112,9 +116,6 @@ def draw_send_buttons(sx: float, base_y: float, channel_idx: int,
     btn_h   = SEND_BTN_H * scale
     btn_x   = sx + 10 * scale
     start_y = base_y - SEND_START_Y * scale
-
-    import gpu
-    from gpu_extras.batch import batch_for_shader
 
     # local_ch = channel_idx within the group (0-8)
     local_ch = channel_idx % 9
@@ -147,7 +148,7 @@ def draw_send_buttons(sx: float, base_y: float, channel_idx: int,
 
         draw_rect(btn_x, by, btn_w, btn_h, bg)
 
-        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        shader = _get_shader()
         verts  = [(btn_x, by), (btn_x+btn_w, by),
                   (btn_x+btn_w, by+btn_h), (btn_x, by+btn_h), (btn_x, by)]
         batch  = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
@@ -219,7 +220,8 @@ def draw_channel_strip(i: int, track, sx: float, base_y: float,
     gain_db   = round(20 * math.log10(max(0.001, track.gain)), 1)
     draw_circle_knob(kx, base_y - KNOB_GAIN_Y_OFF*scale,
                      KNOB_GAIN_R*scale, gain_norm,
-                     KNOB_GAIN_COLOR, f"G:{gain_db:+.1f}dB")
+                     KNOB_GAIN_COLOR, f"G:{gain_db:+.1f}dB",
+                     ui_scale=scale)
 
     # Send buttons — only shows racks from this group
     draw_send_buttons(sx, base_y, i, tracks, scale, group_idx)
@@ -230,15 +232,18 @@ def draw_channel_strip(i: int, track, sx: float, base_y: float,
     draw_circle_knob(kx, base_y - eq_start,
                      KNOB_EQ_R*scale,
                      (track.eq_high + 24) / 48,
-                     KNOB_EQ_H_COLOR, f"H:{int(track.eq_high)}")
+                     KNOB_EQ_H_COLOR, f"H:{int(track.eq_high)}",
+                     ui_scale=scale)
     draw_circle_knob(kx, base_y - (eq_start + EQ_KNOB_SPACING*scale),
                      KNOB_EQ_R*scale,
                      (track.eq_mid + 24) / 48,
-                     KNOB_EQ_M_COLOR, f"M:{int(track.eq_mid)}")
+                     KNOB_EQ_M_COLOR, f"M:{int(track.eq_mid)}",
+                     ui_scale=scale)
     draw_circle_knob(kx, base_y - (eq_start + 2*EQ_KNOB_SPACING*scale),
                      KNOB_EQ_R*scale,
                      (track.eq_low + 24) / 48,
-                     KNOB_EQ_L_COLOR, f"L:{int(track.eq_low)}")
+                     KNOB_EQ_L_COLOR, f"L:{int(track.eq_low)}",
+                     ui_scale=scale)
 
     # Fader
     f_h   = FADER_HEIGHT * scale
@@ -254,7 +259,8 @@ def draw_channel_strip(i: int, track, sx: float, base_y: float,
     elif pan_val > 0.55: pan_lbl = f"R{int((pan_val - 0.5)*200)}"
     else:                pan_lbl = "C"
     draw_circle_knob(kx, pan_ky, KNOB_PAN_R*scale,
-                     pan_val, KNOB_PAN_COLOR, f"PAN:{pan_lbl}")
+                     pan_val, KNOB_PAN_COLOR, f"PAN:{pan_lbl}",
+                     ui_scale=scale)
 
     # Rail
     rail_cx = f_hx + f_hw/2 - 5*scale

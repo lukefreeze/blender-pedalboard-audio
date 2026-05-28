@@ -10,16 +10,6 @@
 
 // Forward declarations
 namespace aud { class ISound; class IReader; typedef float sample_t; }
-class HijackerSound;
-
-// ---------------------------------------------------------------------------
-// ChannelHandle — owns the HijackerSound for one channel.
-// ---------------------------------------------------------------------------
-struct ChannelHandle {
-    HijackerSound* sound_raw    = nullptr;
-    int            channel_idx  = -1;
-    int            strip_channel = -1;
-};
 
 // ---------------------------------------------------------------------------
 // Batch DSP — called from wrapper.cpp's process_buffer() and from
@@ -30,9 +20,3 @@ struct ChannelHandle {
 // ---------------------------------------------------------------------------
 void apply_effect_chain_batch(int channel_idx, aud::sample_t* buf,
                                int frames, int n_channels, float sample_rate);
-
-extern "C" {
-    void* create_channel(void* sound_ptr, int channel_idx, int strip_channel);
-    void* get_channel_sound(void* handle);
-    void  release_channel(void* handle);
-}

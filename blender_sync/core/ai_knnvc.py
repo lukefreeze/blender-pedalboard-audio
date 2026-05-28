@@ -5,7 +5,6 @@ Backend for the kNN-VC Voice Conversion rack.
 """
 
 import os
-import glob
 import subprocess
 import tempfile
 import threading

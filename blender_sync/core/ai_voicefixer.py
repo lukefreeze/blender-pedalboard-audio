@@ -16,7 +16,6 @@ Modes:
 """
 
 import os
-import glob
 import subprocess
 import tempfile
 import threading

@@ -7,10 +7,20 @@
 # =============================================================================
 
 import math
-import bpy
 import gpu
-import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # These drawing helpers are imported from draw_utils so the PNG bridge
 # (draw_element) can replace them with texture blits when PNGs are loaded.
@@ -30,15 +40,7 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
-# EQ band definitions and frequency/Q scale constants
-EQ_BANDS = [
-    # (name, colour, filter_type, default_freq_hz, default_Q)
-    ("Low",    (0.25, 0.55, 1.0),  "low_shelf",  100.0,  0.7),
-    ("L-Mid",  (0.25, 0.85, 0.45), "peak",       300.0,  1.0),
-    ("Mid",    (0.85, 0.75, 0.15), "peak",      1000.0,  1.0),
-    ("H-Mid",  (1.0,  0.45, 0.15), "peak",      4000.0,  1.0),
-    ("High",   (0.9,  0.25, 0.7),  "high_shelf",10000.0, 0.7),
-]
+# EQ frequency/Q scale constants — used by _draw_eq_body helpers
 EQ_FREQ_MIN_LOG = math.log10(20.0)
 EQ_FREQ_MAX_LOG = math.log10(20000.0)
 EQ_Q_MIN_LOG    = math.log10(0.1)
@@ -64,21 +66,6 @@ def _eq_q_to_norm(q):
     return max(0.0, min(1.0,
         (math.log10(max(0.1, q)) - EQ_Q_MIN_LOG) /
         (EQ_Q_MAX_LOG - EQ_Q_MIN_LOG)))
-
-
-def _eq_get_band(rack, band_idx):
-    """Return (gain_db, freq_hz, q, freq_norm, q_norm) for a band."""
-    gain_norm = getattr(rack, f'p{band_idx}',      0.5)
-    freq_norm = getattr(rack, f'p{band_idx + 5}', -1.0)
-    q_norm    = getattr(rack, f'p{band_idx + 10}',-1.0)
-    gain_db   = (gain_norm - 0.5) * 48.0   # -24..+24 dB
-    _, _, _, def_freq, def_q = EQ_BANDS[band_idx]
-    if freq_norm < 0.0:
-        freq_norm = _eq_freq_to_norm(def_freq)
-    if q_norm < 0.0:
-        q_norm = _eq_q_to_norm(def_q)
-    return gain_db, _eq_freq_from_norm(freq_norm), _eq_q_from_norm(q_norm), freq_norm, q_norm
-
 
 def _eq_biquad_response(freq_hz, gain_db, band_filter_type, q, f_test):
     """
@@ -156,16 +143,6 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Lazy imports — avoids circular import at module load time
     import Racks as _racks_mod
     get_rack_channels = _racks_mod.get_rack_channels
-    try:
-        import core.audio as _audio_mod
-        _fft_timeline     = _audio_mod._fft_timeline
-        _gr_timeline      = _audio_mod._gr_timeline
-        _fft_timeline_full = getattr(_audio_mod, '_fft_timeline_full', {})
-        _fft_timeline_eq_input = getattr(_audio_mod, '_fft_timeline_eq_input', {})
-        _gr_levels        = getattr(_audio_mod, '_gr_levels', {})
-    except Exception:
-        _fft_timeline = _gr_timeline = _fft_timeline_full = {}
-        _fft_timeline_eq_input = _gr_levels = {}
     import math as _m
 
     EQ7_BANDS = [
@@ -211,7 +188,7 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     zero_db_y = disp_y + disp_h * 0.5
     px_per_db = (disp_h * 0.5) / db_range
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # -----------------------------------------------------------------------
     # DISPLAY BACKGROUND + GRID
@@ -282,7 +259,7 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
             if len(pairs) < 2: return
             import gpu
             from gpu_extras.batch import batch_for_shader as _bfs
-            _sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+            _sh = _get_shader()
             # Interleave floor and top: (floor0, top0, floor1, top1, ...)
             # TRI_STRIP naturally fills between them with no cross-over
             verts = []
@@ -299,7 +276,7 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
             if len(pairs) < 2: return
             import gpu
             from gpu_extras.batch import batch_for_shader as _bfs
-            _sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+            _sh = _get_shader()
             verts = [(disp_x + t*disp_w, disp_y + a*disp_h*h_scale)
                      for t, a in pairs]
             _b = _bfs(_sh, "LINE_STRIP", {"pos": verts})

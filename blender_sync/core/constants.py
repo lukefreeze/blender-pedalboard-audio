@@ -54,7 +54,6 @@ KNOB_PAN_R          = 14     # pan knob radius
 KNOB_GAIN_Y_OFF     = 100    # from base_y down
 EQ_KNOB_START_Y     = 175    # from base_y down (before send height added)
 EQ_KNOB_SPACING     = 50     # between H/M/L knobs
-PAN_KNOB_CLEARANCE  = 42     # above fader top
 
 # ---------------------------------------------------------------------------
 # Mute / Solo buttons

@@ -561,18 +561,6 @@ int HijackerEngine::audio_callback(const void* /*input*/, void* output,
     unsigned long n_out = frames_per_buffer * 2;
     memset(out, 0, n_out * sizeof(float));
 
-    // DEBUG sine test
-    static double sine_phase = 0.0;
-    bool debug_sine = false;
-    if (debug_sine) {
-        for (unsigned long i = 0; i < frames_per_buffer; ++i) {
-            float s = (float)(0.3 * sin(sine_phase));
-            out[i*2] = s; out[i*2+1] = s;
-            sine_phase += 2.0 * 3.14159265 * 440.0 / sample_rate_;
-        }
-        return paContinue;
-    }
-
     if (!transport_.playing.load()) return paContinue;
 
     // Handle pending seek

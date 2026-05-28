@@ -7,10 +7,20 @@
 # =============================================================================
 
 import math
-import bpy
 import gpu
-import blf
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 # These drawing helpers are imported from draw_utils so the PNG bridge
 # (draw_element) can replace them with texture blits when PNGs are loaded.
@@ -89,7 +99,7 @@ def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     delay_str  = (f"{delay_ms:.0f}ms" if delay_ms < 1000
                   else f"{delay_ms/1000:.2f}s")
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ── Display background ────────────────────────────────────────────────────
     _draw_rect(disp_x, disp_y, disp_w, disp_h, (0.035, 0.040, 0.055, 1.0))

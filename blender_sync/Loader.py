@@ -40,18 +40,9 @@ if _ADDON_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 from core.engine import get_engine, reset_engine, PEDALBOARD_AVAILABLE, HIJACKER_AVAILABLE
 from core.properties import register_properties, unregister_properties
-from core.constants  import (
-    MAX_CHANNELS, DEFAULT_CHANNELS,
-    FADER_MIN, FADER_MAX, FADER_TRACK_BOTTOM,
-    FADER_HEIGHT, FADER_HANDLE_H, FADER_HANDLE_W, FADER_HANDLE_X_OFF,
-    METER_W, METER_X_OFF, NUMBOX_H, NUMBOX_Y_OFFSET,
-    GAIN_MIN, GAIN_MAX, GAIN_DEFAULT,
-    SEND_BTN_H, SEND_BTN_GAP, SEND_MIN_SLOTS, SEND_START_Y, EFFECT_ABBREV,
-    SB_TRACK_PX, SB_MARGIN,
-)
 
-# Re-export constants that Racks.py and other modules import from Loader
-from core.constants import FADER_TRACK_BOTTOM, NUMBOX_H
+# Re-export constants that Racks.py imports from Loader
+from core.constants import FADER_TRACK_BOTTOM, NUMBOX_H, NUMBOX_Y_OFFSET
 # _send_section_height is used by Racks.py
 from ui.mixer.channel_strip import send_section_height as _send_section_height
 
@@ -61,16 +52,7 @@ from ui.mixer.channel_strip import send_section_height as _send_section_height
 # ---------------------------------------------------------------------------
 from core.audio import (
     _pb_engine_enable, _pb_engine_disable,
-    _pb_start_all_from_frame, _pb_stop_all,
-    _pb_on_play_start, _pb_on_play_stop, _pb_loop_detect,
-    _pb_eq_timer, _pb_eq_timer_registered,
-    _apply_effect_chain, _pb_wire_rack_to_engine, _pb_reprocess_channel,
-    apply_fader_to_channel, apply_gain_to_channel,
-    sync_vse_mute, sync_vse_solo,
-    _pb_channels, _pb_proc_wav_cache, _pb_full_wav_cache,
-    _fft_timeline, _fft_timeline_full, _gr_timeline, _gr_timeline_full,
-    _gate_timeline, _gate_timeline_full, _fft_timeline_eq_input,
-    _pb_rebuild_eq,
+    _fft_timeline, _fft_timeline_full, _gr_timeline,
 )
 
 from core.meters import (

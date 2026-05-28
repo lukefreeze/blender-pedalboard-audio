@@ -22,6 +22,18 @@ import time
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 try:
     from ui.mixer.draw_utils import (
@@ -138,7 +150,7 @@ def _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale):
     body_bot = ry
     body_top = ry + rh - rail_h
     body_h   = body_top - body_bot
-    shader   = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader   = _get_shader()
 
     # Background + border
     _draw_rect(rx, body_bot, rw, body_h, _BG)

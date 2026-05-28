@@ -29,6 +29,18 @@ import os
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
+# ---------------------------------------------------------------------------
+# Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
+# ---------------------------------------------------------------------------
+_shader = None
+
+def _get_shader():
+    global _shader
+    if _shader is None:
+        _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    return _shader
+
+
 
 try:
     from ui.mixer.draw_utils import (
@@ -630,7 +642,7 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    shader = _get_shader()
 
     # ── Column boundaries (unscaled px, then * ui) ──────────────────────
     A_W  = 160 * ui    # render mode column width

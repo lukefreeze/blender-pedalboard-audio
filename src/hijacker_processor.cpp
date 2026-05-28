@@ -124,18 +124,6 @@ static void apply_comp_single(int ch, aud::sample_t* buf,
     g_state.gr_levels[ch][0] = sm * g_state.gr_levels[ch][0]
                               + (1.0f - sm) * (-max_gr_db);
 
-    // Build mono mix for FFT — used by the spectrum display
-    std::vector<float> mono(frames);
-    for (int f = 0; f < frames; ++f) {
-        float s = 0.0f;
-        for (int c = 0; c < n_ch; ++c) s += buf[f * n_ch + c];
-        mono[f] = s / n_ch;
-    }
-    // Update all 4 bands with the same mono signal so the spectrum
-    // display shows activity across all frequency bands
-    for (int b = 0; b < PB_MB_BANDS; ++b)
-        update_fft(ch, b, mono.data(), frames);
-
     float rms = 0.0f;
     for (int f = 0; f < frames; ++f)
         for (int c = 0; c < n_ch; ++c) {
@@ -288,16 +276,6 @@ static void apply_eq_param(int ch, aud::sample_t* buf, int frames, int n_ch,
             buf[f*n_ch+c] = s / (1.0f + std::abs(s));
         }
     }
-
-    // Update FFT for spectrum display — build mono mix then update all bands
-    std::vector<float> mono_eq(frames);
-    for (int f = 0; f < frames; ++f) {
-        float s = 0.0f;
-        for (int c = 0; c < n_ch; ++c) s += buf[f * n_ch + c];
-        mono_eq[f] = s / n_ch;
-    }
-    for (int b = 0; b < PB_MB_BANDS; ++b)
-        update_fft(ch, b, mono_eq.data(), frames);
 }
 
 // ===========================================================================
@@ -496,49 +474,6 @@ static void update_spec_buffer(int ch, const float* mono_buf, int frames)
     }
 }
 
-// update_spec_compute: full Goertzel analysis — called from Python meter timer,
-// NOT from the audio callback. Runs ~10x/sec which is plenty for visual display.
-// Call this from the Python side via a C-exposed function or just call
-// get_spec_bins() which returns the last computed values.
-// For now this is called from apply_effect_chain_batch only when NOT on the
-// realtime audio path (i.e. batch/offline processing).
-static void update_spec(int ch, const float* mono_buf, int frames, float sr)
-{
-    // Fill the ring buffer
-    update_spec_buffer(ch, mono_buf, frames);
-
-    // Goertzel analysis — expensive, only run every ~10 calls to keep CPU sane.
-    // The spec_wpos modulo check ensures we compute roughly once per full window
-    // fill rather than every buffer.
-    // For real-time use the Python timer calls a dedicated update path.
-    // We still run it here for batch/offline processing (process_buffer path).
-    const int N = PB_SPEC_WIN;
-    // Skip computation if we haven't filled at least half the window yet
-    if (g_state.spec_wpos[ch] % (N / 8) != 0) return;
-
-    const float log_min = std::log10(20.0f);
-    const float log_max = std::log10(20000.0f);
-    const float sm = 0.2f;
-
-    for (int k = 0; k < PB_SPEC_BINS; ++k) {
-        float t    = (float)k / (PB_SPEC_BINS - 1);
-        float f_hz = std::pow(10.0f, log_min + t * (log_max - log_min));
-        float kf   = f_hz / sr * (float)N;
-
-        float re = 0.0f, im = 0.0f;
-        for (int n = 0; n < N; ++n) {
-            float sample = g_state.spec_window[ch][(g_state.spec_wpos[ch] + n) % N];
-            float w   = 0.5f * (1.0f - std::cos(2.0f * PI * n / (N - 1)));
-            float ang = 2.0f * PI * kf * n / (float)N;
-            re += sample * w * std::cos(ang);
-            im -= sample * w * std::sin(ang);
-        }
-        float mag        = std::sqrt(re * re + im * im) / (N * 0.5f);
-        float normalised = std::max(0.0f, (lin2db(mag) + 80.0f) / 80.0f);
-        g_state.spec_bins[ch][k] = sm * g_state.spec_bins[ch][k]
-                                  + (1.0f - sm) * normalised;
-    }
-}
 
 // ===========================================================================
 // FFT
@@ -829,13 +764,6 @@ void apply_effect_chain_batch(int ch, aud::sample_t* buf,
                 for (int c = 0; c < n_ch; ++c)
                     buf[f*n_ch+c] *= fx.params[0];
             break;
-        case EffectType::EQ_3BAND: {
-            float avg = (db2lin(fx.params[0]) + db2lin(fx.params[1])
-                       + db2lin(fx.params[2])) / 3.0f;
-            for (int f = 0; f < frames; ++f)
-                for (int c = 0; c < n_ch; ++c)
-                    buf[f*n_ch+c] *= avg;
-            break; }
         case EffectType::COMP_SINGLE:
             apply_comp_single(ch, buf, frames, n_ch, fx, sr); break;
         case EffectType::COMP_MULTI:
@@ -855,68 +783,7 @@ void apply_effect_chain_batch(int ch, aud::sample_t* buf,
 }
 
 // ===========================================================================
-// HijackerReader / HijackerSound
-// ===========================================================================
-class HijackerReader : public aud::IReader
-{
-public:
-    HijackerReader(std::shared_ptr<aud::IReader> inner, int ch)
-        : m_inner(inner), m_ch(ch) {}
-
-    bool isSeekable() const override { return m_inner->isSeekable(); }
-    void seek(int p)         override { m_inner->seek(p); }
-    int  getLength()   const override { return m_inner->getLength(); }
-    int  getPosition() const override { return m_inner->getPosition(); }
-    aud::Specs getSpecs() const override { return m_inner->getSpecs(); }
-
-    void read(int& length, bool& eos, aud::sample_t* buffer) override
-    {
-        m_inner->read(length, eos, buffer);
-        if (length <= 0 || !buffer) return;
-
-        aud::Specs specs = m_inner->getSpecs();
-        int   n_ch   = std::max(1, (int)specs.channels);
-        int   frames = length / n_ch;
-        float sr     = (float)specs.rate;
-        if (sr <= 0.0f) sr = 44100.0f;
-
-        float gain = g_state.volumes[m_ch];
-        for (int f = 0; f < frames; ++f)
-            for (int c = 0; c < n_ch; ++c)
-                buffer[f*n_ch+c] *= gain;
-
-        apply_effect_chain_batch(m_ch, buffer, frames, n_ch, sr);
-
-        float post = 0.0f;
-        for (int f = 0; f < frames; ++f)
-            for (int c = 0; c < n_ch; ++c)
-                post = std::max(post, std::abs(buffer[f*n_ch+c]));
-        g_state.meter_levels[m_ch] = std::min(post, 1.0f);
-    }
-
-private:
-    std::shared_ptr<aud::IReader> m_inner;
-    int m_ch;
-};
-
-class HijackerSound : public aud::ISound
-{
-public:
-    HijackerSound(std::shared_ptr<aud::ISound> inner, int ch)
-        : m_inner(inner), m_ch(ch) {}
-
-    std::shared_ptr<aud::IReader> createReader() override {
-        return std::make_shared<HijackerReader>(m_inner->createReader(), m_ch);
-    }
-    aud::ISound* get_raw() { return this; }
-
-private:
-    std::shared_ptr<aud::ISound> m_inner;
-    int m_ch;
-};
-
-// ===========================================================================
-// C-linkage
+// C-linkage — spectrum analysis called from Python meter timer
 // ===========================================================================
 extern "C" {
 
@@ -965,55 +832,6 @@ void compute_spec_bins_all(float sample_rate)
                                      + (1.0f - sm) * normalised;
         }
     }
-}
-
-void* create_channel(void* sound_ptr, int ch, int strip_ch)
-{
-    if (!sound_ptr || ch < 0 || ch >= PB_MAX_CHANNELS) return nullptr;
-    aud::ISound* raw = reinterpret_cast<aud::ISound*>(sound_ptr);
-    std::shared_ptr<aud::ISound> inner(raw, [](aud::ISound*){});
-    ChannelHandle* h = new ChannelHandle();
-    h->sound_raw     = new HijackerSound(inner, ch);
-    h->channel_idx   = ch;
-    h->strip_channel = strip_ch;
-    if (g_state.volumes[ch] == 0.0f) g_state.volumes[ch] = 1.0f;
-    g_state.meter_levels[ch]   = 0.0f;
-    g_state.comp_state[ch]     = CompressorChannelState{};
-    g_state.eq_state[ch]       = EqChannelState{};
-    g_state.reverb_state[ch]   = ReverbChannelState{};
-    g_state.gate_state[ch]     = GateChannelState{};
-    // Free any existing delay buffers before resetting state
-    delete[] g_state.delay_state[ch].buf_l;
-    delete[] g_state.delay_state[ch].buf_r;
-    g_state.delay_state[ch] = DelayChannelState{};
-    for (int b = 0; b < PB_MB_BANDS; ++b)
-        g_state.fft_state[ch][b] = FFTBandState{};
-    printf("[ENGINE] ch=%d strip=%d started\n", ch, strip_ch);
-    return h;
-}
-
-void* get_channel_sound(void* h) {
-    if (!h) return nullptr;
-    return reinterpret_cast<ChannelHandle*>(h)->sound_raw;
-}
-
-void release_channel(void* h) {
-    if (!h) return;
-    ChannelHandle* c = reinterpret_cast<ChannelHandle*>(h);
-    if (c->channel_idx >= 0 && c->channel_idx < PB_MAX_CHANNELS) {
-        g_state.meter_levels[c->channel_idx] = 0.0f;
-        delete[] g_state.delay_state[c->channel_idx].buf_l;
-        delete[] g_state.delay_state[c->channel_idx].buf_r;
-        g_state.delay_state[c->channel_idx] = DelayChannelState{};
-        for (int b = 0; b < PB_MB_BANDS; ++b) {
-            g_state.band_levels[c->channel_idx][b] = 0.0f;
-            g_state.gr_levels  [c->channel_idx][b] = 0.0f;
-            memset(g_state.fft_bins[c->channel_idx][b], 0,
-                   sizeof(g_state.fft_bins[0][0]));
-        }
-    }
-    delete c->sound_raw;
-    delete c;
 }
 
 } // extern "C"

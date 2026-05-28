@@ -23,7 +23,7 @@
 # Body = ry → ry + rh - RACK_RAIL_H*scale
 # =============================================================================
 
-import math
+import os
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
@@ -522,7 +522,3 @@ def _draw_piper_body(rx, ry, rw, rh, rack, ai_idx, scale):
     }
     _draw_circle(rx+rw-14*scale, sbar_y+sbar_h/2,
                  3.5*scale, dot_cols.get(status, (0.4, 0.4, 0.4, 1.0)))
-
-
-# need os for basename
-import os
