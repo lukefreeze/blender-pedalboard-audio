@@ -196,6 +196,13 @@ def _draw_setup_warning(rx, ry, rw, rh, scale):
 
 def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        rail_h = 32 * scale; body_h = rh - rail_h
+        _de("rack_knnvc_bg", rx, ry, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+    except Exception:
+        pass
 
     if not _check_deps():
         bx,by,bw,bh = _draw_setup_warning(rx, ry, rw, rh, scale)

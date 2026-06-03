@@ -266,6 +266,33 @@ _handle = None
 
 def register():
     global _handle
+    import importlib, sys
+
+    # Force Python to re-read all addon modules from disk on every register.
+    # Without this, editing .py files has no effect until Blender fully restarts
+    # because Python caches compiled .pyc bytecode in memory.
+    _addon_modules = [
+        "ui.mixer.channel_strip",
+        "ui.mixer.draw_utils",
+        "ui.mixer.mixer_hud",
+        "ui.mixer.texture_cache",
+        "ui.mixer.interaction",
+        "core.audio",
+        "core.meters",
+        "core.constants",
+        "core.properties",
+        "Racks",
+        "ui.racks.rack_base",
+        "ui.racks.rack_comp",
+        "ui.racks.rack_delay",
+    ]
+    importlib.invalidate_caches()
+    for mod_name in _addon_modules:
+        if mod_name in sys.modules:
+            try:
+                importlib.reload(sys.modules[mod_name])
+            except Exception as _re:
+                print(f"[RELOAD] {mod_name}: {_re}")
     from core.constants import ASSETS_DIR
     set_skin_dir(ASSETS_DIR, "default")
 

@@ -72,6 +72,12 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     ui     = scale
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_noisegate_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
     # Display area (left of channel buttons)
     disp_x = rx + 42 * ui

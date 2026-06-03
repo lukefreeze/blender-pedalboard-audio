@@ -12,6 +12,8 @@ import os
 # ---------------------------------------------------------------------------
 ADDON_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_DIR = os.path.join(ADDON_DIR, "ui", "assets", "skins")
+# Skin PNGs go in: blender_sync/ui/assets/skins/default/
+# SKIN_MAP in texture_cache.py maps key → filename within that folder.
 
 # ---------------------------------------------------------------------------
 # Engine / channel limits
@@ -38,7 +40,7 @@ FADER_TRACK_BOTTOM  = 580    # distance from base_y down to fader bottom
 METER_W             = 10     # VU bar width
 METER_X_OFF         = 30     # from strip left edge
 
-NUMBOX_H            = 18
+NUMBOX_H            = 60
 NUMBOX_Y_OFFSET     = 560    # distance below base_y (just below fader)
 
 # ---------------------------------------------------------------------------

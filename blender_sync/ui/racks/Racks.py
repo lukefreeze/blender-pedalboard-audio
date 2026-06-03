@@ -73,7 +73,7 @@ RACK_EXPANDED_H_NG  = 320   # noise gate — display + 5-knob row
 RACK_EXPANDED_H_DL  = 320   # delay      — waveform display + 5-knob row
 RACK_EXPANDED_H_MX  = 320   # mixdown    — 4-column layout
 RACK_COLLAPSED_H    = 36
-RACK_MARGIN_TOP     = 60           # gap between fader section and racks
+RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
 RACK_RAIL_H         = 32           # top rail height
 
@@ -1056,7 +1056,12 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     """
     rail_h       = RACK_RAIL_H * scale
     body_h       = rh - rail_h
-    spec_zone_h  = body_h * 0.48
+    # ── Skin background ───────────────────────────────────────────────────
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_comp_multi_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     fader_zone_h = body_h * 0.52
 
     # Channel buttons take 108px on right — equal margin on left
@@ -1574,6 +1579,14 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
       p14-p20: Q    (log-normalised 0-1)
     """
     import math as _m
+    rail_h = RACK_RAIL_H * scale
+    body_h = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_eq_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
     EQ7_BANDS = [
         ("L",  (0.30, 0.60, 1.00), "low_shelf",   80.0,  0.7),
@@ -1954,9 +1967,15 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
       Room | Damp | Wet | Pre-dly | Width
     """
     import math as _mr
-    ui_scale    = scale
-    rail_h      = RACK_RAIL_H * ui_scale
-    body_h      = rh - rail_h
+    ui_scale = scale
+    rail_h   = RACK_RAIL_H * ui_scale
+    body_h   = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_reverb_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
     # --- Display geometry: display at TOP of body, knobs at BOTTOM ---
     margin_l    = 42 * ui_scale
@@ -2206,6 +2225,12 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     ui     = scale
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_noisegate_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
     # Display area (left of channel buttons)
     disp_x = rx + 42 * ui
@@ -2547,6 +2572,12 @@ def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     ui     = scale
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_delay_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
     # ── Geometry — identical to previous version ──────────────────────────────
     margin_l  = 42 * ui
@@ -3277,8 +3308,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     Draw all rack units below the fader section.
     Called from Loader.py draw_callback_px after drawing faders.
     """
-    # rack_base owns the maintained chassis/shell renderers.
-    # Import inside function to avoid circular imports at module load time.
+    # Import rack chassis draw functions from rack_base
+    # (lazy import here so rack_base can in turn import body funcs from rack_*.py)
     from ui.racks.rack_base import (
         _draw_rack_expanded, _draw_rack_collapsed,
         _draw_add_rack_button, _draw_add_popup,
@@ -3292,7 +3323,7 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     all_racks = getattr(scene, "pb_racks", [])
 
     # Calculate base Y position — same anchor as before
-    from ui.mixer.channel_strip import strip_bottom_y as _strip_bot
+    from Loader import FADER_TRACK_BOTTOM, NUMBOX_H, NUMBOX_Y_OFFSET
     base_y = region_height - 150*ui_scale - scroll_y
 
     # Number of fader groups — always in multiples of 9
@@ -3321,7 +3352,8 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
         except Exception:
             send_h = 0.0
 
-        rack_top_y  = _strip_bot(base_y, len(group_racks), ui_scale) - RACK_MARGIN_TOP*ui_scale
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
 
         cur_y = rack_top_y
 
@@ -3449,7 +3481,7 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     """
     import math
     try:
-        from ui.mixer.channel_strip import strip_bottom_y as _strip_bot
+        from Loader import FADER_TRACK_BOTTOM, NUMBOX_H, _send_section_height
     except Exception:
         return None
 
@@ -3484,7 +3516,8 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         except Exception:
             send_h = 0.0
 
-        rack_top_y  = _strip_bot(base_y, len(group_racks), ui_scale) - RACK_MARGIN_TOP*ui_scale
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
 
         cur_y = rack_top_y
 
@@ -3688,7 +3721,7 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
     global _popup_open
 
     try:
-        from ui.mixer.channel_strip import strip_bottom_y as _strip_bot
+        from Loader import FADER_TRACK_BOTTOM, NUMBOX_H
     except Exception:
         return None
 
@@ -3759,7 +3792,8 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         except Exception:
             send_h = 0.0
 
-        rack_top_y  = _strip_bot(base_y, len(group_racks), ui_scale) - RACK_MARGIN_TOP*ui_scale
+        fader_bot_y = base_y - FADER_TRACK_BOTTOM*ui_scale - send_h
+        rack_top_y  = fader_bot_y - (NUMBOX_H + RACK_MARGIN_TOP)*ui_scale
         cur_y       = rack_top_y
 
         for i, rack in group_racks:

@@ -105,6 +105,12 @@ def _draw_piper_body(rx, ry, rw, rh, rack, ai_idx, scale):
     body_bot = ry
     body_top = ry + rh - rail_h
     body_h   = body_top - body_bot
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_piper_bg", rx, body_bot, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+    except Exception:
+        pass
 
     sbar_h   = max(16*scale, body_h * 0.065)
     sbar_y   = body_bot

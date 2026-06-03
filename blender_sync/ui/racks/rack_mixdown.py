@@ -642,6 +642,13 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
 
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_mixdown_bg", rx, ry, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+    except Exception:
+        pass
+
     shader = _get_shader()
 
     # ── Column boundaries (unscaled px, then * ui) ──────────────────────

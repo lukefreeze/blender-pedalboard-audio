@@ -19,12 +19,38 @@ from gpu_extras.batch import batch_for_shader
 # Shader singleton — gpu.shader.from_builtin() is expensive; reuse one instance.
 # ---------------------------------------------------------------------------
 _shader = None
+_image_shader = None
 
 def _get_shader():
     global _shader
     if _shader is None:
         _shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     return _shader
+
+def _get_image_shader():
+    """Cached IMAGE shader — gpu.shader.from_builtin() is expensive, reuse it."""
+    global _image_shader
+    if _image_shader is None:
+        _image_shader = gpu.shader.from_builtin("IMAGE")
+    return _image_shader
+
+def _draw_led_batch(tex, quads: list) -> None:
+    """Draw a list of (x, y, w, h) quads sharing the same LED texture in one call."""
+    if tex is None or not quads:
+        return
+    verts = []
+    uvs   = []
+    for (qx, qy, qw, qh) in quads:
+        # Two triangles per quad (6 vertices)
+        verts += [(qx,    qy),    (qx+qw, qy),    (qx+qw, qy+qh),
+                  (qx,    qy),    (qx+qw, qy+qh), (qx,    qy+qh)]
+        uvs   += [(0.0,   0.0),   (1.0,   0.0),   (1.0,   1.0),
+                  (0.0,   0.0),   (1.0,   1.0),   (0.0,   1.0)]
+    shader = _get_image_shader()
+    batch  = batch_for_shader(shader, "TRIS", {"pos": verts, "texCoord": uvs})
+    shader.bind()
+    shader.uniform_sampler("image", tex)
+    batch.draw(shader)
 
 
 
@@ -257,29 +283,78 @@ def draw_circle_knob(x: float, y: float, radius: float, value: float,
 
 def draw_meter(x: float, y: float, w: float, h: float,
                level: float, peak: float) -> None:
-    """VU bar meter: green/yellow/red zones with peak-hold line."""
-    draw_rect(x, y, w, h, (0.03, 0.03, 0.03, 1.0))
+    """VU LED meter — 19 segments, batched by colour zone (4 draw calls max).
 
-    if level > 0.0:
-        fh = min(level, 1.0) * h
-        gt, yt = h * 0.70, h * 0.90
+    Uses meter_led_green/yellow/red/off tiles if loaded.
+    Falls back to the original solid bar if no tiles are found.
+    """
+    N_LEDS      = 19
+    GREEN_TOP   = 0.70   # LEDs below this fraction are green
+    YELLOW_TOP  = 0.90   # LEDs between green and this are yellow; above = red
 
-        if fh > 0:
-            green_h = min(fh, gt)
-            draw_rect(x, y, w, green_h, (0.0, 0.55, 0.15, 1.0))
-        if fh > gt:
-            yellow_h = min(fh - gt, yt - gt)
-            draw_rect(x, y + gt, w, yellow_h, (0.7, 0.6, 0.0, 1.0))
-        if fh > yt:
-            red_h = fh - yt
-            draw_rect(x, y + yt, w, red_h, (0.85, 0.1, 0.1, 1.0))
+    tex_green  = get_texture("meter_led_green")
+    tex_yellow = get_texture("meter_led_yellow")
+    tex_red    = get_texture("meter_led_red")
+    tex_off    = get_texture("meter_led_off")
 
-    if peak > 0.0:
-        ph  = min(peak, 1.0) * h
-        col = ((0.85, 0.1, 0.1, 1.0) if peak > 0.90 else
-               (0.7, 0.6, 0.0, 1.0)  if peak > 0.70 else
-               (0.0, 0.85, 0.3, 1.0))
-        draw_rect(x, y + ph - 1, w, max(1.5, h * 0.01), col)
+    # ── Fallback: original solid bar when tiles not loaded ───────────────
+    if not (tex_green or tex_yellow or tex_red or tex_off):
+        draw_rect(x, y, w, h, (0.03, 0.03, 0.03, 1.0))
+        if level > 0.0:
+            fh = min(level, 1.0) * h
+            gt, yt = h * GREEN_TOP, h * YELLOW_TOP
+            if fh > 0:
+                draw_rect(x, y, w, min(fh, gt), (0.0, 0.55, 0.15, 1.0))
+            if fh > gt:
+                draw_rect(x, y + gt, w, min(fh - gt, yt - gt), (0.7, 0.6, 0.0, 1.0))
+            if fh > yt:
+                draw_rect(x, y + yt, w, fh - yt, (0.85, 0.1, 0.1, 1.0))
+        if peak > 0.0:
+            ph  = min(peak, 1.0) * h
+            col = ((0.85, 0.1, 0.1, 1.0) if peak > 0.90 else
+                   (0.7, 0.6, 0.0, 1.0)  if peak > 0.70 else
+                   (0.0, 0.85, 0.3, 1.0))
+            draw_rect(x, y + ph - 1, w, max(1.5, h * 0.01), col)
+        return
+
+    # ── LED tile path ─────────────────────────────────────────────────────
+    tile_h    = h / N_LEDS          # height of each segment (fills meter exactly)
+    lit_count = int(min(max(level, 0.0), 1.0) * N_LEDS)
+    peak_idx  = (min(int(min(peak, 1.0) * N_LEDS), N_LEDS - 1)
+                 if peak > 0.0 else -1)
+
+    green_q  = []
+    yellow_q = []
+    red_q    = []
+    off_q    = []
+
+    for i in range(N_LEDS):
+        qx = x
+        qy = y + i * tile_h
+        qw = w
+        qh = tile_h
+        quad = (qx, qy, qw, qh)
+
+        # Is this segment lit (by level or peak hold)?
+        is_lit = (i < lit_count) or (i == peak_idx)
+        # Colour zone based on segment position (bottom = 0, top = N_LEDS-1)
+        frac = (i + 1) / N_LEDS
+
+        if is_lit:
+            if frac <= GREEN_TOP:
+                green_q.append(quad)
+            elif frac <= YELLOW_TOP:
+                yellow_q.append(quad)
+            else:
+                red_q.append(quad)
+        else:
+            off_q.append(quad)
+
+    # One draw call per colour — 4 maximum regardless of LED count
+    _draw_led_batch(tex_off,    off_q)
+    _draw_led_batch(tex_green  or tex_off, green_q)
+    _draw_led_batch(tex_yellow or tex_off, yellow_q)
+    _draw_led_batch(tex_red    or tex_off, red_q)
 
 
 def draw_numbox(x: float, y: float, w: float, h: float,
@@ -320,6 +395,26 @@ def draw_element(key: str, x: float, y: float, w: float, h: float,
     """
     tex = get_texture(key)
     if tex is not None:
-        blit_texture(tex, x, y, w, h)
+        blit_texture(tex, x, y, w, h, key=key)
     else:
         fallback_fn(x, y, w, h, *fallback_args, **fallback_kwargs)
+
+
+def draw_element_if_loaded(key: str, x: float, y: float,
+                           w: float, h: float) -> bool:
+    """Blit PNG skin only if the texture is loaded — draw nothing if not found.
+
+    Use this where a parent-level skin (e.g. mixer_desk_bg) should show through
+    rather than a solid fallback colour. Returns True if blitted, False if skipped.
+
+    Example:
+        # Strip background — only draws if strip_bg.png exists,
+        # otherwise mixer_desk_bg.png shows through
+        draw_element_if_loaded("strip_bg", sx, base_y - strip_h,
+                               STRIP_W * scale, strip_h)
+    """
+    tex = get_texture(key)
+    if tex is not None:
+        blit_texture(tex, x, y, w, h, key=key)
+        return True
+    return False

@@ -229,6 +229,13 @@ def _draw_demucs_body(rx, ry, rw, rh, rack, ai_idx, scale):
         except Exception: pass
         return
 
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        rail_h = 32 * scale; body_h = rh - rail_h
+        _de("rack_demucs_bg", rx, ry, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+    except Exception:
+        pass
     # One-time init guard — runs exactly once per rack instance.
     # PB_AIRackSettings shares FloatProperty slots across all AI rack types,
     # so a new Demucs rack inherits whatever defaults Whisper left behind:

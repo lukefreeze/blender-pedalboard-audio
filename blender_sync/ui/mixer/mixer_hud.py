@@ -20,7 +20,7 @@ from core.constants import (
     SB_TRACK_PX, SB_THUMB_PX, SB_INSET, SB_MARGIN, SB_RADIUS,
     SB_H_RANGE, SB_V_RANGE,
 )
-from core.meters import _engine_levels, _peak_hold
+import core.meters as _meters_mod  # import module not values — avoids stale refs after reload
 
 # ---------------------------------------------------------------------------
 # UI state — imported by interaction.py and Loader.py
@@ -31,6 +31,7 @@ SCROLL_Y  = 0.0
 
 pb_ui_enabled = False
 HUD_AREA_PTR  = None
+_draw_diag_done = False  # print layer order once on first draw
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,7 @@ def load_ui_state() -> None:
     SCROLL_X      = getattr(scene, "pb_ui_scroll_x", 0.0)
     SCROLL_Y      = getattr(scene, "pb_ui_scroll_y", 0.0)
     pb_ui_enabled = getattr(scene, "pb_ui_enabled",  False)
+    global _draw_diag_done; _draw_diag_done = False  # re-print layers on next draw
     print(f"[STATE] scale={round(UI_SCALE,2)} "
           f"scroll=({round(SCROLL_X)},{round(SCROLL_Y)}) "
           f"enabled={pb_ui_enabled}")
@@ -118,6 +120,94 @@ def draw_callback_px(self, context) -> None:
         tracks = getattr(bpy.context.scene, "pb_sync_tracks", [])
         base_y = height - 150*UI_SCALE - SCROLL_Y
 
+        # ── Mixer desk background ─────────────────────────────────────────
+        # One PNG blit covering all 9 strips before individual strips draw.
+        try:
+            from ui.mixer.draw_utils import draw_element as _de
+            from ui.mixer.channel_strip import send_section_height as _sh
+            scene       = bpy.context.scene
+            all_racks   = getattr(scene, "pb_racks", []) if scene else []
+            n_racks_g0  = sum(1 for r in all_racks if getattr(r, 'group_idx', 0) == 0)
+            _send_h     = _sh(n_racks_g0, UI_SCALE)
+            from ui.mixer.channel_strip import STRIP_TOTAL_H as _STH
+            from Racks import RACK_MARGIN_TOP as _RMT
+            _strip_h    = _STH * UI_SCALE + _send_h + _RMT * UI_SCALE
+            _desk_x     = STRIP_LEFT_MARGIN * UI_SCALE + SCROLL_X
+            _desk_y     = base_y - _strip_h
+            _n_strips   = min(len(tracks), 9)
+            _desk_w     = _n_strips * STRIP_STRIDE * UI_SCALE + (STRIP_W - STRIP_STRIDE) * UI_SCALE
+            _de("mixer_desk_bg", _desk_x, _desk_y, _desk_w, _strip_h,
+                draw_rect, (0.07, 0.07, 0.07, 1.0))
+        except Exception:
+            pass
+
+        # ── 3-part strip skin backgrounds (drawn full-width, once for all 9 strips) ──
+        # Drawn BEFORE strip elements so knobs/faders draw on top of the background.
+        try:
+            from ui.mixer.texture_cache import get_texture as _gt
+            from ui.mixer.draw_utils import blit_texture as _bt
+            from ui.mixer.channel_strip import (
+                SEC_HEADER_H as _SHH, SEC_GAIN_H as _SGH,
+                SEC_EQ_H as _SEQ, SEC_PAN_H as _SPAN,
+                FADER_TOP_PAD as _FTP, FADER_HEIGHT as _FH,
+                NUMBOX_H as _NBH, FADER_BOTTOM_PAD as _FBP,
+                SENDS_LABEL_H as _SLH, SLOT_H as _SLOTH,
+                SEND_MIN_SLOTS as _SMS,
+                STRIP_LEFT_MARGIN as _SLM, STRIP_STRIDE as _SSTRIDE, STRIP_W as _SW,
+            )
+            scene2     = bpy.context.scene
+            all_racks2 = getattr(scene2, "pb_racks", []) if scene2 else []
+            n_racks2   = sum(1 for r in all_racks2 if getattr(r, "group_idx", 0) == 0)
+            _slots2    = max(_SMS, n_racks2)
+            _send_h2   = (_SLH + _slots2 * _SLOTH) * UI_SCALE
+            _dx        = _SLM * UI_SCALE + SCROLL_X
+            _n2        = min(len(tracks), 9)
+            _dw        = _n2 * _SSTRIDE * UI_SCALE + (_SW - _SSTRIDE) * UI_SCALE
+
+            # Top slice: HEADER + GAIN  (135px at scale 1)
+            _top_h2 = (_SHH + _SGH) * UI_SCALE
+            _tex = _gt("strip_top_bg")
+            if _tex: _bt(_tex, _dx, base_y - _top_h2, _dw, _top_h2, key="strip_top_bg")
+
+            # Send slot tile: tiled per slot row  (27px each at scale 1)
+            _slot_h2   = _SLOTH * UI_SCALE
+            _slot_top2 = base_y - (_SHH + _SGH + 12) * UI_SCALE - _SLH * UI_SCALE
+            _stex = _gt("strip_send_slot_bg")
+            if _stex:
+                for _si in range(_slots2):
+                    _sy = _slot_top2 - _si * _slot_h2 - _slot_h2
+                    _bt(_stex, _dx, _sy, _dw, _slot_h2, key="strip_send_slot_bg")
+
+            # Bottom slice: EQ + PAN + FADER  (523px at scale 1)
+            _bot_h2  = (_SEQ + _SPAN + _FTP + _FH + _NBH + _FBP) * UI_SCALE
+            _bot_top = base_y - (_SHH + _SGH + 12 + 12) * UI_SCALE - _send_h2
+            _btex = _gt("strip_bottom_bg")
+            if _btex: _bt(_btex, _dx, _bot_top - _bot_h2, _dw, _bot_h2, key="strip_bottom_bg")
+        except Exception as _e3:
+            pass
+
+
+        # ── Draw layer diagnostic — prints once on first draw ────────────────
+        global _draw_diag_done
+        if not _draw_diag_done:
+            _draw_diag_done = True
+            from ui.mixer.texture_cache import get_texture as _gtd
+            _layers = [
+                ("1 (bottom)", "Background rect (solid dark fill)",              True),
+                ("2",          "mixer_desk_bg PNG or grey fallback",             _gtd("mixer_desk_bg") is not None),
+                ("3",          "strip_top_bg  (HEADER+GAIN, full width)",        _gtd("strip_top_bg") is not None),
+                ("4",          "strip_send_slot_bg  (tiled rows, full width)",   _gtd("strip_send_slot_bg") is not None),
+                ("5",          "strip_bottom_bg  (EQ+PAN+FADER, full width)",    _gtd("strip_bottom_bg") is not None),
+                ("6",          "Channel strip elements (knobs/faders/buttons)",  True),
+                ("7 (top)",    "Racks",                                          True),
+            ]
+            print("[HUD] ── Draw layer order ──────────────────────────────")
+            for lvl, desc, loaded in _layers:
+                status = "PNG" if loaded and lvl not in ("1 (bottom)", "6", "7 (top)") else ("FALLBACK" if not loaded and lvl not in ("1 (bottom)", "6", "7 (top)") else "")
+                tag = f"  [{status}]" if status else ""
+                print(f"[HUD]   Layer {lvl}: {desc}{tag}")
+            print("[HUD] ─────────────────────────────────────────────────")
+
         draw_col = 0
         for i, track in enumerate(tracks):
             group_idx = i // 9
@@ -126,8 +216,8 @@ def draw_callback_px(self, context) -> None:
             if sx + STRIP_W*UI_SCALE < 0 or sx > width:
                 continue
 
-            eng   = _engine_levels[i] if i < MAX_CHANNELS else 0.0
-            peak  = _peak_hold[i]     if i < MAX_CHANNELS else 0.0
+            eng   = _meters_mod._engine_levels[i] if i < MAX_CHANNELS else 0.0
+            peak  = _meters_mod._peak_hold[i]     if i < MAX_CHANNELS else 0.0
             draw_channel_strip(i, track, sx, base_y, UI_SCALE, tracks,
                                eng, peak, group_idx)
 

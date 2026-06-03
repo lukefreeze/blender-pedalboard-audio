@@ -18,6 +18,10 @@ from core.constants import (
 )
 from ui.mixer.channel_strip import (
     send_section_height as _send_section_height,
+    FADER_BOTTOM_PAD,
+    SEC_HEADER_H as _CS_SHH, SEC_GAIN_H as _CS_SGH,
+    SEC_EQ_H as _CS_SEQ, SEC_PAN_H as _CS_SPAN,
+    FADER_TOP_PAD as _CS_FTP, DIVIDER_GAP as _CS_DG,
 )
 from core.audio import (
     apply_fader_to_channel, apply_gain_to_channel,
@@ -338,7 +342,10 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 # Must match draw loop exactly — include send section height
                 n_racks_ht = len(getattr(context.scene, "pb_racks", []))
                 send_h_ht  = _send_section_height(n_racks_ht, UI_SCALE)
-                f_y    = base_y - (FADER_TRACK_BOTTOM*UI_SCALE) - send_h_ht
+                # Cursor-based f_y — mirrors channel_strip.py draw exactly
+                # sec_top = base_y - (header+gain+divider*2+divider*2+eq+pan)*scale - sends
+                _cs_sec_top = base_y - (_CS_SHH + _CS_SGH + _CS_DG*4 + _CS_SEQ + _CS_SPAN) * UI_SCALE - send_h_ht
+                f_y    = _cs_sec_top - _CS_FTP * UI_SCALE - FADER_HEIGHT * UI_SCALE
                 f_hw   = FADER_HANDLE_W * UI_SCALE
                 f_hh   = FADER_HANDLE_H * UI_SCALE
                 nb_h   = NUMBOX_H * UI_SCALE
@@ -351,7 +358,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     kx  = sx+(60*UI_SCALE)
                     f_hx = sx+(FADER_HANDLE_X_OFF*UI_SCALE)
                     nb_x = sx+(15*UI_SCALE)
-                    nb_y = f_y - (nb_h + 4*UI_SCALE)
+                    nb_y = f_y - (FADER_BOTTOM_PAD // 2) * UI_SCALE - nb_h  # mirrors channel_strip draw
                     nb_w = 90*UI_SCALE
                     fader_norm = (track.volume-FADER_MIN)/(FADER_MAX-FADER_MIN)
                     fader_norm = max(0.0, min(1.0, fader_norm))
@@ -359,20 +366,27 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                     fhb  = f_y - (f_hh/2)
                     fht  = f_y + f_h + (f_hh/2)
 
-                    # Knobs — positions must match draw loop exactly
+                    # Knobs — derived from channel_strip.py cursor logic:
+                    #   cursor after header(65)+gain(70)+div(12)+sends+div(12) = base_y - 159*s - send_h
+                    #   EQ top = that cursor; knobs centred in each third of SEC_EQ_H(175)
+                    #   PAN cy = EQ_bot - SEC_PAN_H + SEC_PAN_H*0.55 = EQ_bot - 54
                     n_racks_k  = len(getattr(context.scene, "pb_racks", []))
                     send_h_k   = _send_section_height(n_racks_k, UI_SCALE)
-                    eq_start_k = 175*UI_SCALE + send_h_k
+                    eq_top_k   = base_y - (159*UI_SCALE + send_h_k)
+                    eq_sp_k    = (175*UI_SCALE) / 3.0
+                    eq_high_k  = eq_top_k - 0.5 * eq_sp_k
+                    eq_mid_k   = eq_top_k - 1.5 * eq_sp_k
+                    eq_low_k   = eq_top_k - 2.5 * eq_sp_k
+                    pan_ky_k   = eq_top_k - 175*UI_SCALE - 120*UI_SCALE + 120*UI_SCALE*0.55
                     if math.dist((rx,ry),(kx,base_y-100*UI_SCALE))<20*UI_SCALE:
                         active_knob_track,active_knob_type=i,"GAIN"; return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-eq_start_k))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,eq_high_k))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"HIGH"; return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-(eq_start_k+50*UI_SCALE)))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,eq_mid_k))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"MID";  return {"RUNNING_MODAL"}
-                    if math.dist((rx,ry),(kx,base_y-(eq_start_k+100*UI_SCALE)))<16*UI_SCALE:
+                    if math.dist((rx,ry),(kx,eq_low_k))<16*UI_SCALE:
                         active_knob_track,active_knob_type=i,"LOW";  return {"RUNNING_MODAL"}
-                    # Pan knob — between EQ LOW and fader top, matches draw position
-                    pan_ky_k = f_y + f_h + 42*UI_SCALE
+                    # Pan knob
                     if math.dist((rx,ry),(kx, pan_ky_k)) < 18*UI_SCALE:
                         # Double-click snaps pan to centre
                         if (now - _last_click_time < DOUBLE_CLICK_TIME
@@ -480,7 +494,8 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 # or Python will treat the module-level reference as unbound local.
                 try:
                     import Racks as _rk_ai
-                    _FTB  = FADER_TRACK_BOTTOM   # already in scope from module import
+                    _cs_st = base_y - (_CS_SHH + _CS_SGH + _CS_DG*4 + _CS_SEQ + _CS_SPAN) * UI_SCALE - send_h_ht
+                    _FTB_f_y = _cs_st - _CS_FTP * UI_SCALE - FADER_HEIGHT * UI_SCALE  # correct fader bottom
                     _NBH  = NUMBOX_H             # already in scope from module import
                     from ui.mixer.channel_strip import send_section_height as _ssh_ai
 
@@ -511,8 +526,8 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         n_group_dsp = len(group_dsp)
                         send_h_ai   = _ssh_ai(n_group_dsp, UI_SCALE)
 
-                        fader_bot_ai = base_y_ai - _FTB*UI_SCALE - send_h_ai
-                        rack_top_ai  = fader_bot_ai - (_NBH + _rk_ai.RACK_MARGIN_TOP)*UI_SCALE
+                        from ui.mixer.channel_strip import strip_bottom_y as _sbot_ai
+                        rack_top_ai  = _sbot_ai(base_y_ai, n_group_dsp, UI_SCALE) - _rk_ai.RACK_MARGIN_TOP*UI_SCALE
 
                         # Walk down past this group's DSP racks
                         cur_y_ai = rack_top_ai

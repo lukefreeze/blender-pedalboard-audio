@@ -88,8 +88,25 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
         get_rack_channels = _rs_spec.get_rack_channels
     except Exception:
         get_rack_channels = lambda r: set()
-    # Background
-    _draw_rect(rx, ry, rw, rh, (0.04, 0.04, 0.04, 1.0))
+    # Background — skin PNG if available, otherwise solid colour
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _rack_skin_key = {
+            "COMP_MULTI":  "rack_comp_multi_bg",
+            "COMP_SINGLE": "rack_comp_single_bg",
+            "EQ":          "rack_eq_bg",
+            "REVERB":      "rack_reverb_bg",
+            "NOISE_GATE":  "rack_noisegate_bg",
+            "DELAY":       "rack_delay_bg",
+            "BOOSTER":     "rack_booster_bg",
+            "MIXDOWN":     "rack_mixdown_bg",
+        }.get(getattr(rack, 'effect_type', ''), None)
+        if _rack_skin_key:
+            _de(_rack_skin_key, rx, ry, rw, rh, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+        else:
+            _draw_rect(rx, ry, rw, rh, (0.04, 0.04, 0.04, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, rh, (0.04, 0.04, 0.04, 1.0))
     # Border
     shader = _get_shader()
     verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]

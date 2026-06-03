@@ -73,6 +73,17 @@ def _meter_timer():
             for i in range(MAX_CHANNELS):
                 new_rms[i]  = hj.get_meter_rms(i)
                 new_peak[i] = hj.get_meter_peak(i)
+            # Diagnostic: print non-zero levels once every 100 ticks
+            if not hasattr(_meter_timer, '_diag_count'):
+                _meter_timer._diag_count = 0
+            _meter_timer._diag_count += 1
+            if _meter_timer._diag_count % 100 == 1:
+                non_zero = [(i, f"{new_rms[i]:.3f}") for i in range(9) if new_rms[i] > 0.0]
+                print(f"[METER] diag: hj={hj is not None}, is_playing={is_playing}, non_zero_rms={non_zero}")
+        else:
+            if not hasattr(_meter_timer, '_no_hj_warned'):
+                _meter_timer._no_hj_warned = True
+                print("[METER] WARNING: hj is None — engine not available, meters will be 0")
 
         # Update EngineState.current_frame for rack waveform display.
         # No cursor driving — Blender's cursor stays under its own control.

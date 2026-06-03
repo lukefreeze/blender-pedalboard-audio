@@ -144,6 +144,15 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     import Racks as _racks_mod
     get_rack_channels = _racks_mod.get_rack_channels
     import math as _m
+    rail_h = RACK_RAIL_H * scale
+    body_h = rh - rail_h
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_eq_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
+
 
     EQ7_BANDS = [
         ("L",  (0.30, 0.60, 1.00), "low_shelf",   80.0,  0.7),

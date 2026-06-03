@@ -284,6 +284,12 @@ def _draw_whisper_body(rx, ry, rw, rh, rack, ai_idx, scale):
     body_bot = ry
     body_top = ry + rh - rail_h
     body_h   = body_top - body_bot
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_whisper_bg", rx, body_bot, rw, body_h, _r, _BG)
+    except Exception:
+        pass
 
     _r(rx, body_bot, rw, body_h, _BG)
     _box(rx, body_bot, rw, body_h, _BORDER)

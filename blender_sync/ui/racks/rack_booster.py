@@ -152,8 +152,13 @@ def _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale):
     body_h   = body_top - body_bot
     shader   = _get_shader()
 
-    # Background + border
-    _draw_rect(rx, body_bot, rw, body_h, _BG)
+    # Background — skin PNG if available, otherwise solid colour
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_booster_bg", rx, body_bot, rw, body_h, _draw_rect, _BG)
+    except Exception:
+        _draw_rect(rx, body_bot, rw, body_h, _BG)
+    # Border
     bv = [(rx, body_bot), (rx+rw, body_bot),
           (rx+rw, body_top), (rx, body_top), (rx, body_bot)]
     b  = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})

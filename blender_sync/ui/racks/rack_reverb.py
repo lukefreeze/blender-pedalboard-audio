@@ -61,6 +61,13 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rail_h      = RACK_RAIL_H * ui_scale
     body_h      = rh - rail_h
 
+    # ── Skin background
+    try:
+        from ui.mixer.draw_utils import draw_element as _de
+        _de("rack_reverb_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+    except Exception:
+        _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
+
     # --- Display geometry: display at TOP of body, knobs at BOTTOM ---
     margin_l    = 42 * ui_scale
     ch_btn_w    = 108 * ui_scale
