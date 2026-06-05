@@ -73,7 +73,7 @@ RACK_EXPANDED_H_NG  = 320   # noise gate — display + 5-knob row
 RACK_EXPANDED_H_DL  = 320   # delay      — waveform display + 5-knob row
 RACK_EXPANDED_H_MX  = 320   # mixdown    — 4-column layout
 RACK_COLLAPSED_H    = 36
-RACK_MARGIN_TOP     = 60           # gap between fader section and racks
+RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 4            # gap between rack units
 RACK_RAIL_H         = 32           # top rail height
 

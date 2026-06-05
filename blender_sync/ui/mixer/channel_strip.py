@@ -200,12 +200,8 @@ def strip_bottom_y(base_y: float, n_racks: int, scale: float) -> float:
     """Y coordinate of the bottom of the strip (below numbox + padding).
     Single source of truth used by both channel_strip.py and Racks.py.
     base_y is the TOP of the strip body passed to draw_channel_strip.
-
-    Rack position is always calculated against SEND_MIN_SLOTS so that adding
-    racks beyond the minimum never shifts the rack area downward — extra send
-    slot tiles grow into the desk background image above, not into the racks.
     """
-    sends_h = send_section_height(min(n_racks, SEND_MIN_SLOTS), scale)
+    sends_h = send_section_height(n_racks, scale)
     return base_y - STRIP_TOTAL_H * scale - sends_h
 
 
