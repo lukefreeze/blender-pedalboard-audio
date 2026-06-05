@@ -100,11 +100,12 @@ SLOT_H           = SEND_BTN_H + SEND_BTN_GAP + 4   # 27px per send slot
 # Fader section
 FADER_TOP_PAD    = 10    # px gap above fader rail
 FADER_BOTTOM_PAD = 20    # px gap below numbox before strip ends  ← increase for more space
+FADER_VISUAL_BOTTOM_PAD = 20  # px from rail bottom the handle never goes below — pure visual, no effect on values
 METER_X_OFFSET   = 25     # px from strip left edge to VU meter  ← increase to move right
 # STRIP_TOTAL_H must equal: SEC_HEADER_H + SEC_GAIN_H + (DIVIDER_GAP*4) +
 #   SEC_EQ_H + SEC_PAN_H + FADER_TOP_PAD + FADER_HEIGHT + NUMBOX_H + FADER_BOTTOM_PAD
 # = 65+70+24+175+120+10+180+18+20 = 682. Update this if you change any section height.
-STRIP_TOTAL_H    = 682   # keep in sync with section heights above
+STRIP_TOTAL_H    = 682   # matches mixer_desk_bg.png — update image before changing this
 
 # ---------------------------------------------------------------------------
 # Colours
@@ -119,6 +120,21 @@ KNOB_EQ_M_COLOR = (0.4, 0.2, 0.6)
 KNOB_EQ_L_COLOR = (0.6, 0.2, 0.4)
 KNOB_PAN_COLOR = (0.65, 0.45, 0.10)
 FADER_HANDLE_COLOR = (0.5, 0.5, 0.5, 1.0)
+
+# ── Fader handle image draw size ────────────────────────────────────────────
+# These control how large the fader_handle PNG is drawn.
+# Independent of the hitbox (FADER_HANDLE_W/H in constants.py).
+# Increase to match the actual pixel size of your cropped handle images.
+FADER_HANDLE_IMG_W  = 134   # drawn width of handle image (unscaled px)
+FADER_HANDLE_IMG_H  = 135   # drawn height of handle image (unscaled px)
+FADER_HANDLE_IMG_X  = 2     # x nudge applied to ALL channels (global offset)
+FADER_HANDLE_IMG_Y  = -23     # y nudge applied to ALL channels (global offset)
+
+# Per-channel fine-tune — index 0 = CH1, index 8 = CH9
+# Use these to align handles that sit slightly off due to 3D perspective in the image.
+# Values are unscaled px at scale 1.0. Added on top of the global IMG_X/Y above.
+FADER_HANDLE_CH_X = [7, 0, 0, 0, 0, 0, 0, 0, -3]
+FADER_HANDLE_CH_Y = [0, 0, 0, 0, 0, 0, 0, 0, 0]
 FADER_RAIL_COLOR = (0.02, 0.02, 0.02, 1.0)
 UNITY_COLOR = (0.6, 0.6, 0.6, 0.8)
 DIVIDER_COLOR = (0.40, 0.40, 0.45, 1.0)
@@ -151,6 +167,26 @@ EQ_KNOB_Y_OFFSETS   = [-2, -2, -2, -2, -2, -2, -2, -2, -2]
 PAN_KNOB_X_OFFSETS  = [-4, -3, -1.5, -0.5, 1, 2, 2.75, 4, 6]
 PAN_KNOB_Y_OFFSETS  = [-1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5]
 
+# ── Mute / Solo button layout ────────────────────────────────────────────────
+# Adjust these to align the on-state overlay images with your skin's buttons.
+# All values are UNSCALED pixels at scale 1.0 — multiplied by UI_SCALE at draw time.
+BTN_W           = 86     # width of each button image
+BTN_H           = 51     # height of each button image
+BTN_MUTE_X      = -11     # x offset of M button from strip left edge
+BTN_SOLO_X      = 45     # x offset of S button from strip left edge
+BTN_Y_OFFSET    = -6.5      # fine-tune vertical position (positive = up, negative = down)
+BTN_Y_CENTER    = True   # if True, buttons are centred in the header section
+
+# ── Send slot button layout ──────────────────────────────────────────────────
+# Adjust to align the send button images within each slot tile.
+# All values unscaled pixels at scale 1.0.
+SEND_BTN_IMG_W   = 125   # drawn width of the send button image
+SEND_BTN_IMG_H   = 27    # drawn height of the send button image
+SEND_BTN_IMG_X   = -1    # x offset from strip left edge
+SEND_BTN_IMG_Y   = -4     # y offset up from tile bottom
+SEND_BTN_TEXT_X  = 30    # x offset of rack label text from button left edge
+SEND_BTN_TEXT_Y  = -2.5     # y offset of rack label text (positive = up, negative = down)
+
 
 # ---------------------------------------------------------------------------
 # Helper: send section total height
@@ -164,8 +200,12 @@ def strip_bottom_y(base_y: float, n_racks: int, scale: float) -> float:
     """Y coordinate of the bottom of the strip (below numbox + padding).
     Single source of truth used by both channel_strip.py and Racks.py.
     base_y is the TOP of the strip body passed to draw_channel_strip.
+
+    Rack position is always calculated against SEND_MIN_SLOTS so that adding
+    racks beyond the minimum never shifts the rack area downward — extra send
+    slot tiles grow into the desk background image above, not into the racks.
     """
-    sends_h = send_section_height(n_racks, scale)
+    sends_h = send_section_height(min(n_racks, SEND_MIN_SLOTS), scale)
     return base_y - STRIP_TOTAL_H * scale - sends_h
 
 
@@ -234,39 +274,41 @@ def draw_channel_strip(
             sx, sec_bot, STRIP_W * scale, SEC_HEADER_H * scale, (0.10, 0.10, 0.10, 1.0)
         )
 
-    # M/S buttons — centred vertically in this section
-    btn_mid_y = sec_bot + (SEC_HEADER_H * scale) * 0.5
-    btn_h = 30 * scale
-    btn_y = btn_mid_y - btn_h * 0.5
+    # M/S buttons — position and size driven by constants at top of file
+    _btn_w  = BTN_W * scale
+    _btn_h  = BTN_H * scale
+    if BTN_Y_CENTER:
+        _btn_mid_y = sec_bot + (SEC_HEADER_H * scale) * 0.5
+        _btn_y = _btn_mid_y - _btn_h * 0.5 + BTN_Y_OFFSET * scale
+    else:
+        _btn_y = sec_bot + BTN_Y_OFFSET * scale
+    _mute_x = sx + BTN_MUTE_X * scale
+    _solo_x = sx + BTN_SOLO_X * scale
 
-    m_c = M_COLOR_ON if track.mute else M_COLOR_OFF
-    draw_element(
-        "btn_mute_on" if track.mute else "btn_mute_off",
-        sx + 10 * scale,
-        btn_y,
-        45 * scale,
-        btn_h,
-        draw_rect,
-        m_c,
-    )
+    _skin_active = get_texture("strip_top_bg") is not None
 
-    s_c = S_COLOR_ON if track.solo else S_COLOR_OFF
-    draw_element(
-        "btn_solo_on" if track.solo else "btn_solo_off",
-        sx + 65 * scale,
-        btn_y,
-        45 * scale,
-        btn_h,
-        draw_rect,
-        s_c,
-    )
+    # Mute button
+    if track.mute:
+        draw_element("btn_mute_on", _mute_x, _btn_y, _btn_w, _btn_h,
+                     draw_rect, M_COLOR_ON)
+    elif not _skin_active:
+        draw_rect(_mute_x, _btn_y, _btn_w, _btn_h, M_COLOR_OFF)
 
-    blf.size(0, int(9 * scale))
-    blf.color(0, 1, 1, 1, 1)
-    blf.position(0, sx + 24 * scale, btn_y + btn_h * 0.5 - 4 * scale, 0)
-    blf.draw(0, "M")
-    blf.position(0, sx + 79 * scale, btn_y + btn_h * 0.5 - 4 * scale, 0)
-    blf.draw(0, "S")
+    # Solo button
+    if track.solo:
+        draw_element("btn_solo_on", _solo_x, _btn_y, _btn_w, _btn_h,
+                     draw_rect, S_COLOR_ON)
+    elif not _skin_active:
+        draw_rect(_solo_x, _btn_y, _btn_w, _btn_h, S_COLOR_OFF)
+
+    # M / S labels — only when no skin loaded (skin has labels baked in)
+    if not _skin_active:
+        blf.size(0, int(9 * scale))
+        blf.color(0, 1, 1, 1, 1)
+        blf.position(0, _mute_x + _btn_w * 0.4, _btn_y + _btn_h * 0.3, 0)
+        blf.draw(0, "M")
+        blf.position(0, _solo_x + _btn_w * 0.4, _btn_y + _btn_h * 0.3, 0)
+        blf.draw(0, "S")
 
     cursor = sec_bot  # advance
 
@@ -289,7 +331,7 @@ def draw_channel_strip(
         KNOB_GAIN_R * scale,
         gain_norm,
         KNOB_GAIN_COLOR,
-        f"G:{gain_db:+.1f}dB",
+        "" if _skin_active else f"G:{gain_db:+.1f}dB",
         ui_scale=scale,
     )
 
@@ -297,46 +339,35 @@ def draw_channel_strip(
 
     # ── DIVIDER 1 ─────────────────────────────────────────────────────────────
     cursor -= DIVIDER_GAP * scale
-    _divider(sx, cursor, scale)
+    if not _skin_active:
+        _divider(sx, cursor, scale)
     cursor -= DIVIDER_GAP * scale
 
     # ── SECTION 3: SENDS ─────────────────────────────────────────────────────
     sec_top = cursor
     sec_bot = cursor - sends_h
 
-    # slot tiles drawn full-width in mixer_hud — fallback only
-    if get_texture("strip_send_slot_bg") is None:
-        draw_rect(sx, sec_bot, STRIP_W * scale, sends_h, (0.08, 0.08, 0.08, 1.0))
 
     # "SENDS" label at top of section
-    blf.size(0, int(8 * scale))
-    blf.color(0, *SENDS_TEXT_COLOR)
-    blf.position(0, sx + 10 * scale, cursor - SENDS_LABEL_H * scale * 0.5, 0)
-    blf.draw(0, "SENDS")
-    blf.color(0, 1, 1, 1, 1)
+    if not _skin_active:
+        blf.size(0, int(8 * scale))
+        blf.color(0, *SENDS_TEXT_COLOR)
+        blf.position(0, sx + 10 * scale, cursor - SENDS_LABEL_H * scale * 0.5, 0)
+        blf.draw(0, "SENDS")
+        blf.color(0, 1, 1, 1, 1)
 
     # Send slot tiles + buttons — flow down from below the label
     slot_cursor = cursor - SENDS_LABEL_H * scale
-    btn_w = 100 * scale
-    btn_x = sx + 10 * scale
+    btn_w = SEND_BTN_IMG_W * scale
+    btn_x = sx + SEND_BTN_IMG_X * scale
     racks = [r for r in all_racks if getattr(r, "group_idx", 0) == group_idx]
     local_ch = i % 9
 
     for slot in range(slots):
         tile_y = slot_cursor - SLOT_H * scale
-        btn_y = tile_y + 2 * scale  # 2px padding at bottom of tile
-        btn_h = SEND_BTN_H * scale  # button is shorter than tile
+        btn_y = tile_y + SEND_BTN_IMG_Y * scale
+        btn_h = SEND_BTN_IMG_H * scale
 
-        # Tile background (full SLOT_H — gives the gap between buttons)
-        # slot tile drawn full-width in mixer_hud — fallback only
-        if get_texture("strip_send_slot_bg") is None:
-            draw_rect(
-                sx,
-                tile_y,
-                STRIP_W * scale,
-                SLOT_H * scale,
-                (0.09, 0.09, 0.09, 1.0) if slot % 2 == 0 else (0.07, 0.07, 0.07, 1.0),
-            )
 
         if slot < n_racks:
             rack = racks[slot]
@@ -352,24 +383,16 @@ def draw_channel_strip(
             dot = tc = (0.14, 0.14, 0.14, 1.0)
             label = ""
 
-        draw_rect(btn_x, btn_y, btn_w, btn_h, bg)
-        shader = _get_shader()
-        verts = [
-            (btn_x, btn_y),
-            (btn_x + btn_w, btn_y),
-            (btn_x + btn_w, btn_y + btn_h),
-            (btn_x, btn_y + btn_h),
-            (btn_x, btn_y),
-        ]
-        b = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
-        shader.bind()
-        shader.uniform_float("color", bc)
-        b.draw(shader)
-        draw_circle(btn_x + 8 * scale, btn_y + btn_h * 0.5, 3 * scale, dot)
+        # Send button — PNG skin replaces the rect/border/dot primitives.
+        # SendOn.png / SendOff.png used when loaded; fallback to GPU primitives.
+        _send_key = "send_btn_on" if (slot < n_racks and active) else "send_btn_off"
+        draw_element(_send_key, btn_x, btn_y, btn_w, btn_h, draw_rect, bg)
+
+        # Label text drawn on top when a rack is assigned
         if label:
             blf.size(0, max(1, int(8 * scale)))
             blf.color(0, *tc)
-            blf.position(0, btn_x + 16 * scale, btn_y + btn_h * 0.5 - 4 * scale, 0)
+            blf.position(0, btn_x + SEND_BTN_TEXT_X * scale, btn_y + btn_h * 0.5 + SEND_BTN_TEXT_Y * scale, 0)
             blf.draw(0, label)
             blf.color(0, 1, 1, 1, 1)
 
@@ -379,7 +402,8 @@ def draw_channel_strip(
 
     # ── DIVIDER 2 ─────────────────────────────────────────────────────────────
     cursor -= DIVIDER_GAP * scale
-    _divider(sx, cursor, scale)
+    if not _skin_active:
+        _divider(sx, cursor, scale)
     cursor -= DIVIDER_GAP * scale
 
     # ── SECTION 4: EQ KNOBS ──────────────────────────────────────────────────
@@ -394,9 +418,9 @@ def draw_channel_strip(
 
     eq_spacing = (SEC_EQ_H * scale) / 3.0
     eq_configs = [
-        ((track.eq_high + 24) / 48, KNOB_EQ_H_COLOR, f"H:{int(track.eq_high)}"),
-        ((track.eq_mid + 24) / 48, KNOB_EQ_M_COLOR, f"M:{int(track.eq_mid)}"),
-        ((track.eq_low + 24) / 48, KNOB_EQ_L_COLOR, f"L:{int(track.eq_low)}"),
+        ((track.eq_high + 24) / 48, KNOB_EQ_H_COLOR, "" if _skin_active else f"H:{int(track.eq_high)}"),
+        ((track.eq_mid + 24) / 48, KNOB_EQ_M_COLOR, "" if _skin_active else f"M:{int(track.eq_mid)}"),
+        ((track.eq_low + 24) / 48, KNOB_EQ_L_COLOR, "" if _skin_active else f"L:{int(track.eq_low)}"),
     ]
     for idx, (norm, col, lbl) in enumerate(eq_configs):
         ky = sec_top - (idx + 0.5) * eq_spacing + _eq_ky
@@ -429,7 +453,7 @@ def draw_channel_strip(
         KNOB_PAN_R * scale,
         pan_val,
         KNOB_PAN_COLOR,
-        f"PAN:{pan_lbl}",
+        "" if _skin_active else f"PAN:{pan_lbl}",
         ui_scale=scale,
     )
 
@@ -462,29 +486,49 @@ def draw_channel_strip(
     f_hx    = sx + FADER_HANDLE_X_OFF * scale
     rail_cx = f_hx + f_hw / 2 - 5 * scale
 
+    # Numbox drawn FIRST so fader rail and handle always paint on top
+    nb_h = NUMBOX_H * scale
+    nb_y = f_y - (FADER_BOTTOM_PAD // 2) * scale - nb_h
+    draw_numbox(
+        sx + 15 * scale, nb_y, 90 * scale, nb_h,
+        track.volume,
+        channel=i,
+        peak_hold=peak_hold,
+        skip_bg=get_texture("strip_bottom_bg") is not None,
+        scale=scale,
+    )
+
     draw_element(
         "fader_rail", rail_cx, f_y, 10 * scale, fader_h, draw_rect, FADER_RAIL_COLOR
     )
 
+    # Visual travel range — handle and unity mark both remapped into this.
+    # Values and drag sensitivity are completely unaffected.
+    _vis_pad    = FADER_VISUAL_BOTTOM_PAD * scale
+    _vis_travel = fader_h - 2 * _vis_pad
+
     unity_norm = (1.0 - FADER_MIN) / (FADER_MAX - FADER_MIN)
-    unity_y    = f_y + unity_norm * fader_h
+    unity_y    = f_y + _vis_pad + unity_norm * _vis_travel
     draw_rect(rail_cx - 5 * scale, unity_y, 20 * scale, max(1.0, scale), UNITY_COLOR)
 
     fader_norm = max(
         0.0, min(1.0, (track.volume - FADER_MIN) / (FADER_MAX - FADER_MIN))
     )
-    h_p = f_y + fader_norm * fader_h - f_hh / 2
+    h_p = f_y + _vis_pad + fader_norm * _vis_travel - f_hh / 2
     # Per-channel fader handle: try fader_handle_{ch} first, fall back to fader_handle
     _fh_key = f"fader_handle_{(i % 9) + 1}"
     if get_texture(_fh_key) is None:
         _fh_key = "fader_handle"
-    draw_element(_fh_key, f_hx, h_p, f_hw, f_hh, draw_rect, FADER_HANDLE_COLOR)
+    # Image draw rect uses FADER_HANDLE_IMG_* — adjust to match your PNG dimensions
+    _img_w = FADER_HANDLE_IMG_W * scale
+    _img_h = FADER_HANDLE_IMG_H * scale
+    _ch_idx = i % 9
+    _ch_x   = FADER_HANDLE_CH_X[_ch_idx] * scale if _ch_idx < len(FADER_HANDLE_CH_X) else 0
+    _ch_y   = FADER_HANDLE_CH_Y[_ch_idx] * scale if _ch_idx < len(FADER_HANDLE_CH_Y) else 0
+    _img_x  = f_hx + (FADER_HANDLE_IMG_X + 0) * scale - (_img_w - f_hw) / 2 + _ch_x
+    _img_y  = h_p  + (FADER_HANDLE_IMG_Y + 0) * scale - (_img_h - f_hh) / 2 + _ch_y
+    draw_element(_fh_key, _img_x, _img_y, _img_w, _img_h, draw_rect, FADER_HANDLE_COLOR)
 
     draw_meter(
         sx + METER_X_OFFSET * scale, f_y, METER_W * scale, fader_h, engine_level, peak_hold
     )
-
-    # Numbox sits below the fader with FADER_BOTTOM_PAD//2 gap
-    nb_h = NUMBOX_H * scale
-    nb_y = f_y - (FADER_BOTTOM_PAD // 2) * scale - nb_h
-    draw_numbox(sx + 15 * scale, nb_y, 90 * scale, nb_h, track.volume)

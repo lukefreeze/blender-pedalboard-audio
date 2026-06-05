@@ -54,6 +54,10 @@ SKIN_MAP = {
     "knob_gain":     "knob_gain.png",
     "knob_eq":       "knob_eq.png",
     "knob_pan":      "knob_pan.png",
+    # Send slot buttons
+    "send_btn_off":  "SendOff.png",
+    "send_btn_on":   "SendOn.png",
+
     "btn_mute_off":  "btn_mute_off.png",
     "btn_mute_on":   "btn_mute_on.png",
     "btn_solo_off":  "btn_solo_off.png",
@@ -144,6 +148,10 @@ def blit_texture(tex, x: float, y: float, w: float, h: float,
         _blit_logged.add(key)
         print(f"[SKIN] blitting '{key}' ({int(w)}x{int(h)}px)")
     try:
+        # Explicitly set alpha blend — do not rely on caller having set it.
+        # Blender images use premultiplied alpha internally after loading,
+        # so ALPHA_PREMULT gives correct compositing over the background.
+        gpu.state.blend_set("ALPHA_PREMULT")
         shader = gpu.shader.from_builtin("IMAGE")
         verts  = [(x, y), (x+w, y), (x, y+h), (x+w, y+h)]
         uvs    = [(0, 0), (1, 0), (0, 1), (1, 1)]
@@ -152,6 +160,7 @@ def blit_texture(tex, x: float, y: float, w: float, h: float,
         shader.bind()
         shader.uniform_sampler("image", tex)
         batch.draw(shader)
+        gpu.state.blend_set("ALPHA")  # restore standard blend for everything else
     except Exception as e:
         print(f"[SKIN] blit error '{key}': {e}")
 

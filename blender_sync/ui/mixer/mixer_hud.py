@@ -124,19 +124,18 @@ def draw_callback_px(self, context) -> None:
         # One PNG blit covering all 9 strips before individual strips draw.
         try:
             from ui.mixer.draw_utils import draw_element as _de
-            from ui.mixer.channel_strip import send_section_height as _sh
-            scene       = bpy.context.scene
-            all_racks   = getattr(scene, "pb_racks", []) if scene else []
-            n_racks_g0  = sum(1 for r in all_racks if getattr(r, 'group_idx', 0) == 0)
-            _send_h     = _sh(n_racks_g0, UI_SCALE)
+            from ui.mixer.channel_strip import send_section_height as _sh, SEND_MIN_SLOTS as _SMS
             from ui.mixer.channel_strip import STRIP_TOTAL_H as _STH
             from Racks import RACK_MARGIN_TOP as _RMT
-            _strip_h    = _STH * UI_SCALE + _send_h + _RMT * UI_SCALE
+            # Use fixed base height (SEND_MIN_SLOTS only) — PNG is never stretched.
+            # Extra sends slots open downward and the PNG is tall enough to cover them.
+            _base_send_h = _sh(_SMS, UI_SCALE)
+            _strip_h_fixed = _STH * UI_SCALE + _base_send_h + _RMT * UI_SCALE
             _desk_x     = STRIP_LEFT_MARGIN * UI_SCALE + SCROLL_X
-            _desk_y     = base_y - _strip_h
+            _desk_y     = base_y - _strip_h_fixed   # anchored at top (base_y)
             _n_strips   = min(len(tracks), 9)
             _desk_w     = _n_strips * STRIP_STRIDE * UI_SCALE + (STRIP_W - STRIP_STRIDE) * UI_SCALE
-            _de("mixer_desk_bg", _desk_x, _desk_y, _desk_w, _strip_h,
+            _de("mixer_desk_bg", _desk_x, _desk_y, _desk_w, _strip_h_fixed,
                 draw_rect, (0.07, 0.07, 0.07, 1.0))
         except Exception:
             pass

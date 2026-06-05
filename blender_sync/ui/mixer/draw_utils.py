@@ -21,6 +21,24 @@ from gpu_extras.batch import batch_for_shader
 _shader = None
 _image_shader = None
 
+# =============================================================================
+# NUMBOX TEXT TUNING
+# All values are UNSCALED — multiplied by UI_SCALE (via h) at draw time.
+# Offsets are relative to the computed default position.
+# =============================================================================
+
+# ── Line 1 (label: "CH N PK") ────────────────────────────────────────────────
+NUMBOX_L1_FONT_SIZE  = 0.34   # fraction of box height → font size in px
+NUMBOX_L1_COLOR      = (0.604, 0.729, 0.710, 1.0)   # dim cyan
+NUMBOX_L1_X_OFFSET   = 0.0   # px nudge left/right from centred position
+NUMBOX_L1_Y_OFFSET   = 2.0   # px nudge up/down from stacked position
+
+# ── Line 2 (value: "0.850") ───────────────────────────────────────────────────
+NUMBOX_L2_FONT_SIZE  = 0.34   # fraction of box height → font size in px
+NUMBOX_L2_COLOR      = (0.604, 0.729, 0.710, 1.0)   # bright neon cyan
+NUMBOX_L2_X_OFFSET   = 0.0   # px nudge left/right from centred position
+NUMBOX_L2_Y_OFFSET   = 12.0   # px nudge up/down from 2px-from-bottom position
+
 def _get_shader():
     global _shader
     if _shader is None:
@@ -35,22 +53,24 @@ def _get_image_shader():
     return _image_shader
 
 def _draw_led_batch(tex, quads: list) -> None:
-    """Draw a list of (x, y, w, h) quads sharing the same LED texture in one call."""
+    """Draw a list of (x, y, w, h) quads sharing one LED texture in a single draw call."""
     if tex is None or not quads:
         return
     verts = []
     uvs   = []
     for (qx, qy, qw, qh) in quads:
-        # Two triangles per quad (6 vertices)
         verts += [(qx,    qy),    (qx+qw, qy),    (qx+qw, qy+qh),
                   (qx,    qy),    (qx+qw, qy+qh), (qx,    qy+qh)]
         uvs   += [(0.0,   0.0),   (1.0,   0.0),   (1.0,   1.0),
                   (0.0,   0.0),   (1.0,   1.0),   (0.0,   1.0)]
+    from ui.mixer.texture_cache import blit_texture as _bt
     shader = _get_image_shader()
+    gpu.state.blend_set("ALPHA_PREMULT")
     batch  = batch_for_shader(shader, "TRIS", {"pos": verts, "texCoord": uvs})
     shader.bind()
     shader.uniform_sampler("image", tex)
     batch.draw(shader)
+    gpu.state.blend_set("ALPHA")
 
 
 
@@ -286,18 +306,19 @@ def draw_meter(x: float, y: float, w: float, h: float,
     """VU LED meter — 19 segments, batched by colour zone (4 draw calls max).
 
     Uses meter_led_green/yellow/red/off tiles if loaded.
-    Falls back to the original solid bar if no tiles are found.
+    Falls back to original solid bar if tiles not found.
     """
-    N_LEDS      = 19
-    GREEN_TOP   = 0.70   # LEDs below this fraction are green
-    YELLOW_TOP  = 0.90   # LEDs between green and this are yellow; above = red
+    N_LEDS     = 19
+    GREEN_TOP  = 0.70   # bottom 70% of segments are green
+    YELLOW_TOP = 0.90   # 70-90% yellow, above 90% red
 
-    tex_green  = get_texture("meter_led_green")
-    tex_yellow = get_texture("meter_led_yellow")
-    tex_red    = get_texture("meter_led_red")
-    tex_off    = get_texture("meter_led_off")
+    from ui.mixer.texture_cache import get_texture as _gt
+    tex_green  = _gt("meter_led_green")
+    tex_yellow = _gt("meter_led_yellow")
+    tex_red    = _gt("meter_led_red")
+    tex_off    = _gt("meter_led_off")
 
-    # ── Fallback: original solid bar when tiles not loaded ───────────────
+    # ── Fallback: solid bar when tiles not loaded ────────────────────────
     if not (tex_green or tex_yellow or tex_red or tex_off):
         draw_rect(x, y, w, h, (0.03, 0.03, 0.03, 1.0))
         if level > 0.0:
@@ -317,29 +338,21 @@ def draw_meter(x: float, y: float, w: float, h: float,
             draw_rect(x, y + ph - 1, w, max(1.5, h * 0.01), col)
         return
 
-    # ── LED tile path ─────────────────────────────────────────────────────
-    tile_h    = h / N_LEDS          # height of each segment (fills meter exactly)
+    # ── LED tile path ────────────────────────────────────────────────────
+    tile_h    = h / N_LEDS
     lit_count = int(min(max(level, 0.0), 1.0) * N_LEDS)
     peak_idx  = (min(int(min(peak, 1.0) * N_LEDS), N_LEDS - 1)
                  if peak > 0.0 else -1)
 
-    green_q  = []
+    green_q = []
     yellow_q = []
-    red_q    = []
-    off_q    = []
+    red_q   = []
+    off_q   = []
 
     for i in range(N_LEDS):
-        qx = x
-        qy = y + i * tile_h
-        qw = w
-        qh = tile_h
-        quad = (qx, qy, qw, qh)
-
-        # Is this segment lit (by level or peak hold)?
-        is_lit = (i < lit_count) or (i == peak_idx)
-        # Colour zone based on segment position (bottom = 0, top = N_LEDS-1)
-        frac = (i + 1) / N_LEDS
-
+        quad    = (x, y + i * tile_h, w, tile_h)
+        is_lit  = (i < lit_count) or (i == peak_idx)
+        frac    = (i + 1) / N_LEDS
         if is_lit:
             if frac <= GREEN_TOP:
                 green_q.append(quad)
@@ -350,31 +363,71 @@ def draw_meter(x: float, y: float, w: float, h: float,
         else:
             off_q.append(quad)
 
-    # One draw call per colour — 4 maximum regardless of LED count
-    _draw_led_batch(tex_off,    off_q)
-    _draw_led_batch(tex_green  or tex_off, green_q)
-    _draw_led_batch(tex_yellow or tex_off, yellow_q)
-    _draw_led_batch(tex_red    or tex_off, red_q)
+    # One draw call per colour type — 4 max regardless of segment count
+    _draw_led_batch(tex_off,                off_q)
+    _draw_led_batch(tex_green  or tex_off,  green_q)
+    _draw_led_batch(tex_yellow or tex_off,  yellow_q)
+    _draw_led_batch(tex_red    or tex_off,  red_q)
 
 
 def draw_numbox(x: float, y: float, w: float, h: float,
-                value: float, highlighted: bool = False) -> None:
-    """Fader value display box."""
-    bg = (0.18, 0.25, 0.18, 1.0) if highlighted else (0.08, 0.08, 0.08, 1.0)
-    draw_rect(x, y, w, h, bg)
-    shader = _get_shader()
-    verts  = [(x, y), (x+w, y), (x+w, y+h), (x, y+h), (x, y)]
-    batch  = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
-    shader.bind()
-    bc = (0.3, 0.5, 0.3, 1.0) if highlighted else (0.2, 0.2, 0.2, 1.0)
-    shader.uniform_float("color", bc)
-    batch.draw(shader)
+                value: float, highlighted: bool = False,
+                channel: int = 0, peak_hold: float = 0.0,
+                skip_bg: bool = False, scale: float = 1.0) -> None:
+    """Fader value display box.
 
-    label = f"{value:.3f}"
-    fs    = max(1, int(h * 0.65))
-    tw    = text_width(label, fs)
-    draw_text(label, x + (w - tw) / 2, y + (h - fs) / 2 + 1,
-              fs, (0.6, 0.9, 0.6, 1.0) if highlighted else (0.55, 0.55, 0.55, 1.0))
+    Two-line LED style when skip_bg=True (skin active):
+      top row    — dim cyan label  "CH N  PK"
+      bottom row — bright cyan value e.g. "0.850"
+
+    skip_bg=True  → no background rect / border drawn (strip_bottom_bg PNG provides it).
+    skip_bg=False → original solid rect + border fallback.
+    """
+    if not skip_bg:
+        bg = (0.18, 0.25, 0.18, 1.0) if highlighted else (0.08, 0.08, 0.08, 1.0)
+        draw_rect(x, y, w, h, bg)
+        shader = _get_shader()
+        verts  = [(x, y), (x+w, y), (x+w, y+h), (x, y+h), (x, y)]
+        batch  = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
+        shader.bind()
+        bc = (0.3, 0.5, 0.3, 1.0) if highlighted else (0.2, 0.2, 0.2, 1.0)
+        shader.uniform_float("color", bc)
+        batch.draw(shader)
+
+    # ── Two-line LED readout ──────────────────────────────────────────────────
+    # Line 2 (bottom): bright value  e.g. "0.850"
+    # Line 1 (top):    dim label     e.g. "CH 3 PK"
+    # Tuning constants at top of file: NUMBOX_L1_* / NUMBOX_L2_*
+
+    # Line 2 — value, displayed as dB (linear multiplier → dB conversion)
+    # 0.001 is the hard fader floor → shows -∞. Otherwise 20*log10(value).
+    fs_val  = max(1, int(h * NUMBOX_L2_FONT_SIZE))
+    if value <= 0.1:
+        val_str = "-∞ db"
+    else:
+        _db = 20.0 * math.log10(value)
+        val_str = f"+{_db:.1f} db" if _db >= 0 else f"{_db:.1f} db"
+    tw_val  = text_width(val_str, fs_val)
+    val_col = (0.0, 0.95, 1.0, 1.0) if highlighted else NUMBOX_L2_COLOR
+    val_y   = y + 2 * scale + NUMBOX_L2_Y_OFFSET * scale
+    draw_text(val_str,
+              x + (w - tw_val) / 2 + NUMBOX_L2_X_OFFSET * scale,
+              val_y,
+              fs_val, val_col)
+
+    # Line 1 — label "CH N PK"  (always this format, peak value omitted to keep it short)
+    fs_label = max(1, int(h * NUMBOX_L1_FONT_SIZE))
+    lbl_str  = f"CH {channel + 1} PK"
+    # Shrink font until label fits inside box width with 2px margin each side
+    _fs = fs_label
+    while _fs > 1 and text_width(lbl_str, _fs) > (w - 4):
+        _fs -= 1
+    tw_lbl = text_width(lbl_str, _fs)
+    lbl_y  = val_y + fs_val + 1 * scale + NUMBOX_L1_Y_OFFSET * scale
+    draw_text(lbl_str,
+              x + (w - tw_lbl) / 2 + NUMBOX_L1_X_OFFSET * scale,
+              lbl_y,
+              _fs, NUMBOX_L1_COLOR)
 
 
 # ---------------------------------------------------------------------------

@@ -19,9 +19,13 @@ from core.constants import (
 from ui.mixer.channel_strip import (
     send_section_height as _send_section_height,
     FADER_BOTTOM_PAD,
+    FADER_VISUAL_BOTTOM_PAD,
     SEC_HEADER_H as _CS_SHH, SEC_GAIN_H as _CS_SGH,
     SEC_EQ_H as _CS_SEQ, SEC_PAN_H as _CS_SPAN,
     FADER_TOP_PAD as _CS_FTP, DIVIDER_GAP as _CS_DG,
+    SENDS_LABEL_H as _CS_SLH, SLOT_H as _CS_SLOTH,
+    SEND_BTN_IMG_X as _CS_SBIX, SEND_BTN_IMG_Y as _CS_SBIY,
+    SEND_BTN_IMG_W as _CS_SBIW, SEND_BTN_IMG_H as _CS_SBIH,
 )
 from core.audio import (
     apply_fader_to_channel, apply_gain_to_channel,
@@ -210,7 +214,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
             if active_fader_track != -1:
                 tracks = context.scene.pb_sync_tracks
                 track  = tracks[active_fader_track]
-                delta  = (event.mouse_y-event.mouse_prev_y) / (FADER_HEIGHT*UI_SCALE)
+                delta  = (event.mouse_y-event.mouse_prev_y) / ((FADER_HEIGHT - 2*FADER_VISUAL_BOTTOM_PAD)*UI_SCALE)
                 fader_delta = delta * (FADER_MAX - FADER_MIN)
                 old_fader   = track.volume
                 new_fader   = max(FADER_MIN, min(FADER_MAX,
@@ -449,17 +453,20 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         context.area.tag_redraw()
                         return {"RUNNING_MODAL"}
 
-                    # Send buttons
+                    # Send buttons — cursor arithmetic mirrors channel_strip.py draw exactly
+                    # Draw flow: base_y -> header(65) -> gain(70) -> divider*2(12) -> sends
                     n_racks_s = len(getattr(context.scene, "pb_racks", []))
                     slots_s   = max(SEND_MIN_SLOTS, n_racks_s)
-                    btn_x_s   = sx + 10*UI_SCALE
-                    btn_w_s   = 100*UI_SCALE
-                    btn_h_s   = SEND_BTN_H*UI_SCALE
-                    start_y_s = base_y - SEND_START_Y*UI_SCALE
-                    if btn_x_s <= rx <= btn_x_s+btn_w_s:
+                    _snd_top  = base_y - (_CS_SHH + _CS_SGH + _CS_DG*2) * UI_SCALE
+                    _slot_cur = _snd_top - _CS_SLH * UI_SCALE
+                    btn_x_s   = sx + _CS_SBIX * UI_SCALE
+                    btn_w_s   = _CS_SBIW * UI_SCALE
+                    btn_h_s   = _CS_SBIH * UI_SCALE
+                    if btn_x_s <= rx <= btn_x_s + btn_w_s:
                         for slot in range(slots_s):
-                            by_s = start_y_s - slot*(btn_h_s+SEND_BTN_GAP*UI_SCALE)
-                            if by_s <= ry <= by_s+btn_h_s and slot < n_racks_s:
+                            tile_y_s = _slot_cur - (slot + 1) * _CS_SLOTH * UI_SCALE
+                            by_s     = tile_y_s + _CS_SBIY * UI_SCALE
+                            if by_s <= ry <= by_s + btn_h_s and slot < n_racks_s:
                                 rack  = context.scene.pb_racks[slot]
                                 attr  = f'ch{i}'
                                 if hasattr(rack, attr):
