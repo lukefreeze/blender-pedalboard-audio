@@ -989,14 +989,18 @@ def _pb_loop_detect(scene, depsgraph=None):
     effective_end   = int(scene.frame_preview_end   if scene.use_preview_range
                           else scene.frame_end)
 
-    # Any forward movement within the sequence is normal playback — even large
-    # deltas caused by draw-load frame skipping. Just update _pb_last_frame
-    # and let the engine play from wherever it actually is.
-    if frame_delta >= 0 and current <= effective_end:
+    fps = scene.render.fps / scene.render.fps_base
+
+    # Forward jump threshold — deltas above this are treated as user seeks,
+    # not normal playback frame skipping under draw load.
+    # At 24fps even severe load rarely skips more than 20-25 frames at once.
+    # A user clicking forward on the timeline will produce 50+ frame jumps.
+    _SEEK_THRESHOLD = 30
+
+    # Small positive delta — normal playback or draw-load skip, do nothing.
+    if 0 <= frame_delta < _SEEK_THRESHOLD and current <= effective_end:
         _pb_last_frame = current
         return
-
-    fps = scene.render.fps / scene.render.fps_base
 
     already_there   = (abs(current - _pb_start_frame) <= 3)
     time_since_last = _time.time() - _pb_last_loop_time
@@ -1018,9 +1022,9 @@ def _pb_loop_detect(scene, depsgraph=None):
             hj = engine.get_engine()
             if hj:
                 hj.seek(max(0.0, effective_start / fps))
-    elif frame_delta < 0:
-        # User dragged the cursor backwards during playback
-        print(f"[HIJACKER] seek: {_pb_last_frame}→{current}")
+    elif frame_delta < 0 or frame_delta >= _SEEK_THRESHOLD:
+        # User seeked — either backwards or a large jump forwards
+        print(f"[HIJACKER] seek: {_pb_last_frame}→{current} (delta={frame_delta})")
         _pb_last_loop_time = _time.time()
         _pb_start_frame    = seek_frame
         engine = get_engine()
@@ -1028,9 +1032,7 @@ def _pb_loop_detect(scene, depsgraph=None):
             hj = engine.get_engine()
             if hj:
                 hj.seek(max(0.0, seek_frame / fps))
-    # Positive delta past effective_end is handled by the meter timer
-    # using the engine's own clock — we never act on it here to avoid
-    # false stops caused by draw-load frame skipping.
+    # Normal playback reaching effective_end is handled by the meter timer.
 
     _pb_last_frame = current
 

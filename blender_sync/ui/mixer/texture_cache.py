@@ -70,6 +70,7 @@ SKIN_MAP = {
     "strip_fader_bg":      "strip_fader_bg.png",     # fader + numbox + gap section
     "strip_bg":            "strip_bg.png",            # legacy full-strip (unused if above present)
     "mixer_desk_bg":       "mixer_desk_bg.png",
+    "background":          "Background.png",        # full table background, scrolls with UI
     # Rack body backgrounds
     "rack_comp_multi_bg":  "rack_comp_multi_bg.png",
     "rack_comp_single_bg": "rack_comp_single_bg.png",

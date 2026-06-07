@@ -88,6 +88,18 @@ def compute_autofit(draw_w: float, draw_h: float):
 
 
 # ---------------------------------------------------------------------------
+# Background image tuning
+# BG_IMG_W / BG_IMG_H — match these to your PNG pixel dimensions.
+# BG_X_OFFSET / BG_Y_OFFSET — unscaled px, multiplied by UI_SCALE at draw time.
+#   Positive X moves right, negative moves left.
+#   Positive Y moves up, negative moves down.
+# ---------------------------------------------------------------------------
+BG_IMG_W    = 1891.0   # Background.png width  in px  ← update when image changes
+BG_IMG_H    = 5210.0   # Background.png height in px  ← update when image changes
+BG_X_OFFSET = -300.0   # nudge background left/right
+BG_Y_OFFSET = 0.0      # nudge background up/down
+
+# ---------------------------------------------------------------------------
 # Main draw callback — registered on SpaceNodeEditor in Loader.py
 # ---------------------------------------------------------------------------
 def draw_callback_px(self, context) -> None:
@@ -107,8 +119,23 @@ def draw_callback_px(self, context) -> None:
     try:
         gpu.state.blend_set("ALPHA")
 
-        # Background
-        draw_rect(0, 0, width, height, (0.01, 0.01, 0.01, 0.95))
+        # Background — table PNG scrolls with the UI.
+        # Falls back to nothing (transparent canvas) if PNG not loaded.
+        # Tune BG_X_OFFSET / BG_Y_OFFSET below to reposition the image.
+        try:
+            from ui.mixer.texture_cache import get_texture as _gt_bg
+            from ui.mixer.draw_utils import blit_texture as _bt_bg
+            _bg_tex = _gt_bg("background")
+            if _bg_tex:
+                _bg_w = BG_IMG_W * UI_SCALE
+                _bg_h = BG_IMG_H * UI_SCALE
+                _bg_x = SCROLL_X + BG_X_OFFSET * UI_SCALE
+                _bg_y = height - _bg_h - SCROLL_Y + BG_Y_OFFSET * UI_SCALE
+                _bt_bg(_bg_tex, _bg_x, _bg_y, _bg_w, _bg_h, key="background")
+            else:
+                draw_rect(0, 0, width, height, (0.01, 0.01, 0.01, 0.95))
+        except Exception:
+            draw_rect(0, 0, width, height, (0.01, 0.01, 0.01, 0.95))
 
         # Header label
         blf.color(0, 1, 1, 1, 1)
@@ -192,7 +219,7 @@ def draw_callback_px(self, context) -> None:
             _draw_diag_done = True
             from ui.mixer.texture_cache import get_texture as _gtd
             _layers = [
-                ("1 (bottom)", "Background rect (solid dark fill)",              True),
+                ("1 (bottom)", "Background.png table surface (or dark rect fallback)", True),
                 ("2",          "mixer_desk_bg PNG or grey fallback",             _gtd("mixer_desk_bg") is not None),
                 ("3",          "strip_top_bg  (HEADER+GAIN, full width)",        _gtd("strip_top_bg") is not None),
                 ("4",          "strip_send_slot_bg  (tiled rows, full width)",   _gtd("strip_send_slot_bg") is not None),
