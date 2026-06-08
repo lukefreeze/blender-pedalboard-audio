@@ -8,7 +8,7 @@ on:
 jobs:
 
   # ===========================================================================
-  # WINDOWS — uses PowerShell throughout to avoid Git Bash path mangling
+  # WINDOWS
   # ===========================================================================
   build-windows:
     runs-on: windows-latest
@@ -35,7 +35,10 @@ jobs:
 
       - name: Install PortAudio via vcpkg
         shell: pwsh
-        run: vcpkg install portaudio:x64-windows-static
+        run: |
+          vcpkg install portaudio:x64-windows-static
+          # List what was actually installed so we can see the real lib filename
+          Get-ChildItem "C:\vcpkg\installed\x64-windows-static\lib\" | Select-Object Name
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -49,7 +52,9 @@ jobs:
           $PY_INC      = python -c "import sysconfig; print(sysconfig.get_path('include'))"
           $PY_LIBS     = python -c "import sysconfig; print(sysconfig.get_config_var('installed_base') + '\libs')"
           $PA_INC      = "C:\vcpkg\installed\x64-windows-static\include"
-          $PA_LIB      = "C:\vcpkg\installed\x64-windows-static\lib\portaudio_static.lib"
+          # Find the actual portaudio lib name
+          $PA_LIB      = (Get-ChildItem "C:\vcpkg\installed\x64-windows-static\lib\portaudio*.lib" | Select-Object -First 1).FullName
+          Write-Host "Using PortAudio lib: $PA_LIB"
 
           cl /O2 /LD /EHsc /std:c++17 `
             /I "include" `
@@ -140,7 +145,7 @@ jobs:
 
 
   # ===========================================================================
-  # MACOS
+  # MACOS — Python framework needs special linking on macOS
   # ===========================================================================
   build-macos:
     runs-on: macos-latest
@@ -168,12 +173,14 @@ jobs:
         run: |
           PYBIND11_INC=$(python -c "import pybind11; print(pybind11.get_include())")
           PY_INC=$(python -c "import sysconfig; print(sysconfig.get_path('include'))")
-          PY_LIB=$(python -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY'))")
-          PY_LIBDIR=$(python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
           PA_INC=$(brew --prefix portaudio)/include
           PA_LIBDIR=$(brew --prefix portaudio)/lib
 
+          # On macOS with setup-python, use python-config for correct link flags
+          PY_LDFLAGS=$(python-config --ldflags)
+
           g++ -O2 -shared -fPIC -std=c++17 \
+            -undefined dynamic_lookup \
             -I include \
             -I src \
             -I src/imgui \
@@ -189,13 +196,12 @@ jobs:
             src/imgui/imgui_widgets.cpp \
             src/imgui/imgui_tables.cpp \
             -o blender_sync/hijacker_engine.so \
-            -L"$PY_LIBDIR" -l:"$PY_LIB" \
+            $PY_LDFLAGS \
             -L"$PA_LIBDIR" -lportaudio \
             -framework CoreAudio \
             -framework AudioToolbox \
             -framework AudioUnit \
-            -framework CoreServices \
-            -lpthread -ldl -lm
+            -framework CoreServices
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
