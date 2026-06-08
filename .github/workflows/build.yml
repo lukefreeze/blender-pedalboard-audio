@@ -8,7 +8,7 @@ on:
 jobs:
 
   # ===========================================================================
-  # WINDOWS
+  # WINDOWS — uses PowerShell throughout to avoid Git Bash path mangling
   # ===========================================================================
   build-windows:
     runs-on: windows-latest
@@ -26,13 +26,16 @@ jobs:
         run: pip install pybind11
 
       - name: Create audaspace stubs
-        shell: bash
+        shell: pwsh
         run: |
-          cat > include/ISound.h << 'STUB'
-          #pragma once
-          namespace aud { typedef float sample_t; class ISound {}; class IReader {}; }
-          STUB
-          cp include/ISound.h include/IReader.h
+          $stub = "#pragma once`nnamespace aud { typedef float sample_t; class ISound {}; class IReader {}; }"
+          Set-Content -Path include\ISound.h -Value $stub
+          $reader = "#pragma once`n#include `"ISound.h`""
+          Set-Content -Path include\IReader.h -Value $reader
+
+      - name: Install PortAudio via vcpkg
+        shell: pwsh
+        run: vcpkg install portaudio:x64-windows-static
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -40,36 +43,33 @@ jobs:
           arch: x64
 
       - name: Build hijacker_engine.pyd
-        shell: bash
+        shell: pwsh
         run: |
-          PYBIND11_INC=$(python -c "import pybind11; print(pybind11.get_include())")
-          PY_INC=$(python -c "import sysconfig; print(sysconfig.get_path('include'))")
-          PY_LIBS=$(python -c "import sysconfig; print(sysconfig.get_config_var('installed_base') + '/libs')")
+          $PYBIND11_INC = python -c "import pybind11; print(pybind11.get_include())"
+          $PY_INC      = python -c "import sysconfig; print(sysconfig.get_path('include'))"
+          $PY_LIBS     = python -c "import sysconfig; print(sysconfig.get_config_var('installed_base') + '\libs')"
+          $PA_INC      = "C:\vcpkg\installed\x64-windows-static\include"
+          $PA_LIB      = "C:\vcpkg\installed\x64-windows-static\lib\portaudio_static.lib"
 
-          # Install PortAudio via vcpkg
-          vcpkg install portaudio:x64-windows-static
-          PA_INC="C:/vcpkg/installed/x64-windows-static/include"
-          PA_LIB="C:/vcpkg/installed/x64-windows-static/lib/portaudio_static.lib"
-
-          cl.exe /O2 /LD /EHsc /std:c++17 \
-            /I "include" \
-            /I "src" \
-            /I "src/imgui" \
-            /I "$PY_INC" \
-            /I "$PYBIND11_INC" \
-            /I "$PA_INC" \
-            src/wrapper.cpp \
-            src/hijacker_processor.cpp \
-            src/hijacker_audio_engine.cpp \
-            src/mixer_ui.cpp \
-            src/imgui/imgui.cpp \
-            src/imgui/imgui_draw.cpp \
-            src/imgui/imgui_widgets.cpp \
-            src/imgui/imgui_tables.cpp \
-            /link \
-            /OUT:blender_sync/hijacker_engine.pyd \
-            /LIBPATH:"$PY_LIBS" \
-            "$PA_LIB" \
+          cl /O2 /LD /EHsc /std:c++17 `
+            /I "include" `
+            /I "src" `
+            /I "src\imgui" `
+            /I "$PY_INC" `
+            /I "$PYBIND11_INC" `
+            /I "$PA_INC" `
+            src\wrapper.cpp `
+            src\hijacker_processor.cpp `
+            src\hijacker_audio_engine.cpp `
+            src\mixer_ui.cpp `
+            src\imgui\imgui.cpp `
+            src\imgui\imgui_draw.cpp `
+            src\imgui\imgui_widgets.cpp `
+            src\imgui\imgui_tables.cpp `
+            /link `
+            /OUT:blender_sync\hijacker_engine.pyd `
+            /LIBPATH:"$PY_LIBS" `
+            "$PA_LIB" `
             winmm.lib ole32.lib uuid.lib advapi32.lib
 
       - name: Upload Windows artifact
@@ -102,11 +102,8 @@ jobs:
 
       - name: Create audaspace stubs
         run: |
-          cat > include/ISound.h << 'STUB'
-          #pragma once
-          namespace aud { typedef float sample_t; class ISound {}; class IReader {}; }
-          STUB
-          cp include/ISound.h include/IReader.h
+          printf '#pragma once\nnamespace aud { typedef float sample_t; class ISound {}; class IReader {}; }\n' > include/ISound.h
+          printf '#pragma once\n#include "ISound.h"\n' > include/IReader.h
 
       - name: Build hijacker_engine.so
         run: |
@@ -164,11 +161,8 @@ jobs:
 
       - name: Create audaspace stubs
         run: |
-          cat > include/ISound.h << 'STUB'
-          #pragma once
-          namespace aud { typedef float sample_t; class ISound {}; class IReader {}; }
-          STUB
-          cp include/ISound.h include/IReader.h
+          printf '#pragma once\nnamespace aud { typedef float sample_t; class ISound {}; class IReader {}; }\n' > include/ISound.h
+          printf '#pragma once\n#include "ISound.h"\n' > include/IReader.h
 
       - name: Build hijacker_engine.so
         run: |
@@ -177,7 +171,7 @@ jobs:
           PY_LIB=$(python -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY'))")
           PY_LIBDIR=$(python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
           PA_INC=$(brew --prefix portaudio)/include
-          PA_LIB=$(brew --prefix portaudio)/lib
+          PA_LIBDIR=$(brew --prefix portaudio)/lib
 
           g++ -O2 -shared -fPIC -std=c++17 \
             -I include \
@@ -196,7 +190,7 @@ jobs:
             src/imgui/imgui_tables.cpp \
             -o blender_sync/hijacker_engine.so \
             -L"$PY_LIBDIR" -l:"$PY_LIB" \
-            -L"$PA_LIB" -lportaudio \
+            -L"$PA_LIBDIR" -lportaudio \
             -framework CoreAudio \
             -framework AudioToolbox \
             -framework AudioUnit \
