@@ -1,0 +1,203 @@
+name: Build hijacker_engine
+
+on:
+  push:
+    branches: [ feature/hijacker-engine ]
+  workflow_dispatch:   # allows manual trigger from the GitHub Actions UI
+
+jobs:
+
+  # ===========================================================================
+  # WINDOWS
+  # ===========================================================================
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pybind11
+        run: pip install pybind11
+
+      - name: Get pybind11 include path
+        id: pybind11
+        run: |
+          $inc = python -c "import pybind11; print(pybind11.get_include())"
+          echo "include=$inc" >> $env:GITHUB_OUTPUT
+
+      - name: Get Python include + lib paths
+        id: pypath
+        run: |
+          $inc = python -c "import sysconfig; print(sysconfig.get_path('include'))"
+          $lib = python -c "import sysconfig; print(sysconfig.get_config_var('installed_base') + '\\libs')"
+          echo "include=$inc" >> $env:GITHUB_OUTPUT
+          echo "libs=$lib" >> $env:GITHUB_OUTPUT
+
+      - name: Install PortAudio (vcpkg)
+        run: |
+          vcpkg install portaudio:x64-windows-static
+          echo "PA_INC=C:\vcpkg\installed\x64-windows-static\include" >> $env:GITHUB_ENV
+          echo "PA_LIB=C:\vcpkg\installed\x64-windows-static\lib\portaudio_static.lib" >> $env:GITHUB_ENV
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build hijacker_engine.pyd
+        run: |
+          cl /O2 /LD /EHsc /std:c++17 `
+            /I "include" `
+            /I "src" `
+            /I "src/imgui" `
+            /I "${{ steps.pypath.outputs.include }}" `
+            /I "${{ steps.pybind11.outputs.include }}" `
+            /I "${{ env.PA_INC }}" `
+            src/wrapper.cpp `
+            src/hijacker_processor.cpp `
+            src/hijacker_audio_engine.cpp `
+            src/mixer_ui.cpp `
+            src/imgui/imgui.cpp `
+            src/imgui/imgui_draw.cpp `
+            src/imgui/imgui_widgets.cpp `
+            src/imgui/imgui_tables.cpp `
+            /link `
+            /OUT:blender_sync/hijacker_engine.pyd `
+            /LIBPATH:"${{ steps.pypath.outputs.libs }}" `
+            "${{ env.PA_LIB }}" `
+            winmm.lib ole32.lib uuid.lib advapi32.lib
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hijacker_engine-windows
+          path: blender_sync/hijacker_engine.pyd
+
+
+  # ===========================================================================
+  # LINUX
+  # ===========================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+          pip install pybind11
+
+      - name: Get include paths
+        id: paths
+        run: |
+          echo "pybind11=$(python -c 'import pybind11; print(pybind11.get_include())')" >> $GITHUB_OUTPUT
+          echo "pyinc=$(python -c 'import sysconfig; print(sysconfig.get_path(\"include\"))')" >> $GITHUB_OUTPUT
+
+      - name: Build hijacker_engine.so
+        run: |
+          python_lib=$(python -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY'))")
+          python_libdir=$(python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+
+          g++ -O2 -shared -fPIC -std=c++17 \
+            -I include \
+            -I src \
+            -I src/imgui \
+            -I ${{ steps.paths.outputs.pyinc }} \
+            -I ${{ steps.paths.outputs.pybind11 }} \
+            -I /usr/include \
+            src/wrapper.cpp \
+            src/hijacker_processor.cpp \
+            src/hijacker_audio_engine.cpp \
+            src/mixer_ui.cpp \
+            src/imgui/imgui.cpp \
+            src/imgui/imgui_draw.cpp \
+            src/imgui/imgui_widgets.cpp \
+            src/imgui/imgui_tables.cpp \
+            -o blender_sync/hijacker_engine.so \
+            -L$python_libdir -l:$python_lib \
+            -lportaudio \
+            -lpthread -ldl -lm
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hijacker_engine-linux
+          path: blender_sync/hijacker_engine.so
+
+
+  # ===========================================================================
+  # MACOS
+  # ===========================================================================
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          brew install portaudio
+          pip install pybind11
+
+      - name: Get include paths
+        id: paths
+        run: |
+          echo "pybind11=$(python -c 'import pybind11; print(pybind11.get_include())')" >> $GITHUB_OUTPUT
+          echo "pyinc=$(python -c 'import sysconfig; print(sysconfig.get_path(\"include\"))')" >> $GITHUB_OUTPUT
+
+      - name: Build hijacker_engine.so
+        run: |
+          python_lib=$(python -c "import sysconfig; print(sysconfig.get_config_var('LDLIBRARY'))")
+          python_libdir=$(python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+          pa_inc=$(brew --prefix portaudio)/include
+          pa_lib=$(brew --prefix portaudio)/lib
+
+          g++ -O2 -shared -fPIC -std=c++17 \
+            -I include \
+            -I src \
+            -I src/imgui \
+            -I ${{ steps.paths.outputs.pyinc }} \
+            -I ${{ steps.paths.outputs.pybind11 }} \
+            -I $pa_inc \
+            src/wrapper.cpp \
+            src/hijacker_processor.cpp \
+            src/hijacker_audio_engine.cpp \
+            src/mixer_ui.cpp \
+            src/imgui/imgui.cpp \
+            src/imgui/imgui_draw.cpp \
+            src/imgui/imgui_widgets.cpp \
+            src/imgui/imgui_tables.cpp \
+            -o blender_sync/hijacker_engine.so \
+            -L$python_libdir -l:$python_lib \
+            -L$pa_lib -lportaudio \
+            -framework CoreAudio \
+            -framework AudioToolbox \
+            -framework AudioUnit \
+            -framework CoreServices \
+            -lpthread -ldl -lm
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hijacker_engine-macos
+          path: blender_sync/hijacker_engine.so
