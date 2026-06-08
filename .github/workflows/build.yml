@@ -176,9 +176,6 @@ jobs:
           PA_INC=$(brew --prefix portaudio)/include
           PA_LIBDIR=$(brew --prefix portaudio)/lib
 
-          # On macOS with setup-python, use python-config for correct link flags
-          PY_LDFLAGS=$(python-config --ldflags)
-
           g++ -O2 -shared -fPIC -std=c++17 \
             -undefined dynamic_lookup \
             -I include \
@@ -196,7 +193,6 @@ jobs:
             src/imgui/imgui_widgets.cpp \
             src/imgui/imgui_tables.cpp \
             -o blender_sync/hijacker_engine.so \
-            $PY_LDFLAGS \
             -L"$PA_LIBDIR" -lportaudio \
             -framework CoreAudio \
             -framework AudioToolbox \
