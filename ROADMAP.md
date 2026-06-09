@@ -10,6 +10,16 @@ Core features are complete and working on Windows. UI polish is the final remain
 
 ## COMPLETED ✅
 
+### Mixdown Rack
+- [x] Mix mode — all channels summed to one stereo file
+- [x] Bake mode — each channel rendered individually, effects baked in
+- [x] WAV 16/24/32-bit float, FLAC format support
+- [x] 44.1 / 48 / 96kHz sample rate options
+- [x] Custom timeline range
+- [x] Auto-versioned output filenames
+- [x] Background rendering — Blender stays responsive
+- [x] Import modes — mute, replace, or keep active channels after render
+
 ### Core Engine
 - [x] Custom C++ audio engine (`hijacker_engine`) — PortAudio real-time playback
 - [x] pybind11 Python bindings — full engine control from Blender
@@ -85,15 +95,8 @@ The last major task before v1.0. All rack panels need final PNG background art t
 - [ ] GitHub Actions release job — builds zip on version tag push
 - [ ] Static PortAudio linking on macOS (remove brew dependency for end users)
 
-### Mixdown Rack — Crucial Feature
-Renders all active channels through their full processing chains to a final mixed-down audio file, then places it back in the VSE. Required before distribution — Blender's video export pipeline needs real audio files.
-
-- [ ] Channel inclusion selector
-- [ ] Master volume + limiter
-- [ ] Format options: WAV 24-bit, WAV 32-bit float, FLAC, MP3
-- [ ] Auto-versioned filenames (mixdown_v01.wav, v02 etc.)
-- [ ] Stems export option
-- [ ] Destructive action confirmation
+### Mixdown Rack ✅
+Fully complete. Two render modes (Mix — all channels summed to stereo, Bake — each channel rendered individually with effects baked). Supports WAV 16/24/32-bit, FLAC, 44.1/48/96kHz. Custom timeline range, auto-versioned output filenames, background rendering so Blender stays responsive.
 
 ### Platform Testing
 - [ ] macOS real-world testing in Blender 4.5
