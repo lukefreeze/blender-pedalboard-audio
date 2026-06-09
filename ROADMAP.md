@@ -47,14 +47,17 @@ Core features are complete and working on Windows. UI polish is the final remain
 - [x] Stereo delay with ping-pong and LP filter
 - [x] Presets system (◄ ► arrows) on all racks
 
-### AI Racks
-- [x] DeepFilterNet — AI noise reduction (ONNX, fully distributable)
-- [x] Demucs — stem separation
+### AI Racks (5 racks)
+- [x] Voicefixer — voice restoration (repairs degraded/clipped audio)
+- [x] Demucs — stem separation (vocals, drums, bass, other)
 - [x] KNNVC — voice conversion
 - [x] Piper TTS — offline neural text-to-speech
-- [x] Booster — loudness enhancement
-- [x] Voicefixer — voice restoration
 - [x] Whisper — speech-to-text / subtitle generation
+
+### DSP Processing Racks
+- [x] Booster — volume amplification beyond Blender's strip cap, with soft limiter
+
+> Note: DeepFilterNet was built but retired — Voicefixer produces significantly better results for voice restoration.
 
 ### Bug Fixes
 - [x] Forward seek during playback (frame delta threshold)
@@ -76,7 +79,6 @@ The last major task before v1.0. All rack panels need final PNG background art t
 - [ ] Reverb rack skin
 - [ ] Noise gate rack skin
 - [ ] Delay rack skin
-- [ ] DeepFilterNet rack skin
 - [ ] Demucs rack skin
 - [ ] KNNVC rack skin
 - [ ] Piper TTS rack skin

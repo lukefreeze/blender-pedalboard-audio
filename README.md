@@ -38,17 +38,22 @@ The engine (`hijacker_engine.pyd` / `.so`) is a compiled C++ extension handling 
 
 All DSP racks support presets accessible via ◄ ► arrows in the rack rail.
 
+### DSP Processing Racks (real-time or offline, per-channel)
+In addition to the effect racks above:
+
+| Rack | What It Does |
+|------|-------------|
+| **Booster** | Volume amplification beyond Blender's strip volume cap — with soft limiter |
+
 ### AI Racks (offline, background-threaded)
 All AI racks run as background subprocesses — Blender stays fully responsive during processing.
 
 | Rack | What It Does |
 |------|-------------|
-| **DeepFilterNet** | AI noise reduction — removes background noise, HVAC, wind, hum |
+| **Voicefixer** | Voice restoration — repairs degraded, clipped or low-quality recordings |
 | **Demucs** | Stem separation — splits a track into vocals, drums, bass, other |
 | **KNNVC** | Voice conversion — converts recorded dialogue to a different voice |
 | **Piper TTS** | Offline neural text-to-speech — no internet, no API keys |
-| **Booster** | AI loudness enhancement and harmonic exciter |
-| **Voicefixer** | Voice restoration — repairs degraded, clipped or low-quality recordings |
 | **Whisper** | Speech-to-text — transcribes audio and generates VSE subtitle strips |
 
 ---
@@ -85,7 +90,6 @@ blender_sync/
       rack_reverb.py            ← Reverb rack
       rack_noisegate.py         ← Noise gate rack
       rack_delay.py             ← Delay rack
-      rack_deepfilternet.py     ← DeepFilterNet rack UI
       rack_demucs.py            ← Demucs rack UI
       rack_knnvc.py             ← KNNVC voice conversion rack UI
       rack_piper.py             ← Piper TTS rack UI
@@ -93,7 +97,6 @@ blender_sync/
       rack_voicefixer.py        ← Voicefixer rack UI
       rack_whisper.py           ← Whisper rack UI
   ai_engines/
-    deepfilternet/              ← DeepFilterNet ONNX runner
     demucs/                     ← Demucs runner
     knnvc/                      ← KNNVC runner + voice models
     piper/                      ← Piper binary + espeak-ng-data + voices
