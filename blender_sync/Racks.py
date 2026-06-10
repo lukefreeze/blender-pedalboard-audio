@@ -2858,10 +2858,97 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     shader.uniform_float("color",(0.28,0.28,0.28,1.0))
     batch.draw(shader)
 
-    # --- TOP RAIL ---
+    # etype needed throughout — define once here before anything uses it
+    etype = rack.effect_type
+
     rail_h = RACK_RAIL_H * scale
-    _draw_rect(rx, ry+rh-rail_h, rw, rail_h, (0.16, 0.16, 0.16, 1.0))
-    _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.1,0.1,0.1,1.0))
+
+    # --- BODY CONTENT — dispatch by effect type ---
+    body_h = rh - rail_h
+    spec_h = min(SPEC_H * scale, body_h - 50*scale)
+
+    if etype == "COMP_MULTI":
+        _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "EQ":
+        _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "REVERB":
+        _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "NOISE_GATE":
+        _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "DELAY":
+        _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "MIXDOWN":
+        try:
+            from ui.racks.rack_mixdown import _draw_mixdown_body
+            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.02, 0.08, 0.05, 1.0))
+            _draw_text("MISSING: blender_sync/ui/racks/rack_mixdown.py",
+                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
+                       max(1, int(10*scale)), (0.3, 1.0, 0.5, 1.0))
+            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
+    elif etype == "BOOSTER":
+        try:
+            from ui.racks.rack_booster import _draw_booster_body
+            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.15, 0.02, 0.02, 1.0))
+            _draw_text("MISSING: blender_sync/ui/racks/rack_booster.py",
+                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
+                       max(1, int(10*scale)), (1.0, 0.3, 0.3, 1.0))
+            print(f"[BOOSTER] ImportError — rack_booster.py not found: {e}")
+        except Exception as e:
+            print(f"[BOOSTER] draw error: {e}")
+            import traceback; traceback.print_exc()
+    else:
+        # Single band: 2x3 knob grid + spectrum + GR meters
+        params  = EFFECT_PARAMS.get(etype, [])
+        col     = (0.0, 0.65, 0.4)
+        knob_r  = 18 * scale
+        knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
+        body_top = ry
+        body_bot = ry + rh - RACK_RAIL_H*scale
+        mid_y    = (body_top + body_bot) * 0.5
+        ky0      = mid_y + knob_r + 14*scale
+        ky1      = mid_y - knob_r - 14*scale
+
+        param_order = [0,1,5, 2,3,4]
+        for idx, pi in enumerate(param_order):
+            col_i = idx % 3
+            row_i = idx // 3
+            kx    = knob_kx[col_i]
+            ky    = ky0 if row_i == 0 else ky1
+            if pi < len(params):
+                pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
+                norm   = getattr(rack, f'p{pi}', 0.0)
+                actual = pmin + norm*(pmax-pmin)
+                try:    val_str = pfmt.format(actual)
+                except: val_str = f"{actual:.1f}"
+                _draw_knob(kx, ky, knob_r, norm, col, plabel, val_str, scale)
+
+        div_x = rx + KNOB_SECTION_W * scale
+        _draw_rect(div_x, ry+4*scale, max(1.0, scale),
+                   rh-RACK_RAIL_H*scale-8*scale, (0.2, 0.2, 0.2, 1.0))
+
+        spec_x = rx + SPEC_X * scale
+        spec_y = ry + (body_h - spec_h) / 2 - 5*scale
+        spec_w = SPEC_W * scale
+        _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
+
+        assigned = get_rack_channels(rack)
+        gr_x     = spec_x + spec_w + 16*scale
+        _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
+
+    # Channel buttons always on right
+    ch_right_x = rx + rw - 100*scale
+    ch_top_y   = ry + rh - RACK_RAIL_H*scale - 20*scale
+    _draw_channel_buttons(ch_right_x, ch_top_y, rack, scale)
+    fs_ch = max(1, int(8*scale))
+    _draw_text("CHANNELS", ch_right_x + 10*scale,
+               ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
+
+
+    # --- TOP RAIL ---
 
     # Corner screws
     for sx2, sy2 in [(rx+14*scale, ry+rh-16*scale),
@@ -2897,7 +2984,6 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
 
     # --- RACK NUMBER BADGE + EFFECT NAME ---
     # Badge starts after the collapse button — no overlap
-    etype  = rack.effect_type
     enames = dict(EFFECT_TYPES)
     ename  = enames.get(etype, etype)
     fs_name = max(1, int(11*scale))
@@ -2996,91 +3082,6 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     tw    = _text_width(on_txt, fs_on)
     _draw_text(on_txt, on_x+on_w/2-tw/2, on_y+on_h/2-fs_on/2+1,
                fs_on, on_col)
-
-    # --- BODY CONTENT — dispatch by effect type ---
-    body_h = rh - RACK_RAIL_H * scale
-    spec_h = min(SPEC_H * scale, body_h - 50*scale)
-
-    if etype == "COMP_MULTI":
-        _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "EQ":
-        _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "REVERB":
-        _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "NOISE_GATE":
-        _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "DELAY":
-        _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "MIXDOWN":
-        try:
-            from ui.racks.rack_mixdown import _draw_mixdown_body
-            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
-        except ImportError as e:
-            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.02, 0.08, 0.05, 1.0))
-            _draw_text("MISSING: blender_sync/ui/racks/rack_mixdown.py",
-                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
-                       max(1, int(10*scale)), (0.3, 1.0, 0.5, 1.0))
-            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
-    elif etype == "BOOSTER":
-        try:
-            from ui.racks.rack_booster import _draw_booster_body
-            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
-        except ImportError as e:
-            _draw_rect(rx, ry, rw, rh - RACK_RAIL_H*scale, (0.15, 0.02, 0.02, 1.0))
-            _draw_text("MISSING: blender_sync/ui/racks/rack_booster.py",
-                       rx + 10*scale, ry + (rh - RACK_RAIL_H*scale)/2,
-                       max(1, int(10*scale)), (1.0, 0.3, 0.3, 1.0))
-            print(f"[BOOSTER] ImportError — rack_booster.py not found: {e}")
-        except Exception as e:
-            print(f"[BOOSTER] draw error: {e}")
-            import traceback; traceback.print_exc()
-    else:
-        # Single band: 2x3 knob grid + spectrum + GR meters
-        params  = EFFECT_PARAMS.get(etype, [])
-        col     = (0.0, 0.65, 0.4)
-        knob_r  = 18 * scale
-        knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
-        body_top = ry
-        body_bot = ry + rh - RACK_RAIL_H*scale
-        mid_y    = (body_top + body_bot) * 0.5
-        ky0      = mid_y + knob_r + 14*scale
-        ky1      = mid_y - knob_r - 14*scale
-
-        param_order = [0,1,5, 2,3,4]
-        for idx, pi in enumerate(param_order):
-            col_i = idx % 3
-            row_i = idx // 3
-            kx    = knob_kx[col_i]
-            ky    = ky0 if row_i == 0 else ky1
-            if pi < len(params):
-                pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
-                norm   = getattr(rack, f'p{pi}', 0.0)
-                actual = pmin + norm*(pmax-pmin)
-                try:    val_str = pfmt.format(actual)
-                except: val_str = f"{actual:.1f}"
-                _draw_knob(kx, ky, knob_r, norm, col, plabel, val_str, scale)
-
-        div_x = rx + KNOB_SECTION_W * scale
-        _draw_rect(div_x, ry+4*scale, max(1.0, scale),
-                   rh-RACK_RAIL_H*scale-8*scale, (0.2, 0.2, 0.2, 1.0))
-
-        spec_x = rx + SPEC_X * scale
-        spec_y = ry + (body_h - spec_h) / 2 - 5*scale
-        spec_w = SPEC_W * scale
-        _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
-
-        assigned = get_rack_channels(rack)
-        gr_x     = spec_x + spec_w + 16*scale
-        _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
-
-    # Channel buttons always on right
-    ch_right_x = rx + rw - 100*scale
-    ch_top_y   = ry + rh - RACK_RAIL_H*scale - 20*scale
-    _draw_channel_buttons(ch_right_x, ch_top_y, rack, scale)
-    fs_ch = max(1, int(8*scale))
-    _draw_text("CHANNELS", ch_right_x + 10*scale,
-               ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
-
 
 
 def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):

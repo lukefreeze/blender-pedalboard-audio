@@ -197,8 +197,11 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
     inner_r = radius * 0.7
     draw_circle(cx, cy, inner_r, (0.1, 0.1, 0.1, 1.0))
 
-    arc_start = -225.0
-    arc_total = 270.0
+    # Hardware knob convention: starts lower-left (225°), sweeps clockwise
+    # to lower-right (315°). In y-up GPU coords clockwise = decreasing angle,
+    # so we start at 225° and sweep -270°.
+    arc_start = 225.0
+    arc_total = -270.0
     shader = _get_shader()
     segs   = 24
 

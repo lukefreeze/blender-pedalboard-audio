@@ -39,6 +39,31 @@ except ImportError:
     pass
 
 
+# =============================================================================
+# MULTIBAND COMPRESSOR KNOB TUNING
+# All offsets are unscaled px — multiplied by UI_SCALE at draw time.
+# MB_KNOB_SCALE multiplies the computed knob_r (radius).
+# Per-knob x/y offsets nudge each knob from its computed grid position.
+# Set MB_KNOB_SHOW_LABELS = False to suppress all knob labels and value text
+# (use when they are baked into the background PNG).
+# Knob order: Thr, Ratio, Knee (top row), Atk, Rel, Gain (bottom row)
+# =============================================================================
+
+MB_KNOB_SCALE       = 0.7    # multiplier on computed knob radius
+
+MB_KNOB_SHOW_LABELS = False   # set False to suppress all knob label/value text
+MB_BAND_SHOW_LABELS = False    # set False to suppress Low/L-Mid/H-Mid/High text (baked into PNG)
+MB_SHOW_GAIN_TEXT   = False   # set False to suppress GAIN label + value on faders (baked into PNG)
+
+# Per-knob offsets [band_0..band_3] — each entry is (x_offset, y_offset) in unscaled px
+# Thr, Ratio, Knee = top row;  Atk, Rel, Gain = bottom row
+MB_KNOB_THR_OFFSETS  = [(0.0, 0.25), (-1.0, 2.0), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_RAT_OFFSETS  = [(0.0, 0.25), (-0.5, 1.0), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_KNE_OFFSETS  = [(0.0, 0.25), (-1.0, 1.0), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_ATK_OFFSETS  = [(0.0, 1.25), (0.0, 1.25), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_REL_OFFSETS  = [(0.0, 1.25), (-0.25, 2.5), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_GAN_OFFSETS  = [(0.0, 1.25), (-0.25, 1.5), (0.0, 0.0), (0.0, 0.0)]
+
 # ---------------------------------------------------------------------------
 # Module-level cache for multiband spectrum display.
 # Weight arrays and hz-to-bin mapping are constant — computed once at import.
@@ -153,10 +178,15 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     get_rack_channels = _racks_mod.get_rack_channels
     rail_h       = RACK_RAIL_H * scale
     body_h       = rh - rail_h
-    # ── Skin background
+    # PNG background — blit first, everything draws on top
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_comp_multi_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_bg
+        from ui.mixer.texture_cache import blit_texture as _blt_bg
+        _tex_bg = _gtc_bg("rack_comp_multi_bg")
+        if _tex_bg:
+            _blt_bg(_tex_bg, rx, ry, rw, rh, key="rack_comp_multi_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     except Exception:
         _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     spec_zone_h  = body_h * 0.48
@@ -490,6 +520,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
     knob_area_w   = band_w - fader_strip_w - 8*scale
     knob_r        = min(knob_area_w * 0.18, 18*scale)
     knob_r        = max(knob_r, 12*scale)
+    knob_r        = knob_r * MB_KNOB_SCALE
     knob_col_gap  = knob_area_w / 2
     knob_label_h  = 22*scale   # space needed below each knob for labels
     knob_gap      = 6*scale    # gap between top-row label and bottom-row knob
@@ -500,18 +531,19 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         col = BAND_COLORS[band]
         col_rgb = col[:3]  # _draw_knob expects 3-tuple; col has alpha
 
-        # Band name + freq label at bottom
-        fs_bn = max(1, int(9*scale))
-        tw_bn = _text_width(BAND_NAMES[band], fs_bn)
-        _draw_text(BAND_NAMES[band],
-                   bx + band_w/2 - tw_bn/2,
-                   fader_area_y + 14*scale, fs_bn, col)
-        fs_fr = max(1, int(7*scale))
-        tw_fr = _text_width(BAND_FREQS[band], fs_fr)
-        _draw_text(BAND_FREQS[band],
-                   bx + band_w/2 - tw_fr/2,
-                   fader_area_y + 3*scale, fs_fr,
-                   (col[0]*0.55, col[1]*0.55, col[2]*0.55, 1.0))
+        # Band name + freq label at bottom — suppressed when baked into PNG
+        if MB_BAND_SHOW_LABELS:
+            fs_bn = max(1, int(9*scale))
+            tw_bn = _text_width(BAND_NAMES[band], fs_bn)
+            _draw_text(BAND_NAMES[band],
+                       bx + band_w/2 - tw_bn/2,
+                       fader_area_y + 14*scale, fs_bn, col)
+            fs_fr = max(1, int(7*scale))
+            tw_fr = _text_width(BAND_FREQS[band], fs_fr)
+            _draw_text(BAND_FREQS[band],
+                       bx + band_w/2 - tw_fr/2,
+                       fader_area_y + 3*scale, fs_fr,
+                       (col[0]*0.55, col[1]*0.55, col[2]*0.55, 1.0))
 
         # --- GAIN FADER (left strip) ---
         fdr_x  = bx + 6*scale
@@ -523,11 +555,12 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         fs_g     = max(1, int(7*scale))
         gain_str = f"{gain_db:+.0f}"
         tw_g     = _text_width(gain_str, fs_g)
-        _draw_text(gain_str, bx+6*scale + fdr_w/2 - tw_g/2,
-                   ctrl_y + ctrl_h - 12*scale, fs_g, (0.75,0.75,0.75,1.0))
-        fs_gl    = max(1, int(7*scale))
-        _draw_text("GAIN", bx+6*scale, ctrl_y + ctrl_h - 22*scale,
-                   fs_gl, (col[0]*0.7,col[1]*0.7,col[2]*0.7,1.0))
+        if MB_SHOW_GAIN_TEXT:
+            _draw_text(gain_str, bx+6*scale + fdr_w/2 - tw_g/2,
+                       ctrl_y + ctrl_h - 12*scale, fs_g, (0.75,0.75,0.75,1.0))
+            fs_gl = max(1, int(7*scale))
+            _draw_text("GAIN", bx+6*scale, ctrl_y + ctrl_h - 22*scale,
+                       fs_gl, (col[0]*0.7,col[1]*0.7,col[2]*0.7,1.0))
 
         fdr_h  = ctrl_h - 26*scale
         fdr_y  = ctrl_y + 2*scale
@@ -595,41 +628,50 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         ky1 = ctrl_y + ctrl_h * 0.25              # bottom row knob centre
         ky0 = ctrl_y + ctrl_h * 0.75              # top row knob centre
 
+        # Per-knob offsets (unscaled px → scaled at draw time)
+        _lbl = not MB_KNOB_SHOW_LABELS  # True = suppress (empty strings passed)
+
         # Threshold (p0-p3)
         thr_n   = _rp(rack, band)
-        thr_db  = -60.0 + thr_n*40.0   # -60..-20dB, matches C++ denorm_threshold
-        _draw_knob(kx0, ky0, knob_r, thr_n, col_rgb,
-                   "Thr", f"{thr_db:.0f}dB", scale)
+        thr_db  = -60.0 + thr_n*40.0
+        _ox, _oy = MB_KNOB_THR_OFFSETS[band]
+        _draw_knob(kx0 + _ox*scale, ky0 + _oy*scale, knob_r, thr_n, col_rgb,
+                   "" if _lbl else "Thr", "" if _lbl else f"{thr_db:.0f}dB", scale)
 
         # Ratio (p4-p7)
         rat_n  = _rp(rack, band+4)
         ratio  = 1.0 + rat_n*19.0
-        _draw_knob(kx1, ky0, knob_r, rat_n, col_rgb,
-                   "Ratio", f"{ratio:.1f}:1", scale)
+        _ox, _oy = MB_KNOB_RAT_OFFSETS[band]
+        _draw_knob(kx1 + _ox*scale, ky0 + _oy*scale, knob_r, rat_n, col_rgb,
+                   "" if _lbl else "Ratio", "" if _lbl else f"{ratio:.1f}:1", scale)
 
         # Knee (p20-p23)
         kne_n  = _rp(rack, band+20, 0.14)
         kne_db = 0.5 + kne_n*23.5
-        _draw_knob(kx2, ky0, knob_r, kne_n, col_rgb,
-                   "Knee", f"{kne_db:.1f}dB", scale)
+        _ox, _oy = MB_KNOB_KNE_OFFSETS[band]
+        _draw_knob(kx2 + _ox*scale, ky0 + _oy*scale, knob_r, kne_n, col_rgb,
+                   "" if _lbl else "Knee", "" if _lbl else f"{kne_db:.1f}dB", scale)
 
         # Attack (p8-p11)
         atk_n  = _rp(rack, band+8)
         atk_ms = 0.1 + atk_n*99.9
-        _draw_knob(kx0, ky1, knob_r, atk_n, col_rgb,
-                   "Atk", f"{atk_ms:.0f}ms", scale)
+        _ox, _oy = MB_KNOB_ATK_OFFSETS[band]
+        _draw_knob(kx0 + _ox*scale, ky1 + _oy*scale, knob_r, atk_n, col_rgb,
+                   "" if _lbl else "Atk", "" if _lbl else f"{atk_ms:.0f}ms", scale)
 
         # Release (p12-p15)
         rel_n  = _rp(rack, band+12)
         rel_ms = 10.0 + rel_n*990.0
-        _draw_knob(kx1, ky1, knob_r, rel_n, col_rgb,
-                   "Rel", f"{rel_ms:.0f}ms", scale)
+        _ox, _oy = MB_KNOB_REL_OFFSETS[band]
+        _draw_knob(kx1 + _ox*scale, ky1 + _oy*scale, knob_r, rel_n, col_rgb,
+                   "" if _lbl else "Rel", "" if _lbl else f"{rel_ms:.0f}ms", scale)
 
         # Gain (p16-p19)
         gain_n  = _rp(rack, band+16, 0.5)
         gain_db = (gain_n - 0.5) * 24.0
-        _draw_knob(kx2, ky1, knob_r, gain_n, col_rgb,
-                   "Gain", f"{gain_db:+.0f}dB", scale)
+        _ox, _oy = MB_KNOB_GAN_OFFSETS[band]
+        _draw_knob(kx2 + _ox*scale, ky1 + _oy*scale, knob_r, gain_n, col_rgb,
+                   "" if _lbl else "Gain", "" if _lbl else f"{gain_db:+.0f}dB", scale)
 
         # Column divider (not after last band)
         if band < 3:
@@ -640,4 +682,7 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         import traceback
         print(f"[MB] band {band} draw error: {e}")
         print(traceback.format_exc())
+
+    # ── Full-rack PNG blit — drawn LAST so it paints over body content.
+
 

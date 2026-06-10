@@ -79,25 +79,14 @@ from ui.mixer.interaction import (
 )
 from ui.mixer.texture_cache import set_skin_dir, clear_cache as clear_texture_cache
 
-# Racks public API
-try:
-    from Racks import (
-        draw_racks, register_racks, unregister_racks,
-        handle_click as racks_handle_click,
-        hit_test as racks_hit_test,
-        update_led_states,
-        rack_knob_hit_test,
-    )
-    print("[RACKS] Racks.py loaded")
-except ImportError as e:
-    print(f"[RACKS] WARNING: could not import Racks.py: {e}")
-    def draw_racks(*a, **kw): pass
-    def register_racks(): pass
-    def unregister_racks(): pass
-    def racks_handle_click(*a, **kw): return False
-    def racks_hit_test(*a, **kw): return None
-    def update_led_states(*a, **kw): pass
-    def rack_knob_hit_test(*a, **kw): return None
+# Racks public API — stubs only at module level; real import happens in register()
+def draw_racks(*a, **kw): pass
+def register_racks(): pass
+def unregister_racks(): pass
+def racks_handle_click(*a, **kw): return False
+def racks_hit_test(*a, **kw): return None
+def update_led_states(*a, **kw): pass
+def rack_knob_hit_test(*a, **kw): return None
 
 import bpy
 
@@ -287,12 +276,41 @@ def register():
         "ui.racks.rack_delay",
     ]
     importlib.invalidate_caches()
+    # Force Racks.py to reload by removing it from sys.modules first
+    # This bypasses any stale .pyc cache
+    for _force_mod in ("Racks",):
+        if _force_mod in sys.modules:
+            del sys.modules[_force_mod]
+
+    # Re-import Racks and rebind all public API functions
+    global draw_racks, register_racks, unregister_racks
+    global racks_handle_click, racks_hit_test, update_led_states, rack_knob_hit_test
+    try:
+        import Racks as _racks_fresh
+        draw_racks          = _racks_fresh.draw_racks
+        register_racks      = _racks_fresh.register_racks
+        unregister_racks    = _racks_fresh.unregister_racks
+        racks_handle_click  = _racks_fresh.handle_click
+        racks_hit_test      = _racks_fresh.hit_test
+        update_led_states   = _racks_fresh.update_led_states
+        rack_knob_hit_test  = _racks_fresh.rack_knob_hit_test
+        print("[RACKS] Racks.py rebound in register()")
+        # Reset mixer_hud's cached draw_racks function so it picks up the new module
+        import ui.mixer.mixer_hud as _mhud
+        _mhud._draw_racks_fn = None
+    except Exception as _re:
+        print(f"[RACKS] WARNING: could not rebind Racks.py: {_re}")
     for mod_name in _addon_modules:
         if mod_name in sys.modules:
             try:
                 importlib.reload(sys.modules[mod_name])
             except Exception as _re:
                 print(f"[RELOAD] {mod_name}: {_re}")
+        else:
+            try:
+                importlib.import_module(mod_name)
+            except Exception as _re:
+                print(f"[IMPORT] {mod_name}: {_re}")
     from core.constants import ASSETS_DIR
     set_skin_dir(ASSETS_DIR, "default")
 

@@ -49,6 +49,20 @@ KNOB_SECTION_W  = 360
 KNOB_SPACING    = 68
 KNOB_START_X    = 55
 CH_BTN_SIZE     = 26
+
+# =============================================================================
+# RACK CHANNEL BUTTON SKIN TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+# CH_BTN_PNG_SCALE    : size multiplier on the PNG (1.0 = same as btn_s)
+# CH_BTN_PNG_X_OFFSET : nudge PNG left(−) / right(+)
+# CH_BTN_PNG_Y_OFFSET : nudge PNG down(−) / up(+)
+# CH_BTN_LABEL_X_OFFSET / Y_OFFSET : nudge the channel number label
+# =============================================================================
+CH_BTN_PNG_SCALE      = 1.2
+CH_BTN_PNG_X_OFFSET   = -2.0
+CH_BTN_PNG_Y_OFFSET   = -2.0
+CH_BTN_LABEL_X_OFFSET = -1.75
+CH_BTN_LABEL_Y_OFFSET = -0.5
 GR_BAR_W        = 12
 GR_BAR_SPACING  = 16
 
@@ -376,25 +390,47 @@ def _draw_channel_buttons(rx, ry, rack, scale):
         attr     = f'ch{local_idx}'
         assigned = getattr(rack, attr, False)
 
-        if assigned:
-            bg = (0.0, 0.18, 0.10, 1.0)
-            bc = (0.0, 0.75, 0.45, 1.0)
-            tc = (0.0, 0.85, 0.55, 1.0)
+        # Try PNG skin — per-rack override first, then universal default
+        try:
+            from ui.mixer.texture_cache import get_texture_with_fallback as _gtf
+            from ui.mixer.texture_cache import blit_texture as _blt_btn
+            _etype_btn = getattr(rack, 'effect_type', '').lower()
+            _state     = 'on' if assigned else 'off'
+            _btn_tex, _used_key = _gtf(
+                f"rack_{_etype_btn}_ch_btn_{_state}",
+                f"rack_ch_btn_{_state}",
+            )
+        except Exception:
+            _btn_tex, _used_key = None, None
+
+        if _btn_tex:
+            _png_s = btn_s * CH_BTN_PNG_SCALE
+            _png_x = bx + (btn_s - _png_s) / 2 + CH_BTN_PNG_X_OFFSET * scale
+            _png_y = by + (btn_s - _png_s) / 2 + CH_BTN_PNG_Y_OFFSET * scale
+            _blt_btn(_btn_tex, _png_x, _png_y, _png_s, _png_s, key=_used_key)
+            tc = (0.9, 0.9, 0.9, 1.0) if assigned else (0.4, 0.4, 0.4, 1.0)
         else:
-            bg = (0.07, 0.07, 0.07, 1.0)
-            bc = (0.2,  0.2,  0.2,  1.0)
-            tc = (0.2,  0.2,  0.2,  1.0)
+            # Fallback — solid rect + border
+            if assigned:
+                bg = (0.0, 0.18, 0.10, 1.0)
+                bc = (0.0, 0.75, 0.45, 1.0)
+                tc = (0.0, 0.85, 0.55, 1.0)
+            else:
+                bg = (0.07, 0.07, 0.07, 1.0)
+                bc = (0.2,  0.2,  0.2,  1.0)
+                tc = (0.2,  0.2,  0.2,  1.0)
+            _draw_rect(bx, by, btn_s, btn_s, bg)
+            verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
+            batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
+            shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
 
-        _draw_rect(bx, by, btn_s, btn_s, bg)
-        verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
-        batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
-        shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
-
-        # Label shows absolute VSE channel number
+        # Channel number label always drawn on top
         label = str(offset + local_idx + 1)
         tw    = _text_width(label, fs)
-        _draw_text(label, bx + btn_s/2 - tw/2,
-                   by + btn_s/2 - fs/2, fs, tc)
+        _draw_text(label,
+                   bx + btn_s/2 - tw/2 + CH_BTN_LABEL_X_OFFSET * scale,
+                   by + btn_s/2 - fs/2  + CH_BTN_LABEL_Y_OFFSET * scale,
+                   fs, tc)
 
 
 # Band colours for multiband display (matching C6-style)
@@ -437,20 +473,137 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     shader.uniform_float("color",(0.28,0.28,0.28,1.0))
     batch.draw(shader)
 
-    # --- TOP RAIL ---
+    # --- TOP RAIL --- (background drawn after body so PNG doesn't cover it)
     rail_h = RACK_RAIL_H * scale
-    _draw_rect(rx, ry+rh-rail_h, rw, rail_h, (0.16, 0.16, 0.16, 1.0))
-    _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.1,0.1,0.1,1.0))
+    # --- BODY CONTENT — dispatch by effect type ---
+    # Lazy imports: body draw functions live in separate files.
+    # Imported here (inside function) to avoid circular import at load time.
+    from ui.racks.rack_comp    import _draw_multiband_body
+    from ui.racks.rack_eq      import _draw_eq_body
+    from ui.racks.rack_reverb  import _draw_reverb_body
+    from ui.racks.rack_noisegate import _draw_noisegate_body
+    from ui.racks.rack_delay   import _draw_delay_body
+    # EFFECT_PARAMS and other live state from Racks
+    import Racks as _racks_mod
+    EFFECT_PARAMS     = _racks_mod.EFFECT_PARAMS
+    KNOB_START_X      = _racks_mod.KNOB_START_X
+    KNOB_SPACING      = _racks_mod.KNOB_SPACING
+    KNOB_SECTION_W    = _racks_mod.KNOB_SECTION_W
+    SPEC_H            = _racks_mod.SPEC_H
+    SPEC_W            = _racks_mod.SPEC_W
+    SPEC_X            = _racks_mod.SPEC_X
+    get_rack_channels = _racks_mod.get_rack_channels
+    _gr_levels        = _racks_mod._gr_levels
+    etype  = rack.effect_type
+    body_h = rh - RACK_RAIL_H * scale
+    spec_h = min(SPEC_H * scale, body_h - 50*scale)
 
-    # Corner screws
-    for sx2, sy2 in [(rx+14*scale, ry+rh-16*scale),
-                     (rx+rw-14*scale, ry+rh-16*scale),
-                     (rx+14*scale, ry+14*scale),
-                     (rx+rw-14*scale, ry+14*scale)]:
-        _draw_circle(sx2, sy2, 4*scale, (0.07,0.07,0.07,1.0))
-        _draw_circle(sx2, sy2, 4*scale, (0.3,0.3,0.3,1.0), filled=False)
-        _draw_line(sx2-3*scale, sy2, sx2+3*scale, sy2, (0.3,0.3,0.3,0.8))
-        _draw_line(sx2, sy2-3*scale, sx2, sy2+3*scale, (0.3,0.3,0.3,0.8))
+    if etype == "COMP_MULTI":
+        _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "EQ":
+        _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "REVERB":
+        _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "NOISE_GATE":
+        _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "DELAY":
+        _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
+    elif etype == "BOOSTER":
+        try:
+            from ui.racks.rack_booster import _draw_booster_body
+            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            print(f"[BOOSTER] ImportError: {e}")
+        except Exception as e:
+            print(f"[BOOSTER] draw error: {e}")
+            import traceback; traceback.print_exc()
+    elif etype == "MIXDOWN":
+        try:
+            from ui.racks.rack_mixdown import _draw_mixdown_body
+            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
+        except ImportError as e:
+            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
+        except Exception as e:
+            print(f"[MIXDOWN] draw error: {e}")
+            import traceback; traceback.print_exc()
+    else:
+        # Single band: 2x3 knob grid + spectrum + GR meters
+        params  = EFFECT_PARAMS.get(etype, [])
+        col     = (0.0, 0.65, 0.4)
+        knob_r  = 18 * scale
+        knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
+        body_top = ry
+        body_bot = ry + rh - RACK_RAIL_H*scale
+        mid_y    = (body_top + body_bot) * 0.5
+        ky0      = mid_y + knob_r + 14*scale
+        ky1      = mid_y - knob_r - 14*scale
+
+        param_order = [0,1,5, 2,3,4]
+        for idx, pi in enumerate(param_order):
+            col_i = idx % 3
+            row_i = idx // 3
+            kx    = knob_kx[col_i]
+            ky    = ky0 if row_i == 0 else ky1
+            if pi < len(params):
+                pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
+                norm   = getattr(rack, f'p{pi}', 0.0)
+                actual = pmin + norm*(pmax-pmin)
+                try:    val_str = pfmt.format(actual)
+                except: val_str = f"{actual:.1f}"
+                _draw_knob(kx, ky, knob_r, norm, col, plabel, val_str, scale)
+
+        div_x = rx + KNOB_SECTION_W * scale
+        _draw_rect(div_x, ry+4*scale, max(1.0, scale),
+                   rh-RACK_RAIL_H*scale-8*scale, (0.2, 0.2, 0.2, 1.0))
+
+        spec_x = rx + SPEC_X * scale
+        spec_y = ry + (body_h - spec_h) / 2 - 5*scale
+        spec_w = SPEC_W * scale
+        _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
+
+        assigned = get_rack_channels(rack)
+        gr_x     = spec_x + spec_w + 16*scale
+        _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
+
+    # Rail background drawn AFTER body so it always sits on top of any body PNG.
+    # Suppressed for racks that have a full PNG skin loaded (PNG provides the rail look).
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_rail
+        _rail_skin_keys = {
+            "COMP_MULTI":  "rack_comp_multi_bg",
+            "COMP_SINGLE": "rack_comp_single_bg",
+            "EQ":          "rack_eq_bg",
+            "REVERB":      "rack_reverb_bg",
+            "NOISE_GATE":  "rack_noisegate_bg",
+            "DELAY":       "rack_delay_bg",
+            "BOOSTER":     "rack_booster_bg",
+            "MIXDOWN":     "rack_mixdown_bg",
+        }
+        _rsk = _rail_skin_keys.get(etype)
+        if not (_rsk and _gtc_rail(_rsk) is not None):
+            _draw_rect(rx, ry+rh-rail_h, rw, rail_h, (0.16, 0.16, 0.16, 1.0))
+            _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.1, 0.1, 0.1, 1.0))
+    except Exception:
+        _draw_rect(rx, ry+rh-rail_h, rw, rail_h, (0.16, 0.16, 0.16, 1.0))
+        _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.1, 0.1, 0.1, 1.0))
+
+    # Channel buttons always on right
+    ch_right_x = rx + rw - 100*scale
+    ch_top_y   = ry + rh - RACK_RAIL_H*scale - 20*scale
+    _draw_channel_buttons(ch_right_x, ch_top_y, rack, scale)
+    fs_ch = max(1, int(8*scale))
+    # --- TOP RAIL INTERACTIVE ELEMENTS (drawn last, always on top) ---
+
+    # Corner screws — suppressed for racks with PNG skins that include them
+    if etype != "COMP_MULTI":
+        for sx2, sy2 in [(rx+14*scale, ry+rh-16*scale),
+                         (rx+rw-14*scale, ry+rh-16*scale),
+                         (rx+14*scale, ry+14*scale),
+                         (rx+rw-14*scale, ry+14*scale)]:
+            _draw_circle(sx2, sy2, 4*scale, (0.07,0.07,0.07,1.0))
+            _draw_circle(sx2, sy2, 4*scale, (0.3,0.3,0.3,1.0), filled=False)
+            _draw_line(sx2-3*scale, sy2, sx2+3*scale, sy2, (0.3,0.3,0.3,0.8))
+            _draw_line(sx2, sy2-3*scale, sx2, sy2+3*scale, (0.3,0.3,0.3,0.8))
 
     # --- COLLAPSE ARROW — dedicated button, far left of rail ---
     # Clear ▲ icon in its own 28px zone so it's always visible and clickable
@@ -576,102 +729,9 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     _draw_text(on_txt, on_x+on_w/2-tw/2, on_y+on_h/2-fs_on/2+1,
                fs_on, on_col)
 
-    # --- BODY CONTENT — dispatch by effect type ---
-    # Lazy imports: body draw functions live in separate files.
-    # Imported here (inside function) to avoid circular import at load time.
-    from ui.racks.rack_comp    import _draw_multiband_body
-    from ui.racks.rack_eq      import _draw_eq_body
-    from ui.racks.rack_reverb  import _draw_reverb_body
-    from ui.racks.rack_noisegate import _draw_noisegate_body
-    from ui.racks.rack_delay   import _draw_delay_body
-    # EFFECT_PARAMS and other live state from Racks
-    import Racks as _racks_mod
-    EFFECT_PARAMS     = _racks_mod.EFFECT_PARAMS
-    KNOB_START_X      = _racks_mod.KNOB_START_X
-    KNOB_SPACING      = _racks_mod.KNOB_SPACING
-    KNOB_SECTION_W    = _racks_mod.KNOB_SECTION_W
-    SPEC_H            = _racks_mod.SPEC_H
-    SPEC_W            = _racks_mod.SPEC_W
-    SPEC_X            = _racks_mod.SPEC_X
-    get_rack_channels = _racks_mod.get_rack_channels
-    _gr_levels        = _racks_mod._gr_levels
-    body_h = rh - RACK_RAIL_H * scale
-    spec_h = min(SPEC_H * scale, body_h - 50*scale)
-
-    if etype == "COMP_MULTI":
-        _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "EQ":
-        _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "REVERB":
-        _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "NOISE_GATE":
-        _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "DELAY":
-        _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale)
-    elif etype == "BOOSTER":
-        try:
-            from ui.racks.rack_booster import _draw_booster_body
-            _draw_booster_body(rx, ry, rw, rh, rack, rack_idx, scale)
-        except ImportError as e:
-            print(f"[BOOSTER] ImportError: {e}")
-        except Exception as e:
-            print(f"[BOOSTER] draw error: {e}")
-            import traceback; traceback.print_exc()
-    elif etype == "MIXDOWN":
-        try:
-            from ui.racks.rack_mixdown import _draw_mixdown_body
-            _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale)
-        except ImportError as e:
-            print(f"[MIXDOWN] ImportError — rack_mixdown.py not found: {e}")
-        except Exception as e:
-            print(f"[MIXDOWN] draw error: {e}")
-            import traceback; traceback.print_exc()
-    else:
-        # Single band: 2x3 knob grid + spectrum + GR meters
-        params  = EFFECT_PARAMS.get(etype, [])
-        col     = (0.0, 0.65, 0.4)
-        knob_r  = 18 * scale
-        knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
-        body_top = ry
-        body_bot = ry + rh - RACK_RAIL_H*scale
-        mid_y    = (body_top + body_bot) * 0.5
-        ky0      = mid_y + knob_r + 14*scale
-        ky1      = mid_y - knob_r - 14*scale
-
-        param_order = [0,1,5, 2,3,4]
-        for idx, pi in enumerate(param_order):
-            col_i = idx % 3
-            row_i = idx // 3
-            kx    = knob_kx[col_i]
-            ky    = ky0 if row_i == 0 else ky1
-            if pi < len(params):
-                pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
-                norm   = getattr(rack, f'p{pi}', 0.0)
-                actual = pmin + norm*(pmax-pmin)
-                try:    val_str = pfmt.format(actual)
-                except: val_str = f"{actual:.1f}"
-                _draw_knob(kx, ky, knob_r, norm, col, plabel, val_str, scale)
-
-        div_x = rx + KNOB_SECTION_W * scale
-        _draw_rect(div_x, ry+4*scale, max(1.0, scale),
-                   rh-RACK_RAIL_H*scale-8*scale, (0.2, 0.2, 0.2, 1.0))
-
-        spec_x = rx + SPEC_X * scale
-        spec_y = ry + (body_h - spec_h) / 2 - 5*scale
-        spec_w = SPEC_W * scale
-        _draw_spectrum(spec_x, spec_y, spec_w, spec_h, rack_idx, scale)
-
-        assigned = get_rack_channels(rack)
-        gr_x     = spec_x + spec_w + 16*scale
-        _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
-
-    # Channel buttons always on right
-    ch_right_x = rx + rw - 100*scale
-    ch_top_y   = ry + rh - RACK_RAIL_H*scale - 20*scale
-    _draw_channel_buttons(ch_right_x, ch_top_y, rack, scale)
-    fs_ch = max(1, int(8*scale))
-    _draw_text("CHANNELS", ch_right_x + 10*scale,
-               ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
+    if etype != "COMP_MULTI":
+        _draw_text("CHANNELS", ch_right_x + 10*scale,
+                   ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
 
 
 

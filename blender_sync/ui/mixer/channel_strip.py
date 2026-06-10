@@ -183,7 +183,7 @@ BTN_Y_CENTER    = True   # if True, buttons are centred in the header section
 SEND_BTN_IMG_W   = 125   # drawn width of the send button image
 SEND_BTN_IMG_H   = 27    # drawn height of the send button image
 SEND_BTN_IMG_X   = -1    # x offset from strip left edge
-SEND_BTN_IMG_Y   = -4     # y offset up from tile bottom
+SEND_BTN_IMG_Y   = 0     # y offset up from tile bottom
 SEND_BTN_TEXT_X  = 30    # x offset of rack label text from button left edge
 SEND_BTN_TEXT_Y  = -2.5     # y offset of rack label text (positive = up, negative = down)
 

@@ -86,6 +86,28 @@ SKIN_MAP = {
     "add_ai_rack_btn":     "add_ai_rack_btn.png",
     "rack_chassis":  "rack_chassis.png",
     "rack_rail":     "rack_rail.png",
+
+    # ---------------------------------------------------------------------------
+    # Rack channel buttons — universal defaults used across all racks.
+    # Per-rack overrides follow the naming convention rack_{type}_ch_btn_*.
+    # ---------------------------------------------------------------------------
+    "rack_ch_btn_off":       "rack_ch_btn_off.png",       # unassigned state (all racks)
+    "rack_ch_btn_on":        "rack_ch_btn_on.png",        # assigned state (all racks)
+
+    # Per-rack channel button overrides — take priority over universal defaults above.
+    # Add rack-specific filenames here when needed, e.g:
+    # "rack_mb_ch_btn_off":  "rack_mb_ch_btn_off.png",
+    # "rack_mb_ch_btn_on":   "rack_mb_ch_btn_on.png",
+
+    # ---------------------------------------------------------------------------
+    # Rack fader handles — per-band for multiband compressor.
+    # Universal fallback: rack_fader_handle for single-fader racks.
+    # ---------------------------------------------------------------------------
+    "rack_fader_handle":     "rack_fader_handle.png",     # universal fallback
+    "rack_mb_fader_low":     "rack_mb_fader_low.png",     # COMP_MULTI band 0 (blue)
+    "rack_mb_fader_lmid":    "rack_mb_fader_lmid.png",    # COMP_MULTI band 1 (green)
+    "rack_mb_fader_hmid":    "rack_mb_fader_hmid.png",    # COMP_MULTI band 2 (amber)
+    "rack_mb_fader_high":    "rack_mb_fader_high.png",    # COMP_MULTI band 3 (red)
 }
 
 # ---------------------------------------------------------------------------
@@ -138,6 +160,15 @@ def get_texture(key: str):
         print(f"[SKIN] failed to load '{key}': {e}")
         _texture_cache[key] = None   # don't retry
         return None
+
+
+def get_texture_with_fallback(*keys):
+    # Try each key in order, return (texture, key) for first found, or (None, None)
+    for key in keys:
+        tex = get_texture(key)
+        if tex is not None:
+            return tex, key
+    return None, None
 
 
 def blit_texture(tex, x: float, y: float, w: float, h: float,
