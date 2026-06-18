@@ -74,6 +74,8 @@ SKIN_MAP = {
     # Rack body backgrounds
     "rack_comp_multi_bg":  "rack_comp_multi_bg.png",
     "rack_comp_single_bg": "rack_comp_single_bg.png",
+    "rack_comp_single_glass": "rack_comp_single_glass.png",
+    "rack_comp_multi_glass":  "rack_comp_multi_glass.png",
     "rack_eq_bg":          "rack_eq_bg.png",
     "rack_reverb_bg":      "rack_reverb_bg.png",
     "rack_noisegate_bg":   "rack_noisegate_bg.png",
@@ -172,18 +174,20 @@ def get_texture_with_fallback(*keys):
 
 
 def blit_texture(tex, x: float, y: float, w: float, h: float,
-                 alpha: float = 1.0, key: str = "") -> None:
-    """Blit a gpu.GPUTexture into a screen-space rect (x,y = bottom-left)."""
+                 alpha: float = 1.0, key: str = "", blend: str = "ALPHA_PREMULT") -> None:
+    """Blit a gpu.GPUTexture into a screen-space rect (x,y = bottom-left).
+
+    blend: GPU blend mode passed to gpu.state.blend_set before drawing.
+           Default "ALPHA_PREMULT" is correct for pre-multiplied skin PNGs.
+           Pass "ALPHA" for overlays whose RGB is NOT pre-multiplied (e.g. glass layers).
+    """
     if tex is None or w <= 0 or h <= 0:
         return
     if key and key not in _blit_logged:
         _blit_logged.add(key)
         print(f"[SKIN] blitting '{key}' ({int(w)}x{int(h)}px)")
     try:
-        # Explicitly set alpha blend — do not rely on caller having set it.
-        # Blender images use premultiplied alpha internally after loading,
-        # so ALPHA_PREMULT gives correct compositing over the background.
-        gpu.state.blend_set("ALPHA_PREMULT")
+        gpu.state.blend_set(blend)
         shader = gpu.shader.from_builtin("IMAGE")
         verts  = [(x, y), (x+w, y), (x, y+h), (x+w, y+h)]
         uvs    = [(0, 0), (1, 0), (0, 1), (1, 1)]

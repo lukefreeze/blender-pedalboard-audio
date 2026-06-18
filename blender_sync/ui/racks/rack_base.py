@@ -66,6 +66,32 @@ CH_BTN_LABEL_Y_OFFSET = -0.5
 GR_BAR_W        = 12
 GR_BAR_SPACING  = 16
 
+# X offset (unscaled px from rack left) for the preset selector panel on the rail.
+# Increase this to push the preset box right, away from baked logo text on COMP_SINGLE.
+COMP_SINGLE_PRESET_X = 380
+
+# =============================================================================
+# SINGLE-BAND COMPRESSOR KNOB TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+#
+# SB_KNOB_SCALE   : size multiplier relative to the base knob_r (1.0 = no change)
+# SB_KNOB_X_*     : X nudge for each knob column (col 0/1/2 = left/mid/right)
+# SB_KNOB_Y_ROW0  : Y nudge for the top row of knobs
+# SB_KNOB_Y_ROW1  : Y nudge for the bottom row of knobs
+#
+# Knob draw order (param_order = [0,1,5, 2,3,4]):
+#   Row 0 (top):    p0=Threshold  p1=Ratio     p5=Knee
+#   Row 1 (bottom): p2=Attack     p3=Release   p4=Gain
+# =============================================================================
+SB_KNOB_SCALE   = 0.75   # shrink/grow all 6 knobs — try 0.75 to start
+
+SB_KNOB_X_COL0  = 1.5   # p0 Threshold (top) / p2 Attack (bottom)
+SB_KNOB_X_COL1  = 1.5   # p1 Ratio     (top) / p3 Release (bottom)
+SB_KNOB_X_COL2  = 1.5   # p5 Knee      (top) / p4 Gain    (bottom)
+
+SB_KNOB_Y_ROW0  = 4.5   # top row    — positive moves up
+SB_KNOB_Y_ROW1  = -5.0   # bottom row — positive moves up
+
 # EFFECT_TYPES and PRESETS are fetched lazily from Racks inside each function
 # that needs them — see _get_racks_state() helper below.
 
@@ -255,31 +281,33 @@ def _draw_spectrum(rx, ry, rw, rh, rack_idx, scale):
             _draw_line(thr_x, ry, thr_x, ry+rh,
                        (0.6, 0.2, 0.2, 0.4), max(1.0, scale*1.0))
 
-    # Frequency labels
-    freq_labels = [("20", 0.0), ("200", 0.22), ("1k", 0.44),
-                   ("4k", 0.63), ("10k", 0.8), ("20k", 0.95)]
-    fs = max(1, int(7*scale))
-    for label, t in freq_labels:
-        lx = rx + t*rw
-        _draw_text(label, lx, ry - 12*scale, fs, (0.3,0.3,0.3,1.0))
+    # Frequency labels — suppressed for COMP_SINGLE (baked into background PNG)
+    _spec_etype = getattr(rack, 'effect_type', '') if rack_idx < len(racks) else ''
+    if _spec_etype != "COMP_SINGLE":
+        freq_labels = [("20", 0.0), ("200", 0.22), ("1k", 0.44),
+                       ("4k", 0.63), ("10k", 0.8), ("20k", 0.95)]
+        fs = max(1, int(7*scale))
+        for label, t in freq_labels:
+            lx = rx + t*rw
+            _draw_text(label, lx, ry - 12*scale, fs, (0.3,0.3,0.3,1.0))
 
-    # dB scale on left
-    db_labels = [("0", 1.0), ("-12", 0.66), ("-24", 0.33), ("-36", 0.0)]
-    for label, t in db_labels:
-        ly = ry + t*rh - 3*scale
-        tw = _text_width(label, fs)
-        _draw_text(label, rx - tw - 4*scale, ly, fs, (0.3,0.3,0.3,1.0))
+        # dB scale on left
+        db_labels = [("0", 1.0), ("-12", 0.66), ("-24", 0.33), ("-36", 0.0)]
+        for label, t in db_labels:
+            ly = ry + t*rh - 3*scale
+            tw = _text_width(label, fs)
+            _draw_text(label, rx - tw - 4*scale, ly, fs, (0.3,0.3,0.3,1.0))
 
-    # Legend
-    lfs = max(1, int(7*scale))
-    _draw_rect(rx + 4*scale, ry + rh - 12*scale, 12*scale, 2*scale,
-               (0.0, 0.8, 0.5, 0.8))
-    _draw_text("signal", rx + 18*scale, ry + rh - 14*scale, lfs,
-               (0.4, 0.4, 0.4, 1.0))
-    _draw_rect(rx + 60*scale, ry + rh - 12*scale, 12*scale, 2*scale,
-               (0.9, 0.2, 0.2, 0.7))
-    _draw_text("GR curve", rx + 74*scale, ry + rh - 14*scale, lfs,
-               (0.4, 0.4, 0.4, 1.0))
+        # Legend
+        lfs = max(1, int(7*scale))
+        _draw_rect(rx + 4*scale, ry + rh - 12*scale, 12*scale, 2*scale,
+                   (0.0, 0.8, 0.5, 0.8))
+        _draw_text("signal", rx + 18*scale, ry + rh - 14*scale, lfs,
+                   (0.4, 0.4, 0.4, 1.0))
+        _draw_rect(rx + 60*scale, ry + rh - 12*scale, 12*scale, 2*scale,
+                   (0.9, 0.2, 0.2, 0.7))
+        _draw_text("GR curve", rx + 74*scale, ry + rh - 14*scale, lfs,
+                   (0.4, 0.4, 0.4, 1.0))
 
 
 def _draw_gr_meters(rx, ry, rh, rack_idx, assigned_channels, scale):
@@ -528,9 +556,21 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
             import traceback; traceback.print_exc()
     else:
         # Single band: 2x3 knob grid + spectrum + GR meters
+        # PNG background — blit first so all body content draws on top
+        try:
+            from ui.mixer.texture_cache import get_texture as _gtc_sb
+            from ui.mixer.texture_cache import blit_texture as _blt_sb
+            _sb_tex = _gtc_sb("rack_comp_single_bg")
+            if _sb_tex:
+                _blt_sb(_sb_tex, rx, ry, rw, rh, key="rack_comp_single_bg")
+            else:
+                _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
+        except Exception:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
+
         params  = EFFECT_PARAMS.get(etype, [])
         col     = (0.0, 0.65, 0.4)
-        knob_r  = 18 * scale
+        knob_r  = 18 * scale * SB_KNOB_SCALE
         knob_kx  = [rx + (KNOB_START_X + c*KNOB_SPACING) * scale for c in range(3)]
         body_top = ry
         body_bot = ry + rh - RACK_RAIL_H*scale
@@ -538,12 +578,15 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         ky0      = mid_y + knob_r + 14*scale
         ky1      = mid_y - knob_r - 14*scale
 
+        _sb_x_offsets = [SB_KNOB_X_COL0, SB_KNOB_X_COL1, SB_KNOB_X_COL2]
+        _sb_y_offsets = [SB_KNOB_Y_ROW0, SB_KNOB_Y_ROW1]
+
         param_order = [0,1,5, 2,3,4]
         for idx, pi in enumerate(param_order):
             col_i = idx % 3
             row_i = idx // 3
-            kx    = knob_kx[col_i]
-            ky    = ky0 if row_i == 0 else ky1
+            kx    = knob_kx[col_i] + _sb_x_offsets[col_i] * scale
+            ky    = (ky0 if row_i == 0 else ky1) + _sb_y_offsets[row_i] * scale
             if pi < len(params):
                 pkey, plabel, pmin, pmax, pdef, pfmt = params[pi]
                 norm   = getattr(rack, f'p{pi}', 0.0)
@@ -564,6 +607,16 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
         assigned = get_rack_channels(rack)
         gr_x     = spec_x + spec_w + 16*scale
         _draw_gr_meters(gr_x, spec_y, spec_h, rack_idx, assigned, scale)
+
+        # Glass overlay — composited on top of spectrum/GR meters, same rect as body PNG
+        try:
+            from ui.mixer.texture_cache import get_texture as _gtc_gl
+            from ui.mixer.texture_cache import blit_texture as _blt_gl
+            _gl_tex = _gtc_gl("rack_comp_single_glass")
+            if _gl_tex:
+                _blt_gl(_gl_tex, rx, ry, rw, rh, key="rack_comp_single_glass", blend="ALPHA")
+        except Exception:
+            pass
 
     # Rail background drawn AFTER body so it always sits on top of any body PNG.
     # Suppressed for racks that have a full PNG skin loaded (PNG provides the rail look).
@@ -660,15 +713,17 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
                badge_y + 2*scale, arr_fs, (0.35, 0.7, 1.0, 0.8))
     badge_w = badge_w + 6*scale
 
-    _draw_text(ename.upper(),
-               badge_x + badge_w,
-               ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
+    if etype not in ("COMP_MULTI", "COMP_SINGLE"):  # suppressed — label baked into background PNG
+        _draw_text(ename.upper(),
+                   badge_x + badge_w,
+                   ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
 
     # --- PRESET SELECTOR ---
     presets   = PRESETS.get(etype, ["Default"])
     p_idx     = rack.preset_idx % max(1, len(presets))
     p_name    = presets[p_idx]
-    p_box_x   = rx + 280*scale
+    _preset_base_x = COMP_SINGLE_PRESET_X if etype == "COMP_SINGLE" else 280
+    p_box_x   = rx + _preset_base_x*scale
     p_box_w   = 160*scale
     p_box_y   = ry + rh - 26*scale
     p_box_h   = 16*scale

@@ -3022,7 +3022,12 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     presets   = PRESETS.get(etype, ["Default"])
     p_idx     = rack.preset_idx % max(1, len(presets))
     p_name    = presets[p_idx]
-    p_box_x   = rx + 280*scale
+    try:
+        from ui.racks.rack_base import COMP_SINGLE_PRESET_X as _CSPX2
+    except Exception:
+        _CSPX2 = 380
+    _pb = _CSPX2 if etype == "COMP_SINGLE" else 280
+    p_box_x   = rx + _pb*scale
     p_box_w   = 160*scale
     p_box_y   = ry + rh - 26*scale
     p_box_h   = 16*scale
@@ -3862,7 +3867,12 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
             return {'zone': 'delete_rack', 'rack_idx': i}
 
     # Preset arrows
-    p_box_x = rack_x + 280*ui_scale
+    try:
+        from ui.racks.rack_base import COMP_SINGLE_PRESET_X as _CSPX
+    except Exception:
+        _CSPX = 380
+    _preset_base = _CSPX if getattr(rack, 'effect_type', '') == 'COMP_SINGLE' else 280
+    p_box_x = rack_x + _preset_base*ui_scale
     p_box_w = 160*ui_scale
     if rack_y+rh-30*ui_scale <= ry <= rack_y+rh-12*ui_scale:
         if p_box_x-18*ui_scale <= rx <= p_box_x:

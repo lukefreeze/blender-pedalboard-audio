@@ -406,7 +406,9 @@ def _pb_channel_volume(channel_idx):
         return 0.0
 
     if channel_idx < len(tracks):
-        return tracks[channel_idx].volume
+        # Multiply fader by gain so real-time gain knob changes
+        # take effect immediately without needing a playback restart.
+        return tracks[channel_idx].volume * tracks[channel_idx].gain
     return 1.0
 
 
@@ -673,8 +675,12 @@ def _hj_build_segment_playlist(channel_idx, scene):
         scene2    = bpy.context.scene
         tracks2   = getattr(scene2, "pb_sync_tracks", []) if scene2 else []
         fader_vol = tracks2[channel_idx].volume if channel_idx < len(tracks2) else 1.0
+        gain_val  = tracks2[channel_idx].gain   if channel_idx < len(tracks2) else 1.0
         fader_vol = max(fader_vol, 0.001)
-        seg_vol   = float(strip.volume) / fader_vol
+        gain_val  = max(gain_val,  0.001)
+        # Divide out both fader AND gain — engine applies both via set_volume()
+        # so seg_vol carries only the original per-strip volume difference.
+        seg_vol   = float(strip.volume) / (fader_vol * gain_val)
 
         segments.append({
             'filepath':       wav_path,

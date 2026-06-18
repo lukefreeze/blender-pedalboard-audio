@@ -52,8 +52,14 @@ except ImportError:
 MB_KNOB_SCALE       = 0.7    # multiplier on computed knob radius
 
 MB_KNOB_SHOW_LABELS = False   # set False to suppress all knob label/value text
-MB_BAND_SHOW_LABELS = False    # set False to suppress Low/L-Mid/H-Mid/High text (baked into PNG)
+MB_BAND_SHOW_LABELS  = False   # set False to suppress Low/L-Mid/H-Mid/High text (baked into PNG)
+MB_SHOW_FREQ_AXIS    = False   # set False to suppress 50/100/500/1k/2k/5k/10k axis labels
 MB_SHOW_GAIN_TEXT   = False   # set False to suppress GAIN label + value on faders (baked into PNG)
+
+# Fader handle PNG tuning — unscaled px, multiplied by scale at draw time
+MB_FADER_HANDLE_SCALE    = 2.0   # size multiplier (1.0 = fills fdr_w x handle_h exactly)
+MB_FADER_HANDLE_X_OFFSET = 0.0   # nudge left(−) / right(+)
+MB_FADER_HANDLE_Y_OFFSET = 0.0   # nudge down(−) / up(+)
 
 # Per-knob offsets [band_0..band_3] — each entry is (x_offset, y_offset) in unscaled px
 # Thr, Ratio, Knee = top row;  Atk, Rel, Gain = bottom row
@@ -377,15 +383,16 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         _draw_text(lbl, dx - tw_cr/2, spec_y + spec_h + 2*scale,
                    fs_cr, (0.4, 0.4, 0.4, 1.0))
 
-    for hz_mark, lbl_mark in [(20,"20"),(50,"50"),(100,"100"),(200,"200"),
-                               (500,"500"),(1000,"1k"),(2000,"2k"),
-                               (5000,"5k"),(10000,"10k"),(20000,"20k")]:
-        mx   = _freq_to_x(hz_mark)
-        fs_m = max(1, int(6*scale))
-        tw_m = _text_width(lbl_mark, fs_m)
-        if spec_x + 4*scale <= mx <= spec_x + spec_w - 4*scale:
-            _draw_text(lbl_mark, mx - tw_m/2, spec_y + spec_h + 10*scale,
-                       fs_m, (0.28, 0.28, 0.28, 1.0))
+    if MB_SHOW_FREQ_AXIS:
+        for hz_mark, lbl_mark in [(20,"20"),(50,"50"),(100,"100"),(200,"200"),
+                                   (500,"500"),(1000,"1k"),(2000,"2k"),
+                                   (5000,"5k"),(10000,"10k"),(20000,"20k")]:
+            mx   = _freq_to_x(hz_mark)
+            fs_m = max(1, int(6*scale))
+            tw_m = _text_width(lbl_mark, fs_m)
+            if spec_x + 4*scale <= mx <= spec_x + spec_w - 4*scale:
+                _draw_text(lbl_mark, mx - tw_m/2, spec_y + spec_h + 10*scale,
+                           fs_m, (0.28, 0.28, 0.28, 1.0))
 
     # ----------------------------------------------------------------
     # SETTINGS-DRIVEN RESPONSE CURVE OVERLAY
@@ -573,11 +580,30 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         # Handle
         handle_h = max(8*scale, fdr_h * 0.07)
         handle_y = fdr_y + gain_norm * (fdr_h - handle_h)
-        _draw_rect(fdr_x, handle_y, fdr_w, handle_h,
-                   (col[0]*0.85, col[1]*0.85, col[2]*0.85, 1.0))
-        _draw_rect(fdr_x, handle_y + handle_h/2 - max(0.5,scale*0.5),
-                   fdr_w, max(1.0, scale),
-                   (min(1.0,col[0]*1.4), min(1.0,col[1]*1.4), min(1.0,col[2]*1.4), 1.0))
+
+        # Fader handle — try band-specific PNG, fall back to coloured rect
+        _mb_fader_keys = ["rack_mb_fader_low", "rack_mb_fader_lmid",
+                          "rack_mb_fader_hmid", "rack_mb_fader_high"]
+        try:
+            from ui.mixer.texture_cache import get_texture as _gtc_fdr
+            from ui.mixer.texture_cache import blit_texture as _blt_fdr
+            _fdr_tex = _gtc_fdr(_mb_fader_keys[band])
+        except Exception:
+            _fdr_tex = None
+
+        if _fdr_tex:
+            _fdr_s_w = fdr_w  * MB_FADER_HANDLE_SCALE
+            _fdr_s_h = handle_h * MB_FADER_HANDLE_SCALE
+            _fdr_bx  = fdr_x   + (fdr_w   - _fdr_s_w) / 2 + MB_FADER_HANDLE_X_OFFSET * scale
+            _fdr_by  = handle_y + (handle_h - _fdr_s_h) / 2 + MB_FADER_HANDLE_Y_OFFSET * scale
+            _blt_fdr(_fdr_tex, _fdr_bx, _fdr_by, _fdr_s_w, _fdr_s_h,
+                     key=_mb_fader_keys[band])
+        else:
+            _draw_rect(fdr_x, handle_y, fdr_w, handle_h,
+                       (col[0]*0.85, col[1]*0.85, col[2]*0.85, 1.0))
+            _draw_rect(fdr_x, handle_y + handle_h/2 - max(0.5,scale*0.5),
+                       fdr_w, max(1.0, scale),
+                       (min(1.0,col[0]*1.4), min(1.0,col[1]*1.4), min(1.0,col[2]*1.4), 1.0))
 
         # GR meter — slim bar to the right of the gain fader
         # Shows live gain reduction for this band, 0dB at top filling downward
@@ -684,5 +710,12 @@ def _draw_multiband_body(rx, ry, rw, rh, rack, rack_idx, scale):
         print(traceback.format_exc())
 
     # ── Full-rack PNG blit — drawn LAST so it paints over body content.
-
-
+    # Glass overlay — composited on top of spectrum/knobs/faders, same rect as body PNG
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_gl
+        from ui.mixer.texture_cache import blit_texture as _blt_gl
+        _gl_tex = _gtc_gl("rack_comp_multi_glass")
+        if _gl_tex:
+            _blt_gl(_gl_tex, rx, ry, rw, rh, key="rack_comp_multi_glass", blend="ALPHA")
+    except Exception:
+        pass
