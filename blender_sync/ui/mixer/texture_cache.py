@@ -80,7 +80,18 @@ SKIN_MAP = {
     "rack_reverb_bg":      "rack_reverb_bg.png",
     "rack_noisegate_bg":   "rack_noisegate_bg.png",
     "rack_delay_bg":       "rack_delay_bg.png",
-    "rack_booster_bg":     "rack_booster_bg.png",
+    "rack_booster_bg":         "rack_booster_bg.png",
+    "rack_booster_btn_on":     "booster__button.png",
+    "rack_booster_led_green":  "booster_Green__LED.png",   # 17x43px — IN meter
+    "rack_booster_led_orange": "booster_Orange__LED.png",  # 17x43px — OUT meter
+    # ---------------------------------------------------------------------------
+    # Rack on/off + close buttons — universal across all racks.
+    # RackOff.png: OFF button + close X side by side (100x38px)
+    # RackOn.png:  ON button only, blank space where close X would be (100x38px)
+    # Draw order: RackOff always, then RackOn on top if rack.enabled.
+    # ---------------------------------------------------------------------------
+    "rack_btn_off":          "RackOff.png",
+    "rack_btn_on":           "RackOn.png",
     "rack_mixdown_bg":     "rack_mixdown_bg.png",
     "rack_knnvc_bg":       "rack_knnvc_bg.png",
     "rack_demucs_bg":      "rack_demucs_bg.png",

@@ -41,6 +41,46 @@ RACK_COLLAPSED_H    = 48
 RACK_RAIL_H         = 32
 RACK_GAP            = 8
 
+# On/Off + Close button PNG size tuning.
+# The source PNG is 100×38px — RACK_BTN_SCALE shrinks/grows the blit.
+# 1.0 = full size, 0.6 = 60×23px (fits neatly inside a 32px rail).
+RACK_BTN_SCALE = 0.7
+# Derived unscaled sizes used by both draw and hitbox code
+RACK_BTN_W = 100 * RACK_BTN_SCALE   # unscaled px
+RACK_BTN_H = 38  * RACK_BTN_SCALE   # unscaled px
+
+# Position nudge — unscaled px, applied to both blit and hitboxes.
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+RACK_BTN_X_OFFSET = -5.0
+RACK_BTN_Y_OFFSET = -2.0
+
+# ---------------------------------------------------------------------------
+# HITBOX TUNING — independent of the PNG blit size/position.
+# Adjust these to make the clickable areas match the visual buttons exactly.
+#
+# RACK_HB_W            : total hitbox width  (unscaled px)
+# RACK_HB_H            : total hitbox height (unscaled px)
+# RACK_HB_X_OFFSET     : nudge hitbox left/right (unscaled px)
+# RACK_HB_Y_OFFSET     : nudge hitbox up/down    (unscaled px)
+# RACK_BTN_ONOFF_SPLIT : fraction of RACK_HB_W where ON/OFF ends / close X begins
+# ---------------------------------------------------------------------------
+RACK_HB_W        = 65.0   # hitbox width  (unscaled px) — tune independently of PNG size
+RACK_HB_H        = 22.8   # hitbox height (unscaled px) — tune independently of PNG size
+RACK_HB_X_OFFSET = -7.0
+RACK_HB_Y_OFFSET = 0.0
+
+# Fraction of RACK_HB_W where ON/OFF ends and close X begins.
+# 0.60 = ON/OFF takes left 60%, close X takes right 40%.
+RACK_BTN_ONOFF_SPLIT = 0.70
+
+# ---------------------------------------------------------------------------
+# DEBUG — set True to draw coloured outlines over the ON/OFF and close X
+# hitboxes so you can align them precisely. Green = ON/OFF, Red = close X.
+# Set False when done tuning.
+# ---------------------------------------------------------------------------
+RACK_BTN_DEBUG = False
+
 SPEC_H          = 200
 SPEC_W          = 480
 SPEC_X          = 430
@@ -400,13 +440,19 @@ def _draw_channel_buttons(rx, ry, rack, scale):
 
     ch0–ch8 are LOCAL indices within the rack's group.
     The label shows the absolute VSE channel number (group_idx*9 + local + 1).
+
+    For racks with channel buttons baked into the background PNG
+    (currently DELAY), only the number is drawn — no PNG blit or rect,
+    just the channel number in assigned/unassigned colour.
     """
     btn_s = CH_BTN_SIZE * scale
     gap   = 4 * scale
     fs    = max(1, int(10*scale))
 
-    group_idx = getattr(rack, 'group_idx', 0)
-    offset    = group_idx * 9   # absolute VSE channel offset
+    group_idx   = getattr(rack, 'group_idx', 0)
+    offset      = group_idx * 9
+    etype       = getattr(rack, 'effect_type', '')
+    number_only = True  # all racks now have channel buttons baked into background PNG
 
     shader = _get_shader()
     for local_idx in range(9):
@@ -418,39 +464,43 @@ def _draw_channel_buttons(rx, ry, rack, scale):
         attr     = f'ch{local_idx}'
         assigned = getattr(rack, attr, False)
 
-        # Try PNG skin — per-rack override first, then universal default
-        try:
-            from ui.mixer.texture_cache import get_texture_with_fallback as _gtf
-            from ui.mixer.texture_cache import blit_texture as _blt_btn
-            _etype_btn = getattr(rack, 'effect_type', '').lower()
-            _state     = 'on' if assigned else 'off'
-            _btn_tex, _used_key = _gtf(
-                f"rack_{_etype_btn}_ch_btn_{_state}",
-                f"rack_ch_btn_{_state}",
-            )
-        except Exception:
-            _btn_tex, _used_key = None, None
-
-        if _btn_tex:
-            _png_s = btn_s * CH_BTN_PNG_SCALE
-            _png_x = bx + (btn_s - _png_s) / 2 + CH_BTN_PNG_X_OFFSET * scale
-            _png_y = by + (btn_s - _png_s) / 2 + CH_BTN_PNG_Y_OFFSET * scale
-            _blt_btn(_btn_tex, _png_x, _png_y, _png_s, _png_s, key=_used_key)
+        if number_only:
+            # Background baked into PNG — just draw the number in the right colour
             tc = (0.9, 0.9, 0.9, 1.0) if assigned else (0.4, 0.4, 0.4, 1.0)
         else:
-            # Fallback — solid rect + border
-            if assigned:
-                bg = (0.0, 0.18, 0.10, 1.0)
-                bc = (0.0, 0.75, 0.45, 1.0)
-                tc = (0.0, 0.85, 0.55, 1.0)
+            # Try PNG skin — per-rack override first, then universal default
+            try:
+                from ui.mixer.texture_cache import get_texture_with_fallback as _gtf
+                from ui.mixer.texture_cache import blit_texture as _blt_btn
+                _etype_btn = etype.lower()
+                _state     = 'on' if assigned else 'off'
+                _btn_tex, _used_key = _gtf(
+                    f"rack_{_etype_btn}_ch_btn_{_state}",
+                    f"rack_ch_btn_{_state}",
+                )
+            except Exception:
+                _btn_tex, _used_key = None, None
+
+            if _btn_tex:
+                _png_s = btn_s * CH_BTN_PNG_SCALE
+                _png_x = bx + (btn_s - _png_s) / 2 + CH_BTN_PNG_X_OFFSET * scale
+                _png_y = by + (btn_s - _png_s) / 2 + CH_BTN_PNG_Y_OFFSET * scale
+                _blt_btn(_btn_tex, _png_x, _png_y, _png_s, _png_s, key=_used_key)
+                tc = (0.9, 0.9, 0.9, 1.0) if assigned else (0.4, 0.4, 0.4, 1.0)
             else:
-                bg = (0.07, 0.07, 0.07, 1.0)
-                bc = (0.2,  0.2,  0.2,  1.0)
-                tc = (0.2,  0.2,  0.2,  1.0)
-            _draw_rect(bx, by, btn_s, btn_s, bg)
-            verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
-            batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
-            shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
+                # Fallback — solid rect + border
+                if assigned:
+                    bg = (0.0, 0.18, 0.10, 1.0)
+                    bc = (0.0, 0.75, 0.45, 1.0)
+                    tc = (0.0, 0.85, 0.55, 1.0)
+                else:
+                    bg = (0.07, 0.07, 0.07, 1.0)
+                    bc = (0.2,  0.2,  0.2,  1.0)
+                    tc = (0.2,  0.2,  0.2,  1.0)
+                _draw_rect(bx, by, btn_s, btn_s, bg)
+                verts = [(bx,by),(bx+btn_s,by),(bx+btn_s,by+btn_s),(bx,by+btn_s),(bx,by)]
+                batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
+                shader.bind(); shader.uniform_float("color", bc); batch.draw(shader)
 
         # Channel number label always drawn on top
         label = str(offset + local_idx + 1)
@@ -648,7 +698,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     # --- TOP RAIL INTERACTIVE ELEMENTS (drawn last, always on top) ---
 
     # Corner screws — suppressed for racks with PNG skins that include them
-    if etype != "COMP_MULTI":
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):
         for sx2, sy2 in [(rx+14*scale, ry+rh-16*scale),
                          (rx+rw-14*scale, ry+rh-16*scale),
                          (rx+14*scale, ry+14*scale),
@@ -658,62 +708,35 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
             _draw_line(sx2-3*scale, sy2, sx2+3*scale, sy2, (0.3,0.3,0.3,0.8))
             _draw_line(sx2, sy2-3*scale, sx2, sy2+3*scale, (0.3,0.3,0.3,0.8))
 
-    # --- COLLAPSE ARROW — dedicated button, far left of rail ---
-    # Clear ▲ icon in its own 28px zone so it's always visible and clickable
+    # --- COLLAPSE ARROW — baked into background PNG, only position needed for hitbox ---
     col_btn_x = rx + 4*scale
     col_btn_y = ry + rh - 28*scale
     col_btn_w = 24*scale
     col_btn_h = 20*scale
-    _draw_rect(col_btn_x, col_btn_y, col_btn_w, col_btn_h, (0.10, 0.10, 0.12, 1.0))
-    col_bverts = [(col_btn_x, col_btn_y), (col_btn_x+col_btn_w, col_btn_y),
-                  (col_btn_x+col_btn_w, col_btn_y+col_btn_h),
-                  (col_btn_x, col_btn_y+col_btn_h), (col_btn_x, col_btn_y)]
-    col_bb = batch_for_shader(shader, "LINE_STRIP", {"pos": col_bverts})
-    shader.bind(); shader.uniform_float("color", (0.35, 0.35, 0.40, 1.0))
-    col_bb.draw(shader)
-    # ▲ triangle pointing up — indicates click to collapse
-    ax = col_btn_x + col_btn_w * 0.5
-    ay = col_btn_y + col_btn_h * 0.5
-    arrow = [(ax - 5*scale, ay - 3*scale),
-             (ax + 5*scale, ay - 3*scale),
-             (ax,           ay + 5*scale)]
-    batch = batch_for_shader(shader, "TRIS", {"pos": arrow})
-    shader.uniform_float("color", (0.65, 0.65, 0.70, 1.0)); batch.draw(shader)
+    # rect, border and triangle suppressed — baked into background PNG
 
     # --- RACK NUMBER BADGE + EFFECT NAME ---
-    # Badge starts after the collapse button — no overlap
-    etype  = rack.effect_type
-    enames = dict(EFFECT_TYPES)
-    ename  = enames.get(etype, etype)
+    etype   = rack.effect_type
+    enames  = dict(EFFECT_TYPES)
+    ename   = enames.get(etype, etype)
     fs_name = max(1, int(11*scale))
 
     badge_label = str(rack_idx + 1)
     badge_fs    = max(1, int(13*scale))
-    badge_x     = col_btn_x + col_btn_w + 4*scale   # starts after collapse button
+    badge_x     = col_btn_x + col_btn_w + 4*scale
     badge_y     = ry + rh - 28*scale
     badge_w     = max(22*scale, _text_width(badge_label, badge_fs) + 12*scale)
     badge_h     = 20*scale
 
-    badge_open  = _reorder_open and _reorder_rack_idx == rack_idx
-    badge_bg    = (0.2, 0.45, 0.75, 1.0) if badge_open else (0.12, 0.25, 0.45, 1.0)
-    _draw_rect(badge_x, badge_y, badge_w, badge_h, badge_bg)
-    bverts = [(badge_x, badge_y), (badge_x+badge_w, badge_y),
-              (badge_x+badge_w, badge_y+badge_h),
-              (badge_x, badge_y+badge_h), (badge_x, badge_y)]
-    bb2 = batch_for_shader(shader, "LINE_STRIP", {"pos": bverts})
-    shader.bind()
-    shader.uniform_float("color", (0.35, 0.7, 1.0, 0.7))
-    bb2.draw(shader)
+    # Badge rect, border and dropdown arrow suppressed — baked into background PNG
+    # Only draw the number text
     tw_b = _text_width(badge_label, badge_fs)
     _draw_text(badge_label, badge_x + badge_w/2 - tw_b/2,
                badge_y + badge_h/2 - badge_fs/2,
                badge_fs, (0.35, 0.7, 1.0, 1.0))
-    arr_fs = max(1, int(8*scale))
-    _draw_text("▾", badge_x + badge_w - 10*scale,
-               badge_y + 2*scale, arr_fs, (0.35, 0.7, 1.0, 0.8))
     badge_w = badge_w + 6*scale
 
-    if etype not in ("COMP_MULTI", "COMP_SINGLE"):  # suppressed — label baked into background PNG
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):  # suppressed — label baked into background PNG
         _draw_text(ename.upper(),
                    badge_x + badge_w,
                    ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
@@ -746,45 +769,60 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     batch = batch_for_shader(shader,"TRIS",{"pos":ra})
     shader.uniform_float("color",(0.4,0.4,0.4,1.0)); batch.draw(shader)
 
-    # --- DELETE BUTTON ---
-    del_x = rx + rw - 26*scale
-    del_y = ry + rh - 27*scale
-    del_w = 18*scale
-    del_h = 16*scale
-    _draw_rect(del_x, del_y, del_w, del_h, (0.18, 0.04, 0.04, 1.0))
-    shader2 = _get_shader()
-    dv = [(del_x,del_y),(del_x+del_w,del_y),
-          (del_x+del_w,del_y+del_h),(del_x,del_y+del_h),(del_x,del_y)]
-    db = batch_for_shader(shader2,"LINE_STRIP",{"pos":dv})
-    shader2.bind(); shader2.uniform_float("color",(0.6,0.1,0.1,1.0)); db.draw(shader2)
-    fs_del = max(1, int(9*scale))
-    tw_del = _text_width("X", fs_del)
-    _draw_text("X", del_x+del_w/2-tw_del/2, del_y+del_h/2-fs_del/2+1,
-               fs_del, (0.8, 0.15, 0.15, 1.0))
+    # --- ON/OFF + CLOSE BUTTONS (PNG) ---
+    # RackOff.png (100×38px source): OFF button + close X — always drawn when expanded
+    # RackOn.png  (100×38px source): ON button only — drawn on top if enabled
+    _btn_w = RACK_BTN_W * scale
+    _btn_h = RACK_BTN_H * scale
+    _btn_x = rx + rw - _btn_w + RACK_BTN_X_OFFSET * scale
+    _btn_y = ry + rh - (RACK_RAIL_H * scale + _btn_h) / 2 + RACK_BTN_Y_OFFSET * scale
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_btn
+        from ui.mixer.texture_cache import blit_texture as _blt_btn
+        _tex_off = _gtc_btn("rack_btn_off")
+        if _tex_off:
+            _blt_btn(_tex_off, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_off")
+        else:
+            # GPU fallback — delete button
+            _draw_rect(del_x := rx+rw-26*scale, del_y := ry+rh-27*scale, 18*scale, 16*scale, (0.18,0.04,0.04,1.0))
+            fs_del = max(1, int(9*scale)); tw_del = _text_width("X", fs_del)
+            _draw_text("X", del_x+9*scale-tw_del/2, del_y+8*scale-fs_del/2+1, fs_del, (0.8,0.15,0.15,1.0))
+            # on/off fallback
+            _ox = rx+rw-68*scale; _oy = ry+rh-27*scale
+            _draw_rect(_ox, _oy, 40*scale, 16*scale,
+                       (0.0,0.13,0.0,1.0) if rack.enabled else (0.13,0.0,0.0,1.0))
+        if rack.enabled:
+            _tex_on = _gtc_btn("rack_btn_on")
+            if _tex_on:
+                _blt_btn(_tex_on, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_on")
+    except Exception:
+        pass
 
-    # --- ON/BYPASS BUTTON ---
-    on_x = rx + rw - 68*scale
-    on_y = ry + rh - 27*scale
-    on_w = 40*scale
-    on_h = 16*scale
-    if rack.enabled:
-        _draw_rect(on_x, on_y, on_w, on_h, (0.0, 0.13, 0.0, 1.0))
-        on_col = (0.0, 0.65, 0.3, 1.0)
-        on_txt = "ON"
-    else:
-        _draw_rect(on_x, on_y, on_w, on_h, (0.13, 0.0, 0.0, 1.0))
-        on_col = (0.65, 0.0, 0.0, 1.0)
-        on_txt = "OFF"
-    verts = [(on_x,on_y),(on_x+on_w,on_y),
-             (on_x+on_w,on_y+on_h),(on_x,on_y+on_h),(on_x,on_y)]
-    batch = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
-    shader.uniform_float("color", on_col); batch.draw(shader)
-    fs_on = max(1, int(9*scale))
-    tw    = _text_width(on_txt, fs_on)
-    _draw_text(on_txt, on_x+on_w/2-tw/2, on_y+on_h/2-fs_on/2+1,
-               fs_on, on_col)
+    # Debug outlines — green = ON/OFF hitbox, red = close X hitbox
+    if RACK_BTN_DEBUG:
+        try:
+            _sd = _get_shader()
+            _split = RACK_BTN_ONOFF_SPLIT
+            _hbw = RACK_HB_W * scale
+            _hbh = RACK_HB_H * scale
+            _hbx = rx + rw - _hbw + RACK_HB_X_OFFSET * scale
+            _hby = ry + rh - (RACK_RAIL_H * scale + _hbh) / 2 + RACK_HB_Y_OFFSET * scale
+            # ON/OFF zone (left portion)
+            _ox1, _ox2 = _hbx, _hbx + _hbw * _split
+            _oy1, _oy2 = _hby, _hby + _hbh
+            _sd.bind(); _sd.uniform_float("color", (0.0, 1.0, 0.0, 1.0))
+            batch_for_shader(_sd, "LINE_STRIP", {"pos": [
+                (_ox1,_oy1),(_ox2,_oy1),(_ox2,_oy2),(_ox1,_oy2),(_ox1,_oy1)]}).draw(_sd)
+            # Close X zone (right portion)
+            _cx1, _cx2 = _hbx + _hbw * _split, _hbx + _hbw
+            _sd.uniform_float("color", (1.0, 0.0, 0.0, 1.0))
+            batch_for_shader(_sd, "LINE_STRIP", {"pos": [
+                (_cx1,_oy1),(_cx2,_oy1),(_cx2,_oy2),(_cx1,_oy2),(_cx1,_oy1)]}).draw(_sd)
+        except Exception:
+            pass
+    on_h  = 16*scale
 
-    if etype != "COMP_MULTI":
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):
         _draw_text("CHANNELS", ch_right_x + 10*scale,
                    ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
 
@@ -822,32 +860,17 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     shader.uniform_float("color",(0.25,0.25,0.25,1.0))
     batch.draw(shader)
 
-    # Corner screws
-    for sx2, sy2 in [(rx+12*scale, cy), (rx+rw-12*scale, cy)]:
-        _draw_circle(sx2, sy2, 3*scale, (0.07,0.07,0.07,1.0))
-        _draw_circle(sx2, sy2, 3*scale, (0.28,0.28,0.28,1.0), filled=False)
-        _draw_line(sx2-2*scale, sy2, sx2+2*scale, sy2, (0.28,0.28,0.28,0.8))
-        _draw_line(sx2, sy2-2*scale, sx2, sy2+2*scale, (0.28,0.28,0.28,0.8))
+    # Corner screws suppressed — baked into background PNG
 
-    # Expand arrow (▶)
-    ax = rx + 26*scale
-    arrow = [(ax-5*scale, cy+5*scale), (ax-5*scale, cy-5*scale), (ax+5*scale, cy)]
-    batch = batch_for_shader(shader,"TRIS",{"pos":arrow})
-    shader.uniform_float("color",(0.45,0.45,0.45,1.0)); batch.draw(shader)
+    # Expand arrow suppressed — baked into background PNG
 
-    # Badge number + effect name (left side)
+    # Badge number only — rect, border and effect name suppressed (baked into PNG)
     etype       = rack.effect_type
-    enames      = dict(EFFECT_TYPES)
-    ename       = enames.get(etype, etype)
     badge_fs    = max(1, int(12*scale))
-    name_fs     = max(1, int(10*scale))
     badge_label = str(rack_idx + 1)
     badge_x     = rx + 38*scale
     _draw_text(badge_label, badge_x, cy - badge_fs/2,
                badge_fs, (0.35, 0.7, 1.0, 1.0))
-    badge_w = _text_width(badge_label, badge_fs) + 5*scale
-    _draw_text(ename.upper(), badge_x + badge_w, cy - name_fs/2,
-               name_fs, (0.6, 0.6, 0.6, 1.0))
 
     # ── Right-side controls — same pixel sizes as expanded rack, centred in row ──
     # Expanded rack reference: X = 18×16, ON/OFF = 40×16, ch badges = 26×26 (CH_BTN_SIZE)
@@ -855,36 +878,52 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     btn_y    = cy - btn_h / 2
     ch_size  = CH_BTN_SIZE * scale   # 26px — square channel badges, same as expanded
 
-    # [X] delete — rightmost (18×16, matching expanded)
-    del_w  = 18*scale
-    del_x  = rx + rw - 22*scale
-    _draw_rect(del_x, btn_y, del_w, btn_h, (0.18,0.04,0.04,1.0))
-    sd = _get_shader()
-    dv = [(del_x,btn_y),(del_x+del_w,btn_y),(del_x+del_w,btn_y+btn_h),(del_x,btn_y+btn_h),(del_x,btn_y)]
-    sd.bind(); sd.uniform_float("color",(0.6,0.1,0.1,1.0))
-    batch_for_shader(sd,"LINE_STRIP",{"pos":dv}).draw(sd)
-    fs_x = max(1, int(9*scale))
-    tw_x = _text_width("X", fs_x)
-    _draw_text("X", del_x+del_w/2-tw_x/2, btn_y+btn_h/2-fs_x/2+1, fs_x, (0.8,0.15,0.15,1.0))
+    # [ON/OFF + CLOSE] PNG buttons — same PNGs as expanded, centred in collapsed rail
+    _btn_w = RACK_BTN_W * scale
+    _btn_h = RACK_BTN_H * scale
+    _btn_x = rx + rw - _btn_w + RACK_BTN_X_OFFSET * scale
+    _btn_y = cy - _btn_h / 2  + RACK_BTN_Y_OFFSET * scale
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_cbtn
+        from ui.mixer.texture_cache import blit_texture as _blt_cbtn
+        _tex_coff = _gtc_cbtn("rack_btn_off")
+        if _tex_coff:
+            _blt_cbtn(_tex_coff, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_off")
+        else:
+            # GPU fallback
+            _draw_rect(rx+rw-22*scale, btn_y := cy-8*scale, 18*scale, 16*scale, (0.18,0.04,0.04,1.0))
+            fs_xf = max(1, int(9*scale)); tw_xf = _text_width("X", fs_xf)
+            _draw_text("X", rx+rw-13*scale-tw_xf/2, cy-fs_xf/2+1, fs_xf, (0.8,0.15,0.15,1.0))
+            _onx = rx+rw-66*scale
+            _draw_rect(_onx, cy-8*scale, 40*scale, 16*scale,
+                       (0.0,0.13,0.0,1.0) if rack.enabled else (0.13,0.0,0.0,1.0))
+        if rack.enabled:
+            _tex_con = _gtc_cbtn("rack_btn_on")
+            if _tex_con:
+                _blt_cbtn(_tex_con, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_on")
+    except Exception:
+        pass
 
-    # [ON/OFF] button — left of delete (40×16, matching expanded)
-    onoff_w = 40*scale
-    onoff_x = del_x - onoff_w - 4*scale
-    if rack.enabled:
-        _draw_rect(onoff_x, btn_y, onoff_w, btn_h, (0.0, 0.13, 0.0, 1.0))
-        on_col = (0.0, 0.65, 0.3, 1.0)
-        on_txt = "ON"
-    else:
-        _draw_rect(onoff_x, btn_y, onoff_w, btn_h, (0.13, 0.0, 0.0, 1.0))
-        on_col = (0.65, 0.0, 0.0, 1.0)
-        on_txt = "OFF"
-    so = _get_shader()
-    ov = [(onoff_x,btn_y),(onoff_x+onoff_w,btn_y),(onoff_x+onoff_w,btn_y+btn_h),(onoff_x,btn_y+btn_h),(onoff_x,btn_y)]
-    so.bind(); so.uniform_float("color", on_col)
-    batch_for_shader(so,"LINE_STRIP",{"pos":ov}).draw(so)
-    fs_on = max(1, int(9*scale))
-    tw_on = _text_width(on_txt, fs_on)
-    _draw_text(on_txt, onoff_x+onoff_w/2-tw_on/2, btn_y+btn_h/2-fs_on/2+1, fs_on, on_col)
+    # Debug outlines — green = ON/OFF hitbox, red = close X hitbox
+    if RACK_BTN_DEBUG:
+        try:
+            _sd = _get_shader()
+            _split = RACK_BTN_ONOFF_SPLIT
+            _hbw = RACK_HB_W * scale
+            _hbh = RACK_HB_H * scale
+            _hbx = rx + rw - _hbw + RACK_HB_X_OFFSET * scale
+            _hby = cy - _hbh / 2 + RACK_HB_Y_OFFSET * scale
+            _ox1, _ox2 = _hbx, _hbx + _hbw * _split
+            _oy1, _oy2 = _hby, _hby + _hbh
+            _sd.bind(); _sd.uniform_float("color", (0.0, 1.0, 0.0, 1.0))
+            batch_for_shader(_sd, "LINE_STRIP", {"pos": [
+                (_ox1,_oy1),(_ox2,_oy1),(_ox2,_oy2),(_ox1,_oy2),(_ox1,_oy1)]}).draw(_sd)
+            _cx1, _cx2 = _hbx + _hbw * _split, _hbx + _hbw
+            _sd.uniform_float("color", (1.0, 0.0, 0.0, 1.0))
+            batch_for_shader(_sd, "LINE_STRIP", {"pos": [
+                (_cx1,_oy1),(_cx2,_oy1),(_cx2,_oy2),(_cx1,_oy2),(_cx1,_oy1)]}).draw(_sd)
+        except Exception:
+            pass
 
     # Channel assignment badges — left of ON/OFF (26×26 squares, matching expanded)
     assigned = get_rack_channels(rack)

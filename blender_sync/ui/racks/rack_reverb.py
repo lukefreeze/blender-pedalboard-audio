@@ -40,6 +40,36 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
+# =============================================================================
+# REVERB KNOB TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+#
+# RV_KNOB_SCALE  : size multiplier for all 5 knobs (1.0 = no change)
+# RV_KNOB_X      : per-knob X nudge [Room, Damp, Wet, Pre-dly, Width]
+# RV_KNOB_Y      : per-knob Y nudge [Room, Damp, Wet, Pre-dly, Width]
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+# =============================================================================
+RV_KNOB_SCALE = 1.0
+#                    Room   Damp    Wet  Pre-dly  Width
+RV_KNOB_X    = [    0.0,   0.0,   0.0,    0.0,   0.0]
+RV_KNOB_Y    = [    0.0,   0.0,   0.0,    0.0,   0.0]
+
+# Value text nudge — shifts all 5 knob value readouts vertically.
+# Negative = move down, positive = move up.
+RV_VALUE_Y_OFFSET = -2.0
+
+# =============================================================================
+# GRAPH CROP — unscaled px inset from each edge of the computed display rect.
+# Increase to pull the waveform/tail drawing away from background elements.
+# RV_CROP_LEFT / RIGHT crop the horizontal extent.
+# RV_CROP_TOP  / BOTTOM crop the vertical extent.
+# =============================================================================
+RV_CROP_LEFT   = 2.0
+RV_CROP_RIGHT  = 2.0
+RV_CROP_TOP    = 2.0
+RV_CROP_BOTTOM = 2.0
+
 
 def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     """Draw the reverb rack body — Option C style.
@@ -61,10 +91,15 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rail_h      = RACK_RAIL_H * ui_scale
     body_h      = rh - rail_h
 
-    # ── Skin background
+    # ── Skin background — full rack height (rail/title now baked into PNG)
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_reverb_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_rv
+        from ui.mixer.texture_cache import blit_texture as _blt_rv
+        _rv_tex = _gtc_rv("rack_reverb_bg")
+        if _rv_tex:
+            _blt_rv(_rv_tex, rx, ry, rw, rh, key="rack_reverb_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     except Exception:
         _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
@@ -72,11 +107,11 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     margin_l    = 42 * ui_scale
     ch_btn_w    = 108 * ui_scale
     margin_r    = ch_btn_w + 8 * ui_scale
-    disp_x      = rx + margin_l
-    disp_w      = rw - margin_l - margin_r
+    disp_x      = rx + margin_l        + RV_CROP_LEFT   * ui_scale
+    disp_w      = rw - margin_l - margin_r - (RV_CROP_LEFT + RV_CROP_RIGHT) * ui_scale
     disp_prop   = 0.56          # display takes 56% of body height
-    disp_h      = body_h * disp_prop - 4 * ui_scale
-    disp_y      = ry + body_h - disp_h - 2 * ui_scale  # top of body
+    disp_h      = body_h * disp_prop - 4 * ui_scale - (RV_CROP_TOP + RV_CROP_BOTTOM) * ui_scale
+    disp_y      = ry + body_h - disp_h - 2 * ui_scale - RV_CROP_TOP * ui_scale  # top of body
 
     # Knob strip sits at the bottom of the body
     knob_h      = body_h * 0.42 - 4 * ui_scale
@@ -303,7 +338,7 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     col_w    = disp_w / N_KNOBS
     row_slot = knob_h / 3.0
     row_knob = knob_y + knob_h - row_slot * 1.3
-    kr       = min(max(13*ui_scale, col_w*0.16), 20*ui_scale)
+    kr       = min(max(13*ui_scale, col_w*0.16), 20*ui_scale) * RV_KNOB_SCALE
     kr       = min(kr, row_slot * 0.42)
 
     RV_KNOB_PARAMS = ["Room", "Damp", "Wet", "Pre-dly", "Width"]
@@ -311,11 +346,10 @@ def _draw_reverb_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rv_col  = (0.35, 0.65, 0.90)
 
     for ki in range(N_KNOBS):
-        cx = disp_x + (ki + 0.5) * col_w
+        cx = disp_x + (ki + 0.5) * col_w + RV_KNOB_X[ki] * ui_scale
+        cy = row_knob + RV_KNOB_Y[ki] * ui_scale
         val = rv_vals[ki]
         pct_str = f"{int(val*100)}%"
-        _draw_knob(cx, row_knob, kr, val, rv_col,
-                   RV_KNOB_PARAMS[ki], pct_str, ui_scale)
-
-
-
+        _draw_knob(cx, cy, kr, val, rv_col,
+                   "", pct_str, ui_scale,  # label suppressed — baked into background PNG
+                   value_y_offset=RV_VALUE_Y_OFFSET)

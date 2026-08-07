@@ -40,6 +40,50 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
+# =============================================================================
+# PARAMETRIC EQ KNOB TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+#
+# EQ_KNOB_SCALE      : size multiplier for all knobs (1.0 = no change)
+#                      affects kr_gain and kr_small proportionally
+# EQ_KNOB_X_OFFSET   : shifts the entire knob strip left/right
+#                      (moves all 7 columns together)
+# EQ_KNOB_Y_LABEL    : Y nudge for the band label row  (L/1/2/3/4/5/H)
+# EQ_KNOB_Y_GAIN     : Y nudge for the Gain knob row
+# EQ_KNOB_Y_FREQ     : Y nudge for the Freq knob row
+# EQ_KNOB_Y_Q        : Y nudge for the Q/shelf knob row
+#
+# Positive Y moves up, negative moves down.
+# Tune EQ_KNOB_SCALE first, then use the Y nudges per row.
+# =============================================================================
+EQ_KNOB_SCALE    = 0.7
+EQ_KNOB_X_OFFSET = 0.0
+
+# =============================================================================
+# PER-KNOB X/Y NUDGE TABLES
+# Index order matches band order: [L, 1, 2, 3, 4, 5, H]
+# All values unscaled px — multiplied by scale at draw time.
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+#
+# EQ_LABEL_X / EQ_LABEL_Y  : band label (L/1/2/3/4/5/H)
+# EQ_GAIN_X  / EQ_GAIN_Y   : Gain knob
+# EQ_FREQ_X  / EQ_FREQ_Y   : Freq knob
+# EQ_Q_X     / EQ_Q_Y      : Q knob (shelf placeholder for L and H)
+# =============================================================================
+#                       L     1     2     3     4     5     H
+EQ_LABEL_X = [        0.25,  0.25,  0.25,  0.25,  1.0,  1.5,  1.25]
+EQ_LABEL_Y = [        -1.0,  -1.0,  -1.0,  -1.0,  -1.0,  -1.0,  -1.0]
+
+EQ_GAIN_X  = [        -2.0,  -1.0,  -0.5,  0.0,  0.0,  1.0,  2.0]
+EQ_GAIN_Y  = [        -2.0,  -2.0,  -2.0,  -2.0,  -2.0,  -2.0,  -2.0]
+
+EQ_FREQ_X  = [        -0.35,  0.0,  0.0,  0.15,  0.25,  0.75,  1.5]
+EQ_FREQ_Y  = [        -2.35,  -2.35,  -2.35,  -2.35,  -2.35,  -2.35,  -2.35]
+
+EQ_Q_X     = [        -0.25,  0.0,  0.0,  0.0,  0.5,  1.5,  0.0]
+EQ_Q_Y     = [        -2.0,  -2.0,  -2.0,  -2.0,  -2.0,  -2.0,  -2.0]
+
 # EQ frequency/Q scale constants — used by _draw_eq_body helpers
 EQ_FREQ_MIN_LOG = math.log10(20.0)
 EQ_FREQ_MAX_LOG = math.log10(20000.0)
@@ -146,10 +190,15 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     import math as _m
     rail_h = RACK_RAIL_H * scale
     body_h = rh - rail_h
-    # ── Skin background
+    # ── Skin background — full rack height (rail/title now baked into PNG)
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_eq_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_eq
+        from ui.mixer.texture_cache import blit_texture as _blt_eq
+        _eq_tex = _gtc_eq("rack_eq_bg")
+        if _eq_tex:
+            _blt_eq(_eq_tex, rx, ry, rw, rh, key="rack_eq_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     except Exception:
         _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
@@ -431,8 +480,8 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     # Each column (top to bottom): label, Gain knob, Freq knob, Q knob
     # -----------------------------------------------------------------------
     col_w    = disp_w / N_BANDS
-    kr_gain  = min(max(16 * scale, col_w * 0.18), 26 * scale)
-    kr_small = min(max(11 * scale, col_w * 0.13), 18 * scale)
+    kr_gain  = min(max(16 * scale, col_w * 0.18), 26 * scale) * EQ_KNOB_SCALE
+    kr_small = min(max(11 * scale, col_w * 0.13), 18 * scale) * EQ_KNOB_SCALE
 
     # Row layout: place rows evenly within knob_h, top-to-bottom:
     # label → gain knob → freq knob → Q knob
@@ -446,43 +495,44 @@ def _draw_eq_body(rx, ry, rw, rh, rack, rack_idx, scale):
     kr_gain  = min(kr_gain,  row_slot * 0.42)
     kr_small = min(kr_small, row_slot * 0.32)
 
+    # X offset shifts all 7 columns together
+    _eq_x_shift = EQ_KNOB_X_OFFSET * scale
+
     fs_lbl = max(1, int(11 * scale))
 
     for bi in range(N_BANDS):
         gdb_b, fhz_b, q_b, gn_b, fn_b, qn_b = band_params[bi]
         bname_b, bcol_b, bftype_b = EQ7_BANDS[bi][0], EQ7_BANDS[bi][1], EQ7_BANDS[bi][2]
-        col_cx = disp_x + (bi + 0.5) * col_w
+        col_cx = disp_x + (bi + 0.5) * col_w + _eq_x_shift
 
         # Band label
         tw_l = _text_width(bname_b, fs_lbl)
-        _draw_text(bname_b, col_cx - tw_l * 0.5,
-                   row_lbl - fs_lbl, fs_lbl, (*bcol_b, 1.0))
+        _draw_text(bname_b,
+                   col_cx - tw_l * 0.5 + EQ_LABEL_X[bi] * scale,
+                   row_lbl - fs_lbl    + EQ_LABEL_Y[bi] * scale,
+                   fs_lbl, (*bcol_b, 1.0))
 
         # Gain knob
         gain_str = f"{gdb_b:+.1f}dB"
-        _draw_knob(col_cx, row_gain, kr_gain, gn_b, bcol_b,
-                   "Gain", gain_str, scale)
+        _draw_knob(col_cx + EQ_GAIN_X[bi] * scale,
+                   row_gain + EQ_GAIN_Y[bi] * scale,
+                   kr_gain, gn_b, bcol_b, "Gain", gain_str, scale)
 
         # Freq knob
         freq_str = (f"{fhz_b/1000:.2f}k" if fhz_b >= 1000
                     else f"{fhz_b:.0f}Hz")
-        _draw_knob(col_cx, row_freq, kr_small, fn_b, bcol_b,
-                   "Freq", freq_str, scale)
+        _draw_knob(col_cx + EQ_FREQ_X[bi] * scale,
+                   row_freq + EQ_FREQ_Y[bi] * scale,
+                   kr_small, fn_b, bcol_b, "Freq", freq_str, scale)
 
         # Q knob (peaks only)
         if bftype_b == "peak":
             q_str = f"{q_b:.2f}"
-            _draw_knob(col_cx, row_q, kr_small, qn_b, bcol_b,
-                       "Q", q_str, scale)
+            _draw_knob(col_cx + EQ_Q_X[bi] * scale,
+                       row_q   + EQ_Q_Y[bi] * scale,
+                       kr_small, qn_b, bcol_b, "Q", q_str, scale)
         else:
-            _draw_circle(col_cx, row_q, kr_small, (0.09, 0.09, 0.09, 1.0))
-            _draw_circle(col_cx, row_q, kr_small, (0.18, 0.18, 0.18, 1.0),
-                         filled=False)
-            fs_sh = max(1, int(8 * scale))
-            lbl_sh = "shelf"
-            tw_sh  = _text_width(lbl_sh, fs_sh)
-            _draw_text(lbl_sh, col_cx - tw_sh * 0.5,
-                       row_q - fs_sh * 0.5, fs_sh, (0.22, 0.22, 0.22, 1.0))
+            pass  # shelf placeholder suppressed — baked into background PNG
 
         # Column divider
         if bi < N_BANDS - 1:

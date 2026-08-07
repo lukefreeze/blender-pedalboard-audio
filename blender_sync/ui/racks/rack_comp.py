@@ -63,12 +63,12 @@ MB_FADER_HANDLE_Y_OFFSET = 0.0   # nudge down(−) / up(+)
 
 # Per-knob offsets [band_0..band_3] — each entry is (x_offset, y_offset) in unscaled px
 # Thr, Ratio, Knee = top row;  Atk, Rel, Gain = bottom row
-MB_KNOB_THR_OFFSETS  = [(0.0, 0.25), (-1.0, 2.0), (0.0, 0.0), (0.0, 0.0)]
-MB_KNOB_RAT_OFFSETS  = [(0.0, 0.25), (-0.5, 1.0), (0.0, 0.0), (0.0, 0.0)]
-MB_KNOB_KNE_OFFSETS  = [(0.0, 0.25), (-1.0, 1.0), (0.0, 0.0), (0.0, 0.0)]
-MB_KNOB_ATK_OFFSETS  = [(0.0, 1.25), (0.0, 1.25), (0.0, 0.0), (0.0, 0.0)]
-MB_KNOB_REL_OFFSETS  = [(0.0, 1.25), (-0.25, 2.5), (0.0, 0.0), (0.0, 0.0)]
-MB_KNOB_GAN_OFFSETS  = [(0.0, 1.25), (-0.25, 1.5), (0.0, 0.0), (0.0, 0.0)]
+MB_KNOB_THR_OFFSETS  = [(0.0, 0.25), (-1.0, 2.0), (-0.5, 0.0), (-1.0, 0.25)]
+MB_KNOB_RAT_OFFSETS  = [(0.0, 0.25), (-0.5, 1.0), (-0.5, 0.0), (-2.25, -0.25)]
+MB_KNOB_KNE_OFFSETS  = [(0.0, 0.25), (-1.0, 1.0), (-0.5, 0.25), (-2.0, 0.25)]
+MB_KNOB_ATK_OFFSETS  = [(0.0, 1.25), (0.0, 1.25), (-1.0, 0.0), (-1.0, 1.0)]
+MB_KNOB_REL_OFFSETS  = [(0.0, 1.25), (-0.25, 2.5), (-1.0, 0.0), (-2.5, 0.0)]
+MB_KNOB_GAN_OFFSETS  = [(0.0, 1.25), (-0.25, 1.5), (-1.0, 0.0), (-2.25, 1.75)]
 
 # ---------------------------------------------------------------------------
 # Module-level cache for multiband spectrum display.

@@ -40,6 +40,25 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
+# =============================================================================
+# NOISE GATE KNOB TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+#
+# NG_KNOB_SCALE : size multiplier for all 5 knobs (1.0 = no change)
+# NG_KNOB_X     : per-knob X nudge [Threshold, Attack, Hold, Release, Range]
+# NG_KNOB_Y     : per-knob Y nudge [Threshold, Attack, Hold, Release, Range]
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+# =============================================================================
+NG_KNOB_SCALE = 0.95
+#                Threshold  Attack    Hold  Release   Range
+NG_KNOB_X = [      14.25,    12.75,     11.5,    7.25,    -0.5]
+NG_KNOB_Y = [      -12.0,    -12.0,     -12.0,    -12.0,    -12.0]
+
+# Value text nudge — shifts all 5 value readouts independently of the knobs.
+# Negative = move down, positive = move up.
+NG_VALUE_Y_OFFSET = -10.0
+
 # ---------------------------------------------------------------------------
 # Module-level rolling RMS buffer — one per channel, updated every draw call.
 # Gives a scrolling waveform without needing _fft_timeline_full (dead code).
@@ -72,10 +91,15 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     ui     = scale
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
-    # ── Skin background
+    # ── Skin background — full rack height (rail/title now baked into PNG)
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_noisegate_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_ng
+        from ui.mixer.texture_cache import blit_texture as _blt_ng
+        _ng_tex = _gtc_ng("rack_noisegate_bg")
+        if _ng_tex:
+            _blt_ng(_ng_tex, rx, ry, rw, rh, key="rack_noisegate_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     except Exception:
         _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
@@ -412,19 +436,21 @@ def _draw_noisegate_body(rx, ry, rw, rh, rack, rack_idx, scale):
     N  = 5
     cw = disp_w / N
     rk = knob_y + knob_h * 0.68
-    kr = min(max(13*ui, cw * 0.16), 20*ui)
+    kr = min(max(13*ui, cw * 0.16), 20*ui) * NG_KNOB_SCALE
     kr = min(kr, knob_h * 0.42 * 0.42)
 
     knob_defs = [
-        ("Threshold", thr_norm, f"{thr_db:.0f}dB",  (0.88, 0.30, 0.30)),
-        ("Attack",    atk_norm, f"{atk_ms:.0f}ms",  (0.42, 0.55, 1.00)),
-        ("Hold",      hold_norm,f"{hold_ms:.0f}ms", (0.65, 0.55, 0.98)),
-        ("Release",   rel_norm, f"{rel_ms:.0f}ms",  (0.98, 0.45, 0.08)),
-        ("Range",     rng_norm, f"{rng_db:.0f}dB",  (0.50, 0.50, 0.55)),
+        (thr_norm,  f"{thr_db:.0f}dB",  (0.88, 0.30, 0.30)),
+        (atk_norm,  f"{atk_ms:.0f}ms",  (0.42, 0.55, 1.00)),
+        (hold_norm, f"{hold_ms:.0f}ms", (0.65, 0.55, 0.98)),
+        (rel_norm,  f"{rel_ms:.0f}ms",  (0.98, 0.45, 0.08)),
+        (rng_norm,  f"{rng_db:.0f}dB",  (0.50, 0.50, 0.55)),
     ]
-    for ki, (label, val, vstr, col_k) in enumerate(knob_defs):
-        cx = disp_x + (ki + 0.5) * cw
-        _draw_knob(cx, rk, kr, val, col_k, label, vstr, ui)
+    for ki, (val, vstr, col_k) in enumerate(knob_defs):
+        cx = disp_x + (ki + 0.5) * cw + NG_KNOB_X[ki] * ui
+        cy = rk                         + NG_KNOB_Y[ki] * ui
+        _draw_knob(cx, cy, kr, val, col_k, "", vstr, ui,
+                   value_y_offset=NG_VALUE_Y_OFFSET)  # label suppressed — baked into background PNG
 
 
 

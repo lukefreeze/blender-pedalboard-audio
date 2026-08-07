@@ -40,6 +40,25 @@ except ImportError:
 
 RACK_RAIL_H = 32  # duplicated from Racks.py to avoid circular import
 
+# =============================================================================
+# DELAY KNOB TUNING
+# All values are unscaled px — multiplied by scale at draw time.
+#
+# DL_KNOB_SCALE : size multiplier for all 5 knobs (1.0 = no change)
+# DL_KNOB_X     : per-knob X nudge [Time, Feedback, Mix, Spread, Filter]
+# DL_KNOB_Y     : per-knob Y nudge [Time, Feedback, Mix, Spread, Filter]
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+# =============================================================================
+DL_KNOB_SCALE = 0.75
+#                   Time  Feedback   Mix  Spread  Filter
+DL_KNOB_X = [      0.0,    0.0,    -1.0,   -1.0,   -2.0]
+DL_KNOB_Y = [      0.0,    0.0,    0.0,   0.0,   0.0]
+
+# Value text nudge — shifts all 5 value readouts independently of the knobs.
+# Negative = move down, positive = move up.
+DL_VALUE_Y_OFFSET = -4.0
+
 
 def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     """Delay rack — impulse response curve display.
@@ -68,10 +87,15 @@ def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     ui     = scale
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
-    # ── Skin background
+    # ── Skin background — full rack height (rail/title now baked into PNG)
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_delay_bg", rx, ry, rw, body_h, _draw_rect, (0.07, 0.07, 0.07, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_dl
+        from ui.mixer.texture_cache import blit_texture as _blt_dl
+        _dl_tex = _gtc_dl("rack_delay_bg")
+        if _dl_tex:
+            _blt_dl(_dl_tex, rx, ry, rw, rh, key="rack_delay_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
     except Exception:
         _draw_rect(rx, ry, rw, body_h, (0.07, 0.07, 0.07, 1.0))
 
@@ -345,22 +369,23 @@ def _draw_delay_body(rx, ry, rw, rh, rack, rack_idx, scale):
     _draw_text(f"fb {int(feedback * 100)}%", disp_x + 4*ui,
                disp_y + 3*ui, _fs8, (0.25, 0.68, 0.95, 0.75))
 
-    # ── Knob strip — identical to previous version ────────────────────────────
+    # ── Knob strip ────────────────────────────────────────────────────────────
     _N_dl  = 5
     _cw_dl = disp_w / _N_dl
     _rk_dl = knob_y + knob_h * 0.68
-    _kr_dl = min(max(13*ui, _cw_dl * 0.16), 20*ui)
+    _kr_dl = min(max(13*ui, _cw_dl * 0.16), 20*ui) * DL_KNOB_SCALE
     _kr_dl = min(_kr_dl, knob_h * 0.42 * 0.42)
 
     _knob_defs_dl = [
-        ("Time",     time_norm, delay_str,              (0.25, 0.72, 0.95)),
-        ("Feedback", fb_norm,   f"{int(feedback*100)}%",(0.95, 0.48, 0.12)),
-        ("Mix",      mix_norm,  f"{int(mix*100)}%",     (0.30, 0.85, 0.45)),
-        ("Spread",   spread_n,  f"{int(spread_n*100)}%",(0.82, 0.22, 0.92)),
-        ("Filter",   filt_norm, filt_str,               (0.88, 0.78, 0.55)),
+        (time_norm, delay_str,              (0.25, 0.72, 0.95)),
+        (fb_norm,   f"{int(feedback*100)}%",(0.95, 0.48, 0.12)),
+        (mix_norm,  f"{int(mix*100)}%",     (0.30, 0.85, 0.45)),
+        (spread_n,  f"{int(spread_n*100)}%",(0.82, 0.22, 0.92)),
+        (filt_norm, filt_str,               (0.88, 0.78, 0.55)),
     ]
-    for _ki_dl, (_lbl, _val, _vstr, _col_k) in enumerate(_knob_defs_dl):
-        _cx_dl = disp_x + (_ki_dl + 0.5) * _cw_dl
-        _draw_knob(_cx_dl, _rk_dl, _kr_dl, _val, _col_k, _lbl, _vstr, ui)
-
-
+    for _ki_dl, (_val, _vstr, _col_k) in enumerate(_knob_defs_dl):
+        _cx_dl = disp_x + (_ki_dl + 0.5) * _cw_dl + DL_KNOB_X[_ki_dl] * ui
+        _cy_dl = _rk_dl + DL_KNOB_Y[_ki_dl] * ui
+        _draw_knob(_cx_dl, _cy_dl, _kr_dl, _val, _col_k,
+                   "", _vstr, ui,  # label suppressed — baked into background PNG
+                   value_y_offset=DL_VALUE_Y_OFFSET)

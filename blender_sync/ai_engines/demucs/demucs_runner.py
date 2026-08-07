@@ -29,6 +29,13 @@ import sys
 
 
 def main():
+    # Force UTF-8 on Windows — default CP1252 codepage breaks paths with
+    # non-ASCII characters in STEM_DONE output lines.
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--args", required=True)
     args = parser.parse_args()

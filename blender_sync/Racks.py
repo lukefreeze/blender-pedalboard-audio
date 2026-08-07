@@ -74,7 +74,7 @@ RACK_EXPANDED_H_DL  = 320   # delay      — waveform display + 5-knob row
 RACK_EXPANDED_H_MX  = 320   # mixdown    — 4-column layout
 RACK_COLLAPSED_H    = 36
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
-RACK_GAP            = 4            # gap between rack units
+RACK_GAP            = 0            # gap between rack units
 RACK_RAIL_H         = 32           # top rail height
 
 # Knob layout (left section of expanded rack)
@@ -3837,10 +3837,21 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
             col_btn_y2 <= ry <= col_btn_y2 + col_btn_h2):
         return {'zone': 'collapse', 'rack_idx': i}
 
-    # Delete button
-    del_x = rack_x + rw - 26*ui_scale
-    del_y = rack_y + rh - 27*ui_scale
-    if del_x <= rx <= del_x+18*ui_scale and del_y <= ry <= del_y+16*ui_scale:
+    # Delete / ON-OFF hitboxes — derived from PNG blit geometry
+    try:
+        from ui.racks.rack_base import (RACK_BTN_W as _RBW, RACK_BTN_H as _RBH,
+                                        RACK_BTN_X_OFFSET as _RBXO, RACK_BTN_Y_OFFSET as _RBYO,
+                                        RACK_BTN_ONOFF_SPLIT as _RBSP)
+    except Exception:
+        _RBW, _RBH, _RBXO, _RBYO, _RBSP = 60.0, 22.8, 0.0, 0.0, 0.60
+    _rbw = _RBW * ui_scale
+    _rbh = _RBH * ui_scale
+    _rbx = rack_x + rw - _rbw + _RBXO * ui_scale
+    _rby = rack_y + rh - (RACK_RAIL_H * ui_scale + _rbh) / 2 + _RBYO * ui_scale
+    # Close X = right portion of PNG
+    del_x = _rbx + _rbw * _RBSP
+    del_y = _rby
+    if del_x <= rx <= _rbx + _rbw and del_y <= ry <= _rby + _rbh:
         return {'zone': 'delete_rack', 'rack_idx': i}
 
     # Rack number badge
@@ -3853,17 +3864,27 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
         return {'zone': 'rack_badge', 'rack_idx': i,
                 'bx': badge_x2, 'by': badge_y2+badge_h2}
 
-    # ON/OFF button
-    on_x = rack_x + rw - 68*ui_scale
-    on_y = rack_y + rh - 27*ui_scale
-    if on_x <= rx <= on_x+40*ui_scale and on_y <= ry <= on_y+16*ui_scale:
+    # ON/OFF = left portion of PNG
+    on_x = _rbx
+    on_y = _rby
+    if on_x <= rx <= _rbx + _rbw * _RBSP and on_y <= ry <= _rby + _rbh:
         return {'zone': 'on_off', 'rack_idx': i}
 
-    # Delete button (collapsed)
+    # Delete button (collapsed) — right portion of PNG, centred on collapsed rail
     if rack.collapsed:
-        cdel_x = rack_x + rw - 28*ui_scale
-        cdel_y = rack_y + rh/2 - 7*ui_scale
-        if cdel_x <= rx <= cdel_x+18*ui_scale and cdel_y <= ry <= cdel_y+14*ui_scale:
+        try:
+            from ui.racks.rack_base import (RACK_BTN_W as _RBW2, RACK_BTN_H as _RBH2,
+                                            RACK_BTN_X_OFFSET as _RBXO2, RACK_BTN_Y_OFFSET as _RBYO2,
+                                            RACK_BTN_ONOFF_SPLIT as _RBSP2)
+        except Exception:
+            _RBW2, _RBH2, _RBXO2, _RBYO2, _RBSP2 = 60.0, 22.8, 0.0, 0.0, 0.60
+        _rbw2 = _RBW2 * ui_scale
+        _rbh2 = _RBH2 * ui_scale
+        _rbx2 = rack_x + rw - _rbw2 + _RBXO2 * ui_scale
+        _rby2 = rack_y + rh/2 - _rbh2/2 + _RBYO2 * ui_scale
+        cdel_x = _rbx2 + _rbw2 * _RBSP2
+        cdel_y = _rby2
+        if cdel_x <= rx <= _rbx2 + _rbw2 and cdel_y <= ry <= _rby2 + _rbh2:
             return {'zone': 'delete_rack', 'rack_idx': i}
 
     # Preset arrows
@@ -3915,49 +3936,76 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
 
     # BOOSTER rack hit zones
     if not rack.collapsed and rack.effect_type == "BOOSTER":
-        body_h_bo   = rh - RACK_RAIL_H * ui_scale
+        try:
+            from ui.racks.rack_booster import (
+                BST_APPLY_X, BST_APPLY_Y, BST_APPLY_W, BST_APPLY_H,
+                BST_LIM_W, BST_LIM_X, BST_LIM_Y, BST_LIM_H,
+                BST_GRID_X, BST_GRID_Y, BST_GRID_W, BST_GRID_H,
+                BST_BTN_X, BST_BTN_Y, BST_BTN_W, BST_BTN_H,
+                BST_STEPPER_X, BST_STEPPER_Y, BST_STEPPER_W, BST_STEPPER_H,
+            )
+        except Exception:
+            (BST_APPLY_X, BST_APPLY_Y, BST_APPLY_W, BST_APPLY_H,
+             BST_LIM_W, BST_LIM_X, BST_LIM_Y, BST_LIM_H,
+             BST_GRID_X, BST_GRID_Y, BST_GRID_W, BST_GRID_H,
+             BST_STEPPER_X, BST_STEPPER_Y, BST_STEPPER_W, BST_STEPPER_H) = (
+                0,0,0,0, 88,0,0,0, 0,0,0,0, 0,0,0,0)
+            BST_BTN_X = BST_BTN_Y = BST_BTN_W = BST_BTN_H = [0]*6
+
+        s           = ui_scale
+        body_h_bo   = rh - RACK_RAIL_H * s
+        body_bot_bo = rack_y
         left_w_bo   = rw * 0.25
         centre_w_bo = rw * 0.50
         centre_x_bo = rack_x + left_w_bo
-        bar_pad_bo  = 8 * ui_scale
-        bar_x_bo    = centre_x_bo + bar_pad_bo
-        bar_w_bo    = centre_w_bo - bar_pad_bo * 2
-        ctrl_h_bo   = min(body_h_bo * 0.26, 26 * ui_scale)
-        apply_y_bo  = rack_y + 4 * ui_scale
-        lim_w_bo    = 88 * ui_scale
-        apply_w_bo  = bar_w_bo - lim_w_bo - 6 * ui_scale
-        apply_x_bo  = bar_x_bo
-        lim_x_bo    = apply_x_bo + apply_w_bo + 6 * ui_scale
+        _cx  = centre_x_bo
+        _cw  = centre_w_bo
+        _pad = 8 * s
 
-        if (apply_x_bo <= rx <= apply_x_bo + apply_w_bo and
-                apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+        # Apply + Limiter — mirrors draw code exactly
+        apply_x = _cx + _pad             + BST_APPLY_X * s
+        apply_y = body_bot_bo + body_h_bo*0.06 + BST_APPLY_Y * s
+        ctrl_h  = body_h_bo * 0.10       + BST_APPLY_H * s
+        lim_w   = BST_LIM_W * s
+        apply_w = _cw - _pad*2           + BST_APPLY_W * s - lim_w - 6*s
+        lim_x   = apply_x + apply_w + 6*s + BST_LIM_X * s
+        lim_y   = apply_y                  + BST_LIM_Y * s
+        lim_h   = ctrl_h                   + BST_LIM_H * s
+
+        if (apply_x <= rx <= apply_x + apply_w and
+                apply_y <= ry <= apply_y + ctrl_h):
             return {'zone': 'booster_apply', 'rack_idx': i}
-        if (lim_x_bo <= rx <= lim_x_bo + lim_w_bo and
-                apply_y_bo <= ry <= apply_y_bo + ctrl_h_bo):
+        if (lim_x <= rx <= lim_x + lim_w and
+                lim_y <= ry <= lim_y + lim_h):
             return {'zone': 'booster_limiter', 'rack_idx': i}
 
-        grid_bot_bo = apply_y_bo + ctrl_h_bo + 4 * ui_scale
-        grid_top_bo = rack_y + body_h_bo * 0.68
-        grid_h_bo   = grid_top_bo - grid_bot_bo
-        cols_bo, rows_bo = 3, 2
-        btn_w_bo = (bar_w_bo - (cols_bo-1)*3*ui_scale) / cols_bo
-        btn_h_bo = max(ui_scale, (grid_h_bo - (rows_bo-1)*3*ui_scale) / rows_bo)
+        # Preset grid — mirrors draw code exactly
+        grid_x   = _cx + _pad             + BST_GRID_X * s
+        grid_w   = _cw - _pad*2           + BST_GRID_W * s
+        grid_bot = body_bot_bo + body_h_bo*0.28 + BST_GRID_Y * s
+        grid_h   = body_h_bo * 0.22       + BST_GRID_H * s
+        _bw_base = (grid_w - 2*3*s) / 3
+        _bh_base = (grid_h - 3*s)   / 2
         presets_bo = [6/40, 12/40, 18/40, 24/40, 30/40, 1.0]
         for pi, norm in enumerate(presets_bo):
-            col_i = pi % cols_bo
-            row_i = pi // cols_bo
-            bx    = bar_x_bo + col_i * (btn_w_bo + 3*ui_scale)
-            by    = grid_bot_bo + row_i * (btn_h_bo + 3*ui_scale)
-            if bx <= rx <= bx + btn_w_bo and by <= ry <= by + btn_h_bo:
+            col_i = pi % 3
+            row_i = pi // 3
+            btn_w = _bw_base + BST_BTN_W[pi] * s
+            btn_h = _bh_base + BST_BTN_H[pi] * s
+            bx    = grid_x + col_i * (_bw_base + 3*s) + BST_BTN_X[pi] * s
+            by    = grid_bot + row_i * (_bh_base + 3*s) + BST_BTN_Y[pi] * s
+            if bx <= rx <= bx + btn_w and by <= ry <= by + btn_h:
                 return {'zone': 'booster_preset', 'rack_idx': i,
                         'boost_norm': norm}
 
-        right_x_bo  = rack_x + left_w_bo + centre_w_bo
-        rpad_bo     = 6 * ui_scale
-        rx2_bo      = right_x_bo + rpad_bo
-        rw2_bo      = left_w_bo - rpad_bo * 2
-        stepper_h   = 18 * ui_scale
-        stepper_y   = apply_y_bo + ctrl_h_bo + 6 * ui_scale
+        # Stepper — mirrors draw code exactly
+        right_x_bo = rack_x + left_w_bo + centre_w_bo
+        _rpad      = 6 * s
+        _rw_base   = left_w_bo - _rpad * 2
+        rx2_bo     = right_x_bo + _rpad  + BST_STEPPER_X * s
+        rw2_bo     = _rw_base             + BST_STEPPER_W * s
+        stepper_h  = body_h_bo * 0.08    + BST_STEPPER_H * s
+        stepper_y  = apply_y + ctrl_h + 6*s + BST_STEPPER_Y * s
         if (rx2_bo <= rx <= rx2_bo + rw2_bo and
                 stepper_y <= ry <= stepper_y + stepper_h):
             third = rw2_bo / 3.0
@@ -4376,6 +4424,11 @@ def handle_click(hit, context):
             state = 'assigned' if getattr(rack, attr) else 'removed'
             abs_ch = getattr(rack, 'group_idx', 0) * 9 + ch_idx
             print(f"[RACKS] ch{abs_ch+1} {state} from rack {i} — reprocessing")
+            # Reset BOOSTER status when a channel is assigned after NO_CHANNEL
+            if (getattr(rack, 'effect_type', '') == 'BOOSTER'
+                    and state == 'assigned'
+                    and getattr(rack, 'ai_status', '') == 'NO_CHANNEL'):
+                rack.ai_status = 'READY'
             _trigger_reprocess(i, rack, context)
         return True
 
@@ -5138,18 +5191,26 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
         if col_x <= mouse_x <= col_x+24*scale and col_y <= mouse_y <= col_y+20*scale:
             return {'zone': 'ai_collapse', 'ai_idx': ai_idx}
 
-        # Delete button
-        del_x = rack_x + rw - 26*scale
-        del_y = rack_top - 27*scale
-        if del_x <= mouse_x <= del_x+18*scale and del_y <= mouse_y <= del_y+16*scale:
+        # Delete / ON-OFF hitboxes — derived from PNG blit geometry
+        try:
+            from ui.racks.rack_base import (RACK_BTN_W as _RBW3, RACK_BTN_H as _RBH3,
+                                            RACK_BTN_X_OFFSET as _RBXO3, RACK_BTN_Y_OFFSET as _RBYO3,
+                                            RACK_BTN_ONOFF_SPLIT as _RBSP3)
+        except Exception:
+            _RBW3, _RBH3, _RBXO3, _RBYO3, _RBSP3 = 60.0, 22.8, 0.0, 0.0, 0.60
+        _rbw3 = _RBW3 * scale
+        _rbh3 = _RBH3 * scale
+        _rbx3 = rack_x + rw - _rbw3 + _RBXO3 * scale
+        _rby3 = rack_top - (RACK_RAIL_H * scale + _rbh3) / 2 + _RBYO3 * scale
+        del_x = _rbx3 + _rbw3 * _RBSP3
+        del_y = _rby3
+        if del_x <= mouse_x <= _rbx3 + _rbw3 and del_y <= mouse_y <= _rby3 + _rbh3:
             return {'zone': 'ai_delete', 'ai_idx': ai_idx}
 
-        # ON/OFF button — mirrors draw: on_x = del_x - on_w - 4*scale
-        on_w_ht  = 40*scale
-        del_x_on = rack_x + rw - 26*scale
-        on_x_ht  = del_x_on - on_w_ht - 4*scale
-        on_y_ht  = rack_top - 27*scale
-        if on_x_ht <= mouse_x <= on_x_ht+on_w_ht and on_y_ht <= mouse_y <= on_y_ht+16*scale:
+        # ON/OFF button
+        on_x_ht = _rbx3
+        on_y_ht = _rby3
+        if on_x_ht <= mouse_x <= _rbx3 + _rbw3 * _RBSP3 and on_y_ht <= mouse_y <= _rby3 + _rbh3:
             return {'zone': 'ai_on_off', 'ai_idx': ai_idx}
 
         # Piper TTS: CLEAR button, voice cards, and knob hit testing

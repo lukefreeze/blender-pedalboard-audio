@@ -190,8 +190,13 @@ def text_width(text: str, size: float) -> float:
 
 def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
               color: tuple, label: str, value_str: str, scale: float,
-              label_above: bool = False) -> None:
-    """Rotary knob — 270° arc, inner cap, pointer line, label + value."""
+              label_above: bool = False, value_y_offset: float = 0.0,
+              font_size: float = 0.0) -> None:
+    """Rotary knob — 270° arc, inner cap, pointer line, label + value.
+
+    value_y_offset: unscaled px nudge applied only to the value readout text.
+    font_size: override font size in unscaled pt (0 = use default 8pt).
+    """
     draw_circle(cx, cy, radius, (0.13, 0.13, 0.13, 1.0))
     draw_circle(cx, cy, radius, (0.33, 0.33, 0.33, 1.0), filled=False)
     inner_r = radius * 0.7
@@ -253,7 +258,7 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
     gpu.state.line_width_set(1.0)
 
     # Labels
-    fs = max(1, int(8 * scale))
+    fs = max(1, int((font_size if font_size > 0 else 8) * scale))
     if label_above:
         draw_text(label,
                   cx - text_width(label, fs) / 2,
@@ -261,7 +266,7 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
                   fs, (0.6, 0.6, 0.6, 1.0))
         draw_text(value_str,
                   cx - text_width(value_str, fs) / 2,
-                  cy - radius - fs - 2 * scale,
+                  cy - radius - fs - 2 * scale + value_y_offset * scale,
                   fs, (0.8, 0.8, 0.8, 1.0))
     else:
         draw_text(label,
@@ -270,7 +275,7 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
                   fs, (0.6, 0.6, 0.6, 1.0))
         draw_text(value_str,
                   cx - text_width(value_str, fs) / 2,
-                  cy - radius - fs * 2 - 4 * scale,
+                  cy - radius - fs * 2 - 4 * scale + value_y_offset * scale,
                   fs, (0.8, 0.8, 0.8, 1.0))
 
 
