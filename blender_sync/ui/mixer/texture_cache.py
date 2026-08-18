@@ -93,6 +93,16 @@ SKIN_MAP = {
     "rack_btn_off":          "RackOff.png",
     "rack_btn_on":           "RackOn.png",
     "rack_mixdown_bg":     "rack_mixdown_bg.png",
+    # MIXDOWN toggle-button "on" overlays — off-state chrome for every button
+    # (mode, format, sample rate, bit depth, range) is baked into
+    # rack_mixdown_bg.png above; these blit on top of whichever button in
+    # each section is currently active. One PNG per section, reused for
+    # every button in that section (same pattern as rack_booster_btn_on).
+    "rack_mixdown_mode_btn_on":   "mixdown_mode_btn_on.png",
+    "rack_mixdown_format_btn_on": "mixdown_format_btn_on.png",
+    "rack_mixdown_sr_btn_on":     "mixdown_sr_btn_on.png",
+    "rack_mixdown_bd_btn_on":     "mixdown_bd_btn_on.png",
+    "rack_mixdown_range_btn_on":  "mixdown_range_btn_on.png",
     "rack_knnvc_bg":       "rack_knnvc_bg.png",
     "rack_demucs_bg":      "rack_demucs_bg.png",
     "add_rack_btn":        "add_rack_btn.png",
@@ -159,6 +169,12 @@ def get_texture(key: str):
 
     filepath = os.path.join(_skin_dir, filename)
     if not os.path.exists(filepath):
+        # Previously silent — every "not found" key looked identical to a key
+        # that was simply never requested, which made this exact situation
+        # impossible to diagnose from the console alone. Log once and cache
+        # None so it doesn't spam every redraw.
+        print(f"[SKIN] '{key}' NOT FOUND — expected {filepath}")
+        _texture_cache[key] = None
         return None
 
     try:

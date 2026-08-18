@@ -274,6 +274,7 @@ def register():
         "ui.racks.rack_base",
         "ui.racks.rack_comp",
         "ui.racks.rack_delay",
+        "ui.racks.rack_mixdown",
     ]
     importlib.invalidate_caches()
     # Force Racks.py to reload by removing it from sys.modules first

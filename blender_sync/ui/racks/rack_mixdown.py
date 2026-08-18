@@ -54,6 +54,114 @@ except ImportError:
     pass
 
 RACK_RAIL_H         = 32
+
+# =============================================================================
+# MIXDOWN LAYOUT TUNING — all values unscaled px, multiplied by scale at draw.
+# Positive X = right, Negative X = left.
+# Positive Y = up,    Negative Y = down.
+# W/H values add to the computed size (negative = smaller).
+# =============================================================================
+
+# ── Column widths and X offsets ──────────────────────────────────────────────
+MX_COL_A_W      = 175.0   # render mode column width
+MX_COL_A_X      = -6.0    # shift col A left/right
+MX_COL_C_W      = 200.0   # stats column width
+MX_COL_C_X      = 0.0     # shift col C left/right
+
+# ── Button shrink from centre (does not affect positions) ─────────────────────
+MX_BTN_SCALE    = 0.9
+
+# =============================================================================
+# ALL ELEMENT POSITIONS — every value is fully independent.
+# X = distance from left edge of col B (b_xi). Y = distance from body top downward.
+# W = width in unscaled px. H = height in unscaled px.
+# Change any value without affecting any other element.
+# =============================================================================
+
+# ── Col A — Render mode buttons ───────────────────────────────────────────────
+MX_A_MIX_X  = 0.0;   MX_A_MIX_Y  = 55.0;  MX_A_MIX_W  = 155.0;  MX_A_MIX_H  = 24.0
+MX_A_BAKE_X = 0.0;   MX_A_BAKE_Y = 82.0;  MX_A_BAKE_W = 155.0;  MX_A_BAKE_H = 24.0
+
+# ── Col B — Output path box ───────────────────────────────────────────────────
+MX_PATH_X   = -42.0;   MX_PATH_Y   = 53.0;  MX_PATH_W   = 730.0;  MX_PATH_H   = 22.0
+
+# ── Col B — Save-as button (fully independent of path box) ───────────────────
+MX_SAVEAS_X = 652.0; MX_SAVEAS_Y = 53.0;  MX_SAVEAS_W = 58.0;   MX_SAVEAS_H = 22.0
+
+# ── Col B — Format buttons (WAV, FLAC) — each fully independent ──────────────
+MX_WAV_X    = -9.0;   MX_WAV_Y    = 95.0;  MX_WAV_W    = 123.0;  MX_WAV_H    = 20.0
+MX_FLAC_X   = 108.0; MX_FLAC_Y   = 95.0;  MX_FLAC_W   = 123.0;  MX_FLAC_H   = 20.0
+
+# ── Col B — Sample rate buttons (44k, 48k, 96k) — each fully independent ─────
+MX_SR44_X   = 230.0; MX_SR44_Y   = 95.0;  MX_SR44_W   = 83.0;   MX_SR44_H   = 20.0
+MX_SR48_X   = 310.0; MX_SR48_Y   = 95.0;  MX_SR48_W   = 83.0;   MX_SR48_H   = 20.0
+MX_SR96_X   = 390.0; MX_SR96_Y   = 95.0;  MX_SR96_W   = 83.0;   MX_SR96_H   = 20.0
+
+# ── Col B — Bit depth buttons (16, 24, 32f) — each fully independent ─────────
+MX_BD16_X   = 471.0; MX_BD16_Y   = 95.0;  MX_BD16_W   = 80.0;   MX_BD16_H   = 20.0
+MX_BD24_X   = 552.0; MX_BD24_Y   = 95.0;  MX_BD24_W   = 80.0;   MX_BD24_H   = 20.0
+MX_BD32_X   = 631.0; MX_BD32_Y   = 95.0;  MX_BD32_W   = 80.0;   MX_BD32_H   = 20.0
+
+# ── Col B — Range buttons (full timeline, custom frames) — each fully independent
+MX_FULL_X   = -12.0;   MX_FULL_Y   = 136.0; MX_FULL_W   = 170.0;  MX_FULL_H   = 20.0
+MX_CUST_X   = 149.0; MX_CUST_Y   = 136.0; MX_CUST_W   = 172.0;  MX_CUST_H   = 20.0
+
+# ── Col B — Range: start frame box ────────────────────────────────────────────
+MX_FSTART_X = 312.5; MX_FSTART_Y = 136.0; MX_FSTART_W = 207.0;  MX_FSTART_H = 20.0
+
+# ── Col B — Range: end frame box ──────────────────────────────────────────────
+MX_FEND_X   = 510.0; MX_FEND_Y   = 136.0; MX_FEND_W   = 207.0;  MX_FEND_H   = 20.0
+
+# ── Col B — "frames N–N (duration)" info text, sits below the start frame box ──
+MX_FRAMEINFO_X = 50.0;  MX_FRAMEINFO_Y = -4.0   # offset relative to start frame box (negative Y = further below)
+
+# ── Col B — Place on channel ──────────────────────────────────────────────────
+MX_PLACE_X  = -24.0;   MX_PLACE_Y  = 189.0; MX_PLACE_W  = 390.0;  MX_PLACE_H  = 20.0
+
+# ── Col B — After render ──────────────────────────────────────────────────────
+MX_AFTER_X  = 335.0; MX_AFTER_Y  = 189.0; MX_AFTER_W  = 390.0;  MX_AFTER_H  = 20.0
+
+# ── Col B — Place-on-channel / after-render stepper "−"/"+" hitboxes ──────────
+# Each hitbox is X (unscaled px offset from the stepper row's left edge) + W
+# (unscaled px width) — same shape as every other tuning pair in this file.
+# Shared by both steppers (place-on-channel and after-render), since they're
+# the same width and layout. Set MX_STEPPER_DEBUG = True below to see them.
+MX_STEPPER_MINUS_X = 90.0;    MX_STEPPER_MINUS_W = 70   # "−" click zone
+MX_STEPPER_PLUS_X  = 253.5;  MX_STEPPER_PLUS_W  = 70   # "+" click zone
+
+# Draws green ("−") / red ("+") outlines over the stepper hitboxes above so
+# you can see exactly what's clickable while tuning. Set False when done.
+MX_STEPPER_DEBUG = False
+
+# ── "On" button texture overlay — shared by every mode_btn() toggle ──────────
+# Off-state chrome for every toggle button (mode, format, sample rate, bit
+# depth, range) is baked into rack_mixdown_bg.png — mode_btn() no longer draws
+# a rect/border at all. When a button is active, its section's "on" PNG blits
+# on top, sized off that button's own rect (same pattern as rack_booster.py's
+# preset grid). One shared scale/nudge applies to every section here; if one
+# section's PNG needs its own tuning later, split these into per-section
+# constants the same way BST_BTN_ON_* would if boosters ever needed it per-key.
+MX_BTN_ON_SCALE   = 1.0    # width multiplier relative to the button rect
+MX_BTN_ON_SCALE_H = 1.0    # height multiplier relative to the button rect
+MX_BTN_ON_X       = 0.0    # nudge left/right (unscaled px)
+MX_BTN_ON_Y       = 0.0    # nudge up/down   (unscaled px)
+
+# ── Col B — Render button ─────────────────────────────────────────────────────
+MX_RENDER_X = -44.0;   MX_RENDER_Y = 252.0; MX_RENDER_W = 790.0;  MX_RENDER_H = 26.0
+
+# ── Col B — "Import back into VSE" label ──────────────────────────────────────
+MX_IMPORT_LBL_X = 0.0; MX_IMPORT_LBL_Y = 160.0  # Y from body_top downward
+MX_BLEND_LBL_X  = 0.0;  MX_BLEND_LBL_Y  = 0.0   # Y offset relative to place row (negative = below)
+MX_HINT_X       = 20.0;    MX_HINT_Y       = -10.0   # Y offset relative to after render row (negative = below)
+
+# ── Col C — "renders offline" hint text ──────────────────────────────────────
+MX_OFFLINE_X = 0.0;  MX_OFFLINE_Y = 200.0  # Y from body_top downward (c_xi based)
+
+# ── Col C — Stat cards ────────────────────────────────────────────────────────
+MX_CARD_FMT_X  = -8.0;  MX_CARD_FMT_Y  = 60.0;  MX_CARD_FMT_W  = 195.0; MX_CARD_FMT_H  = 44.0
+MX_CARD_DUR_X  = -8.0;  MX_CARD_DUR_Y  = 100.0;  MX_CARD_DUR_W  = 195.0; MX_CARD_DUR_H  = 34.0
+MX_CARD_SIZE_X = -8.0;  MX_CARD_SIZE_Y = 138.0; MX_CARD_SIZE_W = 195.0; MX_CARD_SIZE_H = 34.0
+MX_CARD_SEL_X  = -8.0;  MX_CARD_SEL_Y  = 176.0; MX_CARD_SEL_W  = 195.0; MX_CARD_SEL_H = 34.0
 RACK_EXPANDED_H_MX  = 520    # tall enough for all controls
 
 # ---------------------------------------------------------------------------
@@ -61,10 +169,14 @@ RACK_EXPANDED_H_MX  = 520    # tall enough for all controls
 # ---------------------------------------------------------------------------
 _mx_state = {
     'running':    False,
-    'progress':   0.0,       # 0..1
+    'progress':   0.0,
     'status_msg': 'ready',
     'rack_idx':   -1,
     'error':      '',
+    # Frame box text input
+    'text_focus':  None,   # None, 'p5', or 'p6'
+    'text_buf':    '',     # current typed string
+    'text_rack':   -1,     # rack_idx being edited
 }
 
 
@@ -642,25 +754,29 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
     rail_h = RACK_RAIL_H * ui
     body_h = rh - rail_h
 
-    # ── Skin background
+    # ── Skin background — full rack height (rail/title baked into PNG)
     try:
-        from ui.mixer.draw_utils import draw_element as _de
-        _de("rack_mixdown_bg", rx, ry, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
+        from ui.mixer.texture_cache import get_texture as _gtc_mx
+        from ui.mixer.texture_cache import blit_texture as _blt_mx
+        _mx_tex = _gtc_mx("rack_mixdown_bg")
+        if _mx_tex:
+            _blt_mx(_mx_tex, rx, ry, rw, rh, key="rack_mixdown_bg")
+        else:
+            _draw_rect(rx, ry, rw, body_h, (0.04, 0.04, 0.04, 1.0))
     except Exception:
-        pass
+        _draw_rect(rx, ry, rw, body_h, (0.04, 0.04, 0.04, 1.0))
 
     shader = _get_shader()
 
-    # ── Column boundaries (unscaled px, then * ui) ──────────────────────
-    A_W  = 160 * ui    # render mode column width
-    CH_W = 100 * ui    # channel buttons column (owned by rack_base)
-    C_W  = 200 * ui    # stats column width
-    # B fills whatever is left
-    A_X  = rx                        # col A start
-    B_X  = rx + A_W                  # col B start
-    C_X  = rx + rw - CH_W - C_W      # col C start
-    D_X  = rx + rw - CH_W            # col D start (don't draw here)
-    B_W  = C_X - B_X                 # col B width
+    # ── Column boundaries ────────────────────────────────────────────────
+    A_W  = MX_COL_A_W * ui
+    CH_W = 100 * ui
+    C_W  = MX_COL_C_W * ui
+    A_X  = rx + MX_COL_A_X * ui
+    B_X  = A_X + A_W
+    C_X  = rx + rw - CH_W - C_W + MX_COL_C_X * ui
+    D_X  = rx + rw - CH_W
+    B_W  = C_X - B_X
 
     pad   = 10 * ui
     # inner x/w for each column's content
@@ -717,6 +833,14 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
         b = batch_for_shader(shader, "LINE_STRIP", {"pos": verts})
         shader.bind(); shader.uniform_float("color", col); b.draw(shader)
 
+    def _shrink(x, y, w, h):
+        """Shrink a rect inward from its centre by MX_BTN_SCALE. Position unchanged."""
+        if MX_BTN_SCALE >= 1.0:
+            return x, y, w, h
+        dw = w * (1.0 - MX_BTN_SCALE) / 2
+        dh = h * (1.0 - MX_BTN_SCALE) / 2
+        return x + dw, y + dh, w - dw*2, h - dh*2
+
     def divider(x):
         verts = [(x, body_bot + 4*ui), (x, body_top - 4*ui)]
         b = batch_for_shader(shader, "LINES", {"pos": verts})
@@ -734,7 +858,8 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
             bg  = (0.05, 0.22, 0.15, 1.0) if sel else (0.08, 0.09, 0.11, 1.0)
             bc  = col_on                   if sel else (0.22, 0.22, 0.25, 1.0)
             tc  = (0.2, 0.9, 0.6, 1.0)    if sel else (0.38, 0.38, 0.44, 1.0)
-            _draw_rect(bx, y, bw, h, bg); border(bx, y, bw, h, bc)
+            sx, sy, sw, sh = _shrink(bx, y, bw, h)
+            _draw_rect(sx, sy, sw, sh, bg); border(sx, sy, sw, sh, bc)
             tw = _text_width(lbl, fs9)
             _draw_text(lbl, bx + bw/2 - tw/2, y + h/2 - fs9/2, fs9, tc)
 
@@ -746,25 +871,78 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
             bg  = (0.05, 0.12, 0.22, 1.0) if sel else (0.08, 0.09, 0.11, 1.0)
             bc  = col_on                   if sel else (0.22, 0.22, 0.25, 1.0)
             tc  = col_on                   if sel else (0.35, 0.35, 0.40, 1.0)
-            _draw_rect(bx, y, bw, h, bg); border(bx, y, bw, h, bc)
+            sx, sy, sw, sh = _shrink(bx, y, bw, h)
+            _draw_rect(sx, sy, sw, sh, bg); border(sx, sy, sw, sh, bc)
             tw = _text_width(lbl, fs9)
             _draw_text(lbl, bx + bw/2 - tw/2, y + h/2 - fs9/2, fs9, tc)
 
-    def mode_btn(x, y, w, h, lbl, active, col=(0.0, 0.55, 0.85, 1.0)):
-        bg = (0.04, 0.14, 0.24, 1.0) if active else (0.08, 0.09, 0.11, 1.0)
-        bc = col                      if active else (0.22, 0.22, 0.25, 1.0)
-        tc = col                      if active else (0.35, 0.38, 0.44, 1.0)
-        _draw_rect(x, y, w, h, bg); border(x, y, w, h, bc)
+    def mode_btn(x, y, w, h, lbl, active, col=(0.0, 0.55, 0.85, 1.0), on_key=None):
+        """Off-state chrome is baked into rack_mixdown_bg.png — no rect/border
+        drawn here at all. When active and on_key names a loaded skin texture,
+        blit that section's 'on' PNG over the button rect (scaled/nudged by
+        MX_BTN_ON_*), then draw the label on top either way."""
+        tc = col if active else (0.35, 0.38, 0.44, 1.0)
+        if active and on_key:
+            try:
+                from ui.mixer.texture_cache import get_texture as _gtc_mxb
+                from ui.mixer.texture_cache import blit_texture as _blt_mxb
+                _mxb_tex = _gtc_mxb(on_key)
+                if _mxb_tex:
+                    _bw = w * MX_BTN_ON_SCALE
+                    _bh = h * MX_BTN_ON_SCALE_H
+                    _bx = x + (w - _bw) / 2 + MX_BTN_ON_X * ui
+                    _by = y + (h - _bh) / 2 + MX_BTN_ON_Y * ui
+                    _blt_mxb(_mxb_tex, _bx, _by, _bw, _bh, key=on_key)
+            except Exception:
+                pass
         tw = _text_width(lbl, fs9)
         _draw_text(lbl, x + w/2 - tw/2, y + h/2 - fs9/2, fs9, tc)
 
     def info_row(x, y, w, h, ltxt, rtxt,
-                 bg=(0.05,0.09,0.07,1.0), bc=(0.18,0.26,0.22,1.0),
-                 lc=(0.35,0.50,0.40,0.8), rc=(0.2,0.85,0.6,1.0)):
-        _draw_rect(x, y, w, h, bg); border(x, y, w, h, bc)
-        _draw_text(ltxt, x + 5*ui, y + h/2 - fs9/2, fs9, lc)
+                 lc=(0.35,0.50,0.40,0.8), rc=(0.2,0.85,0.6,1.0),
+                 dim=False):
+        """Box chrome baked into background PNG — text only."""
+        if dim:
+            lc = (0.22, 0.28, 0.25, 0.7); rc = (0.25, 0.32, 0.28, 0.7)
+        sx, sy, sw, sh = _shrink(x, y, w, h)
+        _draw_text(ltxt, sx + 5*ui, sy + sh/2 - fs9/2, fs9, lc)
         tw = _text_width(rtxt, fs10)
-        _draw_text(rtxt, x + w - tw - 7*ui, y + h/2 - fs10/2, fs10, rc)
+        _draw_text(rtxt, sx + sw - tw - 7*ui, sy + sh/2 - fs10/2, fs10, rc)
+
+    def stepper_row(x, y, w, h, ltxt, val_txt,
+                    lc=(0.35,0.50,0.40,0.8), vc=(0.2,0.85,0.6,1.0)):
+        """Value centred, − / + centred inside their own configured hitbox
+        zones (MX_STEPPER_MINUS_X/W, MX_STEPPER_PLUS_X/W) — same source of
+        truth the Racks.py hit test uses, so the glyphs always sit exactly
+        on top of what's clickable. x/w here are the raw row rect (unshrunk),
+        matching how the hit test measures MX_STEPPER_* offsets.
+        Box chrome baked into background PNG — text only."""
+        sx, sy, sw, sh = _shrink(x, y, w, h)
+        # Label on left
+        _draw_text(ltxt, sx + 5*ui, sy + sh/2 - fs9/2, fs9, lc)
+        arr_col = (0.4, 0.6, 0.5, 0.9)
+        minus_cx = x + (MX_STEPPER_MINUS_X + MX_STEPPER_MINUS_W/2) * ui
+        plus_cx  = x + (MX_STEPPER_PLUS_X  + MX_STEPPER_PLUS_W/2)  * ui
+        mw = _text_width("−", fs10)
+        pw = _text_width("+", fs10)
+        _draw_text("−", minus_cx - mw/2,
+                   sy + sh/2 - fs10/2, fs10, arr_col)
+        vw = _text_width(val_txt, fs10)
+        _draw_text(val_txt, sx + sw/2 - vw/2,
+                   sy + sh/2 - fs10/2, fs10, vc)
+        _draw_text("+", plus_cx - pw/2,
+                   sy + sh/2 - fs10/2, fs10, arr_col)
+
+    def _stepper_debug(x, y, w, h):
+        """Outline the − (green) / + (red) hitboxes exactly as Racks.py hit-tests
+        them — i.e. against the raw row rect (x, w), not the shrunk visual box.
+        Only draws when MX_STEPPER_DEBUG = True."""
+        if not MX_STEPPER_DEBUG:
+            return
+        border(x + MX_STEPPER_MINUS_X*ui, y, MX_STEPPER_MINUS_W*ui, h,
+               (0.0, 1.0, 0.0, 1.0))
+        border(x + MX_STEPPER_PLUS_X*ui,  y, MX_STEPPER_PLUS_W*ui,  h,
+               (1.0, 0.0, 0.0, 1.0))
 
     # Draw column dividers
     divider(A_X + A_W)
@@ -777,189 +955,240 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
     def a_nxt(h):
         nonlocal a_y; a_y -= h; return a_y
 
-    a_nxt(4*ui)
-    slabel("render mode", a_xi, a_y - 8*ui)
-    a_nxt(13*ui)
-    btn_h = 24 * ui
-    mode_btn(a_xi, a_nxt(btn_h + 4*ui), a_wi, btn_h,
-             "mix to single file", not is_bake)
-    mode_btn(a_xi, a_nxt(btn_h + 4*ui), a_wi, btn_h,
-             "bake per channel",   is_bake)
+    # Col A — absolute from a_xi / body_top
+    # "render mode" label suppressed — baked into background PNG
+    mode_btn(a_xi + MX_A_MIX_X*ui,  body_top - MX_A_MIX_Y*ui,
+             MX_A_MIX_W*ui, MX_A_MIX_H*ui,
+             "mix to single file", not is_bake, on_key="rack_mixdown_mode_btn_on")
+    mode_btn(a_xi + MX_A_BAKE_X*ui, body_top - MX_A_BAKE_Y*ui,
+             MX_A_BAKE_W*ui, MX_A_BAKE_H*ui,
+             "bake per channel", is_bake, on_key="rack_mixdown_mode_btn_on")
 
     # ════════════════════════════════════════════════════════════════════
-    # COL B — Settings, import, render button
+    # COL B — every element positioned absolutely from b_xi / body_top
     # ════════════════════════════════════════════════════════════════════
-    b_y = body_top - pad
-    def b_nxt(h):
-        nonlocal b_y; b_y -= h; return b_y
 
-    tog_h = 20 * ui
-    row_h = 20 * ui
+    # "output file/folder" label suppressed — baked into background PNG
 
-    # OUTPUT PATH
-    b_nxt(4*ui)
-    slabel("output " + ("folder" if is_bake else "file"), b_xi, b_y - 8*ui)
-    b_nxt(13*ui)
-    path_h   = 22 * ui
-    browse_w = max(52*ui, _text_width("folder…", fs9) + 16*ui)
-    path_bw  = b_wi - browse_w - 4*ui
-    path_y   = b_nxt(path_h + 3*ui)
-    _draw_rect(b_xi, path_y, path_bw, path_h, (0.05, 0.06, 0.08, 1.0))
-    border(b_xi, path_y, path_bw, path_h, (0.20, 0.22, 0.28, 1.0))
+    # Path box — chrome baked into background PNG, text only
+    _path_x = b_xi + MX_PATH_X*ui
+    _path_y = body_top - MX_PATH_Y*ui
+    _path_w = MX_PATH_W*ui
+    _path_h = MX_PATH_H*ui
+    _px, _py, _pw, _ph = _shrink(_path_x, _path_y, _path_w, _path_h)
     disp = (out_path if out_path
             else ("(click 'save as…' to set path)" if not is_bake
                   else "(click 'choose folder…')"))
-    _draw_text(disp, b_xi + 5*ui, path_y + path_h/2 - fs9/2, fs9,
+    _draw_text(disp, _px + 5*ui, _py + _ph/2 - fs9/2, fs9,
                (0.72, 0.75, 0.82, 1.0) if out_path else (0.42, 0.45, 0.52, 1.0))
-    br_x = b_xi + path_bw + 4*ui
-    br_lbl = "folder…" if is_bake else "save as…"
-    _draw_rect(br_x, path_y, browse_w, path_h, (0.10, 0.13, 0.18, 1.0))
-    border(br_x, path_y, browse_w, path_h, (0.28, 0.38, 0.50, 1.0))
-    tw = _text_width(br_lbl, fs9)
-    _draw_text(br_lbl, br_x + browse_w/2 - tw/2,
-               path_y + path_h/2 - fs9/2, fs9, (0.45, 0.65, 0.85, 1.0))
 
-    # FORMAT / SAMPLE RATE / BIT DEPTH — three equal sub-columns
-    b_nxt(6*ui)
-    col3_w = (b_wi - 2*4*ui) / 3
-    col3_g = 4*ui
-    for ci, lbl in enumerate(["format", "sample rate", "bit depth"]):
-        slabel(lbl, b_xi + ci*(col3_w + col3_g), b_y - 8*ui)
-    b_nxt(13*ui)
-    ty = b_nxt(tog_h + 2*ui)
-    two_btn(b_xi,                         ty, col3_w, tog_h,
-            rack.p1 > 0.5, "WAV", "FLAC", col_on=(0.2, 0.6, 0.9, 1.0))
-    three_btn(b_xi + col3_w + col3_g,     ty, col3_w, tog_h,
-              rack.p2, ["44k", "48k", "96k"], col_on=(0.3, 0.7, 0.5, 1.0))
-    three_btn(b_xi + 2*(col3_w + col3_g), ty, col3_w, tog_h,
-              rack.p3, ["16", "24", "32f"],   col_on=(0.6, 0.5, 0.8, 1.0))
+    # Save-as button — fully suppressed (box + label baked into background PNG).
+    # Racks.py's click zone for this ('mixdown_browse') is computed independently
+    # from its own layout math, not from MX_SAVEAS_*, so click handling is unaffected.
 
-    # RANGE
-    b_nxt(6*ui)
-    slabel("range", b_xi, b_y - 8*ui)
-    b_nxt(13*ui)
-    rng_y = b_nxt(tog_h + 2*ui)
-    two_btn(b_xi, rng_y, b_wi, tog_h,
-            is_custom, "full timeline", "custom frames",
-            col_on=(0.7, 0.5, 0.2, 1.0))
-    if is_custom:
-        b_nxt(2*ui)
-        cf_h = 20*ui; cfy = b_nxt(cf_h + 2*ui); hw = b_wi/2 - 3*ui
-        for i, (lbl, val) in enumerate([("start", f_start), ("end", f_end)]):
-            bx = b_xi + i*(hw + 6*ui)
-            _draw_rect(bx, cfy, hw, cf_h, (0.05, 0.08, 0.12, 1.0))
-            border(bx, cfy, hw, cf_h, (0.20, 0.28, 0.38, 1.0))
-            _draw_text(lbl, bx + 5*ui, cfy + cf_h/2 - fs9/2, fs9,
-                       (0.45, 0.50, 0.60, 0.8))
-            vw = _text_width(str(val), fs10)
-            _draw_text(str(val), bx + hw - vw - 6*ui,
-                       cfy + cf_h/2 - fs10/2, fs10, (0.8, 0.85, 0.95, 1.0))
-    else:
-        b_nxt(2*ui)
-        _draw_text(f"frames {f_start}–{f_end}  ({dur_str})",
-                   b_xi + 4*ui, b_nxt(fs8 + 3*ui), fs8, (0.40, 0.50, 0.40, 0.9))
+    # "format", "sample rate", "bit depth" labels suppressed — baked into background PNG
 
-    # IMPORT BACK INTO VSE
-    b_nxt(6*ui)
-    slabel("import back into VSE", b_xi, b_y - 8*ui, (0.20, 0.60, 0.40, 1.0))
-    b_nxt(13*ui)
+    # WAV button
+    _is_wav = not (rack.p1 > 0.5)
+    mode_btn(b_xi + MX_WAV_X*ui,  body_top - MX_WAV_Y*ui,  MX_WAV_W*ui,  MX_WAV_H*ui,
+             "WAV",  _is_wav,  col=(0.2, 0.6, 0.9, 1.0), on_key="rack_mixdown_format_btn_on")
+    # FLAC button
+    mode_btn(b_xi + MX_FLAC_X*ui, body_top - MX_FLAC_Y*ui, MX_FLAC_W*ui, MX_FLAC_H*ui,
+             "FLAC", not _is_wav, col=(0.2, 0.6, 0.9, 1.0), on_key="rack_mixdown_format_btn_on")
+
+    # 44k / 48k / 96k buttons
+    _sr_vals = [0.0, 0.5, 1.0]
+    for _lbl, _xc, _yc, _wc, _hc, _vi in [
+        ("44k",  MX_SR44_X, MX_SR44_Y, MX_SR44_W, MX_SR44_H, 0),
+        ("48k",  MX_SR48_X, MX_SR48_Y, MX_SR48_W, MX_SR48_H, 1),
+        ("96k",  MX_SR96_X, MX_SR96_Y, MX_SR96_W, MX_SR96_H, 2),
+    ]:
+        mode_btn(b_xi + _xc*ui, body_top - _yc*ui, _wc*ui, _hc*ui,
+                 _lbl, abs(rack.p2 - _sr_vals[_vi]) < 0.2, col=(0.3, 0.7, 0.5, 1.0),
+                 on_key="rack_mixdown_sr_btn_on")
+
+    # 16 / 24 / 32f buttons
+    _bd_vals = [0.0, 0.5, 1.0]
+    for _lbl, _xc, _yc, _wc, _hc, _vi in [
+        ("16",   MX_BD16_X, MX_BD16_Y, MX_BD16_W, MX_BD16_H, 0),
+        ("24",   MX_BD24_X, MX_BD24_Y, MX_BD24_W, MX_BD24_H, 1),
+        ("32f",  MX_BD32_X, MX_BD32_Y, MX_BD32_W, MX_BD32_H, 2),
+    ]:
+        mode_btn(b_xi + _xc*ui, body_top - _yc*ui, _wc*ui, _hc*ui,
+                 _lbl, abs(rack.p3 - _bd_vals[_vi]) < 0.2, col=(0.6, 0.5, 0.8, 1.0),
+                 on_key="rack_mixdown_bd_btn_on")
+
+    # "range" label suppressed — baked into background PNG
+
+    # Full timeline button
+    mode_btn(b_xi + MX_FULL_X*ui, body_top - MX_FULL_Y*ui, MX_FULL_W*ui, MX_FULL_H*ui,
+             "full timeline", not is_custom, col=(0.7, 0.5, 0.2, 1.0),
+             on_key="rack_mixdown_range_btn_on")
+    # Custom frames button
+    mode_btn(b_xi + MX_CUST_X*ui, body_top - MX_CUST_Y*ui, MX_CUST_W*ui, MX_CUST_H*ui,
+             "custom frames", is_custom,     col=(0.7, 0.5, 0.2, 1.0),
+             on_key="rack_mixdown_range_btn_on")
+
+    # Start frame box — text input style
+    _fsx = b_xi + MX_FSTART_X*ui;  _fsy = body_top - MX_FSTART_Y*ui
+    _fsw = MX_FSTART_W*ui;          _fsh = MX_FSTART_H*ui
+    try:
+        from ui.mixer.interaction import _active_text_field as _atf
+        _fs_focused = (is_custom and _atf is not None
+                       and _atf.get('mx_frame') and _atf.get('param') == 'p5'
+                       and _atf.get('rack_idx') == rack_idx)
+        _fs_text = _atf['text'] if _fs_focused else None
+    except Exception:
+        _fs_focused = False; _fs_text = None
+    _lc  = (0.45, 0.50, 0.60, 0.8) if is_custom else (0.25, 0.28, 0.32, 0.6)
+    _vc  = (0.9, 0.92, 1.0, 1.0)   if _fs_focused else \
+           (0.8, 0.85, 0.95, 1.0)  if is_custom   else (0.35, 0.38, 0.42, 0.6)
+    _sx2, _sy2, _sw2, _sh2 = _shrink(_fsx, _fsy, _fsw, _fsh)
+    # Box chrome baked into background PNG — only draw a highlight border while
+    # actively editing, since that state can't be baked into a static image.
+    if _fs_focused:
+        border(_sx2, _sy2, _sw2, _sh2, (0.3, 0.55, 0.9, 1.0))
+    _draw_text("start", _sx2 + 5*ui, _sy2 + _sh2/2 - fs9/2, fs9, _lc)
+    _disp_s  = (_fs_text if _fs_focused else str(f_start))
+    _cursor_s = ("|" if _fs_focused and int(__import__('time').time() * 2) % 2 == 0 else "")
+    _svw = _text_width(_disp_s + _cursor_s, fs10)
+    _draw_text(_disp_s + _cursor_s, _sx2 + _sw2 - _svw - 6*ui,
+               _sy2 + _sh2/2 - fs10/2, fs10, _vc)
+
+    # End frame box — text input style
+    _fex = b_xi + MX_FEND_X*ui;  _fey = body_top - MX_FEND_Y*ui
+    _few = MX_FEND_W*ui;          _feh = MX_FEND_H*ui
+    try:
+        from ui.mixer.interaction import _active_text_field as _atf2
+        _fe_focused = (is_custom and _atf2 is not None
+                       and _atf2.get('mx_frame') and _atf2.get('param') == 'p6'
+                       and _atf2.get('rack_idx') == rack_idx)
+        _fe_text = _atf2['text'] if _fe_focused else None
+    except Exception:
+        _fe_focused = False; _fe_text = None
+    _vc2  = (0.9, 0.92, 1.0, 1.0)  if _fe_focused else \
+            (0.8, 0.85, 0.95, 1.0) if is_custom   else (0.35, 0.38, 0.42, 0.6)
+    _sx3, _sy3, _sw3, _sh3 = _shrink(_fex, _fey, _few, _feh)
+    if _fe_focused:
+        border(_sx3, _sy3, _sw3, _sh3, (0.3, 0.55, 0.9, 1.0))
+    _draw_text("end", _sx3 + 5*ui, _sy3 + _sh3/2 - fs9/2, fs9, _lc)
+    _disp_e  = (_fe_text if _fe_focused else str(f_end))
+    _cursor_e = ("|" if _fe_focused and int(__import__('time').time() * 2) % 2 == 0 else "")
+    _evw = _text_width(_disp_e + _cursor_e, fs10)
+    _draw_text(_disp_e + _cursor_e, _sx3 + _sw3 - _evw - 6*ui,
+               _sy3 + _sh3/2 - fs10/2, fs10, _vc2)
+
+    # Frame info text
+    _draw_text(f"frames {f_start}–{f_end}  ({dur_str})",
+               b_xi + MX_FSTART_X*ui + MX_FRAMEINFO_X*ui,
+               body_top - MX_FSTART_Y*ui - MX_FSTART_H*ui + MX_FRAMEINFO_Y*ui,
+               fs8, (0.40, 0.50, 0.40, 0.9))
+
+    # Import back into VSE label
+    slabel("import back into VSE",
+           b_xi + MX_IMPORT_LBL_X*ui,
+           body_top - MX_IMPORT_LBL_Y*ui,
+           (0.20, 0.60, 0.40, 1.0))
+
+    # Place on channel — fully independent
+    _place_x = b_xi + MX_PLACE_X*ui;  _place_y = body_top - MX_PLACE_Y*ui
+    _place_w = MX_PLACE_W*ui;          _place_h = MX_PLACE_H*ui
     if is_bake:
-        opts = [("mute originals, place on free channels", 0.0),
-                ("remove originals, replace in-place",     1.0)]
-        for lbl, oval in opts:
-            b_nxt(2*ui)
-            oy  = b_nxt(row_h)
-            sel = abs(import_mode - oval) < 0.3
-            bg  = (0.04, 0.14, 0.10, 1.0) if sel else (0.07, 0.09, 0.08, 1.0)
-            bc  = (0.0, 0.65, 0.45, 1.0)  if sel else (0.20, 0.25, 0.22, 1.0)
-            _draw_rect(b_xi, oy, b_wi, row_h, bg); border(b_xi, oy, b_wi, row_h, bc)
-            dot_x = b_xi + 10*ui; dot_y = oy + row_h/2; dot_r = 3.5*ui
-            if sel:
-                segs = 10; tris = []
-                for _si in range(segs):
-                    a0 = 2*math.pi*_si/segs; a1 = 2*math.pi*(_si+1)/segs
-                    tris += [(dot_x, dot_y),
-                             (dot_x + dot_r*math.cos(a0), dot_y + dot_r*math.sin(a0)),
-                             (dot_x + dot_r*math.cos(a1), dot_y + dot_r*math.sin(a1))]
-                db = batch_for_shader(shader, "TRIS", {"pos": tris})
-                shader.bind(); shader.uniform_float("color", (0.0, 0.8, 0.55, 1.0))
-                db.draw(shader)
-            _draw_text(lbl, b_xi + 20*ui, oy + row_h/2 - fs9/2, fs9,
-                       (0.2, 0.85, 0.6, 1.0) if sel else (0.35, 0.45, 0.40, 1.0))
+        bake_mode_lbl = "replace in-place" if import_mode > 0.5 else "free channels"
+        stepper_row(_place_x, _place_y, _place_w, _place_h, "place on", bake_mode_lbl)
+        _stepper_debug(_place_x, _place_y, _place_w, _place_h)
     else:
-        mode_labels = {0.0: "mute originals", 0.5: "keep active",
-                       1.0: "remove originals"}
+        place_ch = getattr(rack, 'mixdown_place_ch', 0)
+        place_lbl = f"ch {place_ch}" if place_ch > 0 else "auto"
+        stepper_row(_place_x, _place_y, _place_w, _place_h, "place on channel", place_lbl)
+        _stepper_debug(_place_x, _place_y, _place_w, _place_h)
+
+    # After render — fully independent
+    _after_x = b_xi + MX_AFTER_X*ui;  _after_y = body_top - MX_AFTER_Y*ui
+    _after_w = MX_AFTER_W*ui;          _after_h = MX_AFTER_H*ui
+    if is_bake:
+        info_row(_after_x, _after_y, _after_w, _after_h,
+                 "after render", "mute originals", dim=True)
+    else:
+        mode_labels = {0.0: "mute originals", 0.5: "keep active", 1.0: "remove originals"}
         closest  = min(mode_labels, key=lambda k: abs(k - import_mode))
         mode_lbl = mode_labels[closest]
-        hw2      = b_wi / 2 - 2*ui
-        b_nxt(2*ui); r1y = b_nxt(row_h)
-        info_row(b_xi,          r1y, hw2, row_h, "place on channel", "auto (above all)")
-        info_row(b_xi+hw2+4*ui, r1y, hw2, row_h, "after render",     mode_lbl)
-        b_nxt(1*ui)
-        _draw_text("click to cycle: mute → keep active → remove",
-                   b_xi + 4*ui, b_nxt(fs8 + 3*ui), fs8, (0.30, 0.42, 0.35, 0.7))
+        stepper_row(_after_x, _after_y, _after_w, _after_h, "after render", mode_lbl)
+        _stepper_debug(_after_x, _after_y, _after_w, _after_h)
 
-    # Version note
+    # Hint + blend notice text
+    _draw_text(("click: free channels ↔ replace in-place" if is_bake
+                else "click: mute → keep active → remove"),
+               _after_x + 4*ui + MX_HINT_X*ui,
+               _after_y - fs8 - 4*ui + MX_HINT_Y*ui,
+               fs8, (0.30, 0.42, 0.35, 0.7))
     blend_base = (os.path.splitext(os.path.basename(bpy.data.filepath))[0]
                   if bpy.data.filepath else "untitled")
-    b_nxt(3*ui)
     _draw_text(f"blend saved as {blend_base}_v001.blend before render",
-               b_xi + 4*ui, b_nxt(fs8 + 3*ui), fs8, (0.25, 0.45, 0.35, 0.8))
+               b_xi + MX_BLEND_LBL_X*ui,
+               _place_y - fs8*2 - 10*ui + MX_BLEND_LBL_Y*ui,
+               fs8, (0.25, 0.45, 0.35, 0.8))
 
-    # RENDER BUTTON
-    b_nxt(6*ui)
-    btn_h2 = 26*ui; btn_y = b_nxt(btn_h2 + 4*ui)
+    # Render button — fully independent
+    _render_x = b_xi + MX_RENDER_X*ui;  _render_y = body_top - MX_RENDER_Y*ui
+    _render_w = MX_RENDER_W*ui;          _render_h = MX_RENDER_H*ui
+
     if running:
-        bb, bc2, tc2, bl = ((0.05,0.15,0.10,1.0),(0.15,0.40,0.25,1.0),
-                            (0.2,0.55,0.35,1.0), "rendering…")
+        tc2, bl = (0.2,0.55,0.35,1.0), "rendering\u2026"
     else:
-        bb, bc2, tc2 = ((0.04,0.22,0.13,1.0),(0.0,0.65,0.42,1.0),
-                        (0.0,0.90,0.58,1.0))
-        bl = ("bake channels & replace strips"
-              if is_bake else "render & import mixdown")
-    _draw_rect(b_xi, btn_y, b_wi, btn_h2, bb)
-    border(b_xi, btn_y, b_wi, btn_h2, bc2)
+        tc2 = (0.0,0.90,0.58,1.0)
+        bl  = ("bake channels & replace strips"
+               if is_bake else "render & import mixdown")
+    # Box chrome baked into background PNG \u2014 text only, colour still tracks state.
     tw = _text_width(bl, fs11)
-    _draw_text(bl, b_xi + b_wi/2 - tw/2, btn_y + btn_h2/2 - fs11/2, fs11, tc2)
-
-    # ════════════════════════════════════════════════════════════════════
-    # COL C — Stats + progress
+    _draw_text(bl, _render_x + _render_w/2 - tw/2,
+               _render_y + _render_h/2 - fs11/2, fs11, tc2)
     # ════════════════════════════════════════════════════════════════════
     c_y = body_top - pad
     def c_nxt(h):
         nonlocal c_y; c_y -= h; return c_y
 
-    def stat_card(lbl, val, y):
-        card_h = 34*ui
-        _draw_rect(c_xi, y, c_wi, card_h, (0.07, 0.08, 0.10, 1.0))
-        border(c_xi, y, c_wi, card_h, (0.18, 0.20, 0.24, 1.0))
+    def stat_card(lbl, val, cx, cy, cw, ch):
+        """Box chrome baked into background PNG — text only, at the same
+        absolute position cx/cy with size cw/ch (all pre-scaled) as before."""
+        _sx, _sy, _sw, _sh = _shrink(cx, cy, cw, ch)
         vw = _text_width(val, fs11)
-        _draw_text(val, c_xi + c_wi/2 - vw/2,
-                   y + card_h*0.57, fs11, (0.78, 0.82, 0.92, 1.0))
+        _draw_text(val, cx + cw/2 - vw/2, _sy + _sh*0.57, fs11, (0.78, 0.82, 0.92, 1.0))
         lw = _text_width(lbl, fs8)
-        _draw_text(lbl, c_xi + c_wi/2 - lw/2,
-                   y + card_h*0.22, fs8, (0.38, 0.42, 0.52, 1.0))
+        _draw_text(lbl, cx + cw/2 - lw/2, _sy + _sh*0.22, fs8, (0.38, 0.42, 0.52, 1.0))
 
-    # Format badge
-    c_nxt(4*ui)
-    badge_h = 44*ui; badge_y = c_nxt(badge_h)
-    _draw_rect(c_xi, badge_y, c_wi, badge_h, (0.05, 0.12, 0.20, 1.0))
-    border(c_xi, badge_y, c_wi, badge_h, (0.10, 0.28, 0.45, 1.0))
+    # Format badge — chrome baked into background PNG, text only
+    _fmtcx = c_xi + MX_CARD_FMT_X*ui;  _fmtcy = body_top - MX_CARD_FMT_Y*ui
+    _fmtcw = MX_CARD_FMT_W*ui;          _fmtch = MX_CARD_FMT_H*ui
+    _fbx, _fby, _fbw, _fbh = _shrink(_fmtcx, _fmtcy, _fmtcw, _fmtch)
     fw = _text_width(fmt, fs12)
-    _draw_text(fmt, c_xi + c_wi/2 - fw/2, badge_y + badge_h*0.58,
+    _draw_text(fmt, _fmtcx + _fmtcw/2 - fw/2, _fby + _fbh*0.58,
                fs12, (0.45, 0.75, 1.0, 1.0))
     sub = f"{bd}-bit · {sr//1000}k"
-    sw = _text_width(sub, fs8)
-    _draw_text(sub, c_xi + c_wi/2 - sw/2, badge_y + badge_h*0.22,
+    sw2 = _text_width(sub, fs8)
+    _draw_text(sub, _fmtcx + _fmtcw/2 - sw2/2, _fby + _fbh*0.22,
                fs8, (0.25, 0.48, 0.68, 1.0))
 
-    c_nxt(6*ui)
-    stat_card("duration",  dur_str,       c_nxt(34*ui))
-    c_nxt(4*ui)
+    # Duration, size, selected — all absolute
+    stat_card("duration",  dur_str,
+              c_xi + MX_CARD_DUR_X*ui,  body_top - MX_CARD_DUR_Y*ui,
+              MX_CARD_DUR_W*ui, MX_CARD_DUR_H*ui)
     size_v = (f"~{est_mb*max(1,n_sel)} MB" if is_bake else f"~{est_mb} MB")
-    stat_card("est. size", size_v,         c_nxt(34*ui))
-    c_nxt(4*ui)
-    stat_card("selected",  f"{n_sel} ch",  c_nxt(34*ui))
+    stat_card("est. size", size_v,
+              c_xi + MX_CARD_SIZE_X*ui, body_top - MX_CARD_SIZE_Y*ui,
+              MX_CARD_SIZE_W*ui, MX_CARD_SIZE_H*ui)
+    sel_chs = [getattr(rack, 'group_idx', 0)*9 + j + 1
+               for j in range(9) if getattr(rack, f'ch{j}', False)]
+    if sel_chs:
+        ch_str = ", ".join(str(c) for c in sel_chs)
+        if _text_width(ch_str, fs11) > MX_CARD_SEL_W*ui - 8*ui:
+            short = ", ".join(str(c) for c in sel_chs[:3])
+            ch_str = f"{short} +{len(sel_chs)-3}"
+    else:
+        ch_str = "0 ch"
+    stat_card("selected",  ch_str,
+              c_xi + MX_CARD_SEL_X*ui,  body_top - MX_CARD_SEL_Y*ui,
+              MX_CARD_SEL_W*ui, MX_CARD_SEL_H*ui)
 
     # Progress bar — only when rendering / done / error
     if running or done or has_error:
@@ -981,18 +1210,18 @@ def _draw_mixdown_body(rx, ry, rw, rh, rack, rack_idx, scale):
         ptw = _text_width(pct, fs9)
         _draw_text(status, c_xi + ptw + 10*ui, sy, fs9, (0.45, 0.55, 0.45, 0.9))
 
-    # Offline hint (word-wrapped)
-    c_nxt(8*ui)
+    # Offline hint — absolute position, no longer in c_nxt flow
     hint = "renders offline — timeline doesn't need to play"
+    _hint_x = c_xi + MX_OFFLINE_X*ui
+    _hint_y = body_top - MX_OFFLINE_Y*ui
     words = hint.split(); line = ""
     for w in words:
         test = (line + " " + w).strip()
         if _text_width(test, fs8) > c_wi - 4*ui and line:
-            _draw_text(line, c_xi + 2*ui, c_nxt(fs8 + 3*ui), fs8,
-                       (0.30, 0.38, 0.48, 1.0))
+            _draw_text(line, _hint_x + 2*ui, _hint_y, fs8, (0.30, 0.38, 0.48, 1.0))
+            _hint_y -= (fs8 + 3*ui)
             line = w
         else:
             line = test
     if line:
-        _draw_text(line, c_xi + 2*ui, c_nxt(fs8 + 3*ui), fs8,
-                   (0.30, 0.38, 0.48, 1.0))
+        _draw_text(line, _hint_x + 2*ui, _hint_y, fs8, (0.30, 0.38, 0.48, 1.0))

@@ -25,6 +25,21 @@ def _get_shader():
     return _shader
 
 
+def _mx_frame_blink_timer():
+    """Forces a redraw every 0.5s so the mixdown frame box cursor blinks."""
+    try:
+        from ui.racks.rack_mixdown import _mx_state
+        if _mx_state.get('text_focus') is None:
+            return None  # cancel — no longer focused
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'NODE_EDITOR':
+                    area.tag_redraw()
+    except Exception:
+        return None  # cancel on error
+    return 0.5  # reschedule
+
+
 
 # ---------------------------------------------------------------------------
 # Shared state — set by Loader.py before calling draw_racks()
@@ -355,6 +370,8 @@ class PB_RackSettings(bpy.types.PropertyGroup):
     group_idx:        bpy.props.IntProperty(default=0)
     # Mixdown rack output path — stored as file path string
     mixdown_output_path: bpy.props.StringProperty(default="", subtype='FILE_PATH')
+    # Mixdown place-on-channel target: 0 = auto, 1-32 = specific channel
+    mixdown_place_ch: bpy.props.IntProperty(default=0, min=0, max=32)
     # 32 channel assignment booleans (matches MAX_CHANNELS in Loader.py)
     ch0:  bpy.props.BoolProperty(default=False)
     ch1:  bpy.props.BoolProperty(default=False)
@@ -3887,14 +3904,16 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
         if cdel_x <= rx <= _rbx2 + _rbw2 and cdel_y <= ry <= _rby2 + _rbh2:
             return {'zone': 'delete_rack', 'rack_idx': i}
 
-    # Preset arrows
+    # Preset arrows — box is centred in the rack's top bar (see
+    # rack_base._draw_rack_expanded). Hitboxes must use the exact same
+    # formula as the draw call or they drift out of sync with the visible
+    # box whenever the centering offset changes.
     try:
-        from ui.racks.rack_base import COMP_SINGLE_PRESET_X as _CSPX
+        from ui.racks.rack_base import PRESET_BOX_CENTER_X_OFFSET as _PBXO
     except Exception:
-        _CSPX = 380
-    _preset_base = _CSPX if getattr(rack, 'effect_type', '') == 'COMP_SINGLE' else 280
-    p_box_x = rack_x + _preset_base*ui_scale
+        _PBXO = 0.0
     p_box_w = 160*ui_scale
+    p_box_x = rack_x + (rw - p_box_w) / 2.0 + _PBXO*ui_scale
     if rack_y+rh-30*ui_scale <= ry <= rack_y+rh-12*ui_scale:
         if p_box_x-18*ui_scale <= rx <= p_box_x:
             return {'zone': 'preset_left', 'rack_idx': i}
@@ -4043,7 +4062,6 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
                         'param': 'p0', 'value': 1.0}
 
         is_bake_ht   = rack.p0 > 0.5
-        is_custom_ht = rack.p4 > 0.5
         b_top = body_top - pad_mx
 
         def bnxt(h):
@@ -4061,66 +4079,164 @@ def _hit_test_rack_zones(rx, ry, i, rack, rack_x, rack_y, rw, rh, ui_scale, grou
             if b_xi <= rx <= b_xi + b_wi:
                 return {'zone': 'mixdown_browse', 'rack_idx': i}
 
-        bnxt(6*s); bnxt(13*s)
-        ty2 = bnxt(tog_h + 2*s)
-        col3_w2 = (b_wi - 2*4*s) / 3; col3_g2 = 4*s
-        if ty2 <= ry <= ty2 + tog_h:
-            if b_xi <= rx <= b_xi + col3_w2:
-                mid = b_xi + col3_w2/2
-                return {'zone': 'mixdown_set', 'rack_idx': i,
-                        'param': 'p1', 'value': 1.0 if rx >= mid else 0.0}
-            sr_x0 = b_xi + col3_w2 + col3_g2
-            if sr_x0 <= rx <= sr_x0 + col3_w2:
-                third = col3_w2 / 3
-                rel   = rx - sr_x0
-                val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
-                return {'zone': 'mixdown_set', 'rack_idx': i,
-                        'param': 'p2', 'value': val}
-            bd_x0 = b_xi + 2*(col3_w2 + col3_g2)
-            if bd_x0 <= rx <= bd_x0 + col3_w2:
-                third = col3_w2 / 3
-                rel   = rx - bd_x0
-                val   = 0.0 if rel < third else (1.0 if rel > 2*third else 0.5)
-                return {'zone': 'mixdown_set', 'rack_idx': i,
-                        'param': 'p3', 'value': val}
+        try:
+            from ui.racks.rack_mixdown import (
+                MX_WAV_X,  MX_WAV_Y,  MX_WAV_W,  MX_WAV_H,
+                MX_FLAC_X, MX_FLAC_Y, MX_FLAC_W, MX_FLAC_H,
+                MX_SR44_X, MX_SR44_Y, MX_SR44_W, MX_SR44_H,
+                MX_SR48_X, MX_SR48_Y, MX_SR48_W, MX_SR48_H,
+                MX_SR96_X, MX_SR96_Y, MX_SR96_W, MX_SR96_H,
+                MX_BD16_X, MX_BD16_Y, MX_BD16_W, MX_BD16_H,
+                MX_BD24_X, MX_BD24_Y, MX_BD24_W, MX_BD24_H,
+                MX_BD32_X, MX_BD32_Y, MX_BD32_W, MX_BD32_H,
+                MX_FULL_X, MX_FULL_Y, MX_FULL_W, MX_FULL_H,
+                MX_CUST_X, MX_CUST_Y, MX_CUST_W, MX_CUST_H,
+                MX_FSTART_X, MX_FSTART_Y, MX_FSTART_W, MX_FSTART_H,
+                MX_FEND_X,   MX_FEND_Y,   MX_FEND_W,   MX_FEND_H,
+            )
+        except Exception:
+            MX_WAV_X=0;MX_WAV_Y=95;MX_WAV_W=135;MX_WAV_H=20
+            MX_FLAC_X=143;MX_FLAC_Y=95;MX_FLAC_W=135;MX_FLAC_H=20
+            MX_SR44_X=290;MX_SR44_Y=95;MX_SR44_W=90;MX_SR44_H=20
+            MX_SR48_X=388;MX_SR48_Y=95;MX_SR48_W=90;MX_SR48_H=20
+            MX_SR96_X=486;MX_SR96_Y=95;MX_SR96_W=90;MX_SR96_H=20
+            MX_BD16_X=590;MX_BD16_Y=95;MX_BD16_W=90;MX_BD16_H=20
+            MX_BD24_X=688;MX_BD24_Y=95;MX_BD24_W=90;MX_BD24_H=20
+            MX_BD32_X=786;MX_BD32_Y=95;MX_BD32_W=90;MX_BD32_H=20
+            MX_FULL_X=0;MX_FULL_Y=136;MX_FULL_W=180;MX_FULL_H=20
+            MX_CUST_X=188;MX_CUST_Y=136;MX_CUST_W=180;MX_CUST_H=20
+            MX_FSTART_X=390;MX_FSTART_Y=112;MX_FSTART_W=195;MX_FSTART_H=20
+            MX_FEND_X=590;MX_FEND_Y=112;MX_FEND_W=195;MX_FEND_H=20
 
-        bnxt(6*s); bnxt(13*s)
-        rng_y2 = bnxt(tog_h + 2*s)
-        if b_xi <= rx <= b_xi + b_wi and rng_y2 <= ry <= rng_y2 + tog_h:
-            mid = b_xi + b_wi/2
-            return {'zone': 'mixdown_set', 'rack_idx': i,
-                    'param': 'p4', 'value': 1.0 if rx >= mid else 0.0}
-        if is_custom_ht:
-            bnxt(2*s); bnxt(20*s + 2*s)
-        else:
-            bnxt(2*s); bnxt(8*s + 3*s)
+        def _mxb(cx, cy, cw, ch):
+            """Convert MX constants to screen rect using body_top."""
+            return b_xi+cx*s, body_top-cy*s, cw*s, ch*s
 
-        bnxt(6*s); bnxt(13*s)
-        if is_bake_ht:
-            bnxt(2*s); opt0_y = bnxt(row_h)
-            bnxt(2*s); opt1_y = bnxt(row_h)
-            if b_xi <= rx <= b_xi + b_wi:
-                if opt0_y <= ry <= opt0_y + row_h:
-                    return {'zone': 'mixdown_set', 'rack_idx': i,
-                            'param': 'p7', 'value': 0.0}
-                if opt1_y <= ry <= opt1_y + row_h:
-                    return {'zone': 'mixdown_set', 'rack_idx': i,
-                            'param': 'p7', 'value': 1.0}
-        else:
-            bnxt(2*s); src_y = bnxt(row_h)
-            hw2 = b_wi/2 - 2*s
-            src_x = b_xi + hw2 + 4*s
-            if src_x <= rx <= src_x + hw2 and src_y <= ry <= src_y + row_h:
+        # Format buttons
+        _wx, _wy, _ww, _wh = _mxb(MX_WAV_X,  MX_WAV_Y,  MX_WAV_W,  MX_WAV_H)
+        _fx, _fy, _fw, _fh = _mxb(MX_FLAC_X, MX_FLAC_Y, MX_FLAC_W, MX_FLAC_H)
+        if _wx <= rx <= _wx+_ww and _wy <= ry <= _wy+_wh:
+            return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p1', 'value': 0.0}
+        if _fx <= rx <= _fx+_fw and _fy <= ry <= _fy+_fh:
+            return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p1', 'value': 1.0}
+
+        # Sample rate buttons
+        for _val, _cons in [(0.0,(MX_SR44_X,MX_SR44_Y,MX_SR44_W,MX_SR44_H)),
+                             (0.5,(MX_SR48_X,MX_SR48_Y,MX_SR48_W,MX_SR48_H)),
+                             (1.0,(MX_SR96_X,MX_SR96_Y,MX_SR96_W,MX_SR96_H))]:
+            _bx,_by,_bw,_bh = _mxb(*_cons)
+            if _bx <= rx <= _bx+_bw and _by <= ry <= _by+_bh:
+                return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p2', 'value': _val}
+
+        # Bit depth buttons
+        for _val, _cons in [(0.0,(MX_BD16_X,MX_BD16_Y,MX_BD16_W,MX_BD16_H)),
+                             (0.5,(MX_BD24_X,MX_BD24_Y,MX_BD24_W,MX_BD24_H)),
+                             (1.0,(MX_BD32_X,MX_BD32_Y,MX_BD32_W,MX_BD32_H))]:
+            _bx,_by,_bw,_bh = _mxb(*_cons)
+            if _bx <= rx <= _bx+_bw and _by <= ry <= _by+_bh:
+                return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p3', 'value': _val}
+
+        # Range buttons
+        _ftx,_fty,_ftw,_fth = _mxb(MX_FULL_X, MX_FULL_Y, MX_FULL_W, MX_FULL_H)
+        _ctx,_cty,_ctw,_cth = _mxb(MX_CUST_X, MX_CUST_Y, MX_CUST_W, MX_CUST_H)
+        if _ftx <= rx <= _ftx+_ftw and _fty <= ry <= _fty+_fth:
+            return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p4', 'value': 0.0}
+        if _ctx <= rx <= _ctx+_ctw and _cty <= ry <= _cty+_cth:
+            return {'zone': 'mixdown_set', 'rack_idx': i, 'param': 'p4', 'value': 1.0}
+
+        # Frame boxes handled below with text input focus zones
+        is_custom_ht = rack.p4 > 0.5
+
+        # Frame info text row (always present)
+        bnxt(2*s); bnxt(8*s + 3*s)
+
+        # Place on channel + after render — import MX constants
+        try:
+            from ui.racks.rack_mixdown import (
+                MX_PLACE_X, MX_PLACE_Y, MX_PLACE_W, MX_PLACE_H,
+                MX_AFTER_X, MX_AFTER_Y, MX_AFTER_W, MX_AFTER_H,
+                MX_STEPPER_MINUS_X, MX_STEPPER_MINUS_W,
+                MX_STEPPER_PLUS_X, MX_STEPPER_PLUS_W,
+            )
+        except Exception:
+            MX_PLACE_X=-24;MX_PLACE_Y=189;MX_PLACE_W=390;MX_PLACE_H=20
+            MX_AFTER_X=335;MX_AFTER_Y=189;MX_AFTER_W=390;MX_AFTER_H=20
+            MX_STEPPER_MINUS_X=0.0;   MX_STEPPER_MINUS_W=136.5
+            MX_STEPPER_PLUS_X=253.5;  MX_STEPPER_PLUS_W=136.5
+
+        _plx = b_xi+MX_PLACE_X*s;  _ply = body_top-MX_PLACE_Y*s
+        _plw = MX_PLACE_W*s;        _plh = MX_PLACE_H*s
+        _afx = b_xi+MX_AFTER_X*s;  _afy = body_top-MX_AFTER_Y*s
+        _afw = MX_AFTER_W*s;        _afh = MX_AFTER_H*s
+
+        # Place on channel stepper
+        if _plx <= rx <= _plx+_plw and _ply <= ry <= _ply+_plh:
+            if not is_bake_ht:
+                minus_lo = _plx + MX_STEPPER_MINUS_X*s
+                minus_hi = minus_lo + MX_STEPPER_MINUS_W*s
+                plus_lo  = _plx + MX_STEPPER_PLUS_X*s
+                plus_hi  = plus_lo + MX_STEPPER_PLUS_W*s
+                if minus_lo <= rx <= minus_hi:
+                    return {'zone': 'mixdown_place_ch_minus', 'rack_idx': i}
+                elif plus_lo <= rx <= plus_hi:
+                    return {'zone': 'mixdown_place_ch_plus', 'rack_idx': i}
+            else:
+                cur = rack.p7
+                return {'zone': 'mixdown_set', 'rack_idx': i,
+                        'param': 'p7', 'value': 0.0 if cur > 0.5 else 1.0}
+
+        # After render stepper (mix only)
+        if not is_bake_ht:
+            if _afx <= rx <= _afx+_afw and _afy <= ry <= _afy+_afh:
+                minus_lo = _afx + MX_STEPPER_MINUS_X*s
+                minus_hi = minus_lo + MX_STEPPER_MINUS_W*s
+                plus_lo  = _afx + MX_STEPPER_PLUS_X*s
+                plus_hi  = plus_lo + MX_STEPPER_PLUS_W*s
                 cur_val = rack.p7
-                nxt_val = (0.0 if cur_val > 0.75
-                           else 0.5 if cur_val < 0.25 else 1.0)
+                if minus_lo <= rx <= minus_hi:
+                    nxt = (0.0 if cur_val > 0.75 else 0.5 if cur_val < 0.25 else 1.0)
+                elif plus_lo <= rx <= plus_hi:
+                    nxt = (1.0 if cur_val < 0.25 else 0.0 if cur_val > 0.75 else 1.0)
+                else:
+                    nxt = cur_val
                 return {'zone': 'mixdown_set', 'rack_idx': i,
-                        'param': 'p7', 'value': nxt_val}
+                        'param': 'p7', 'value': nxt}
 
-        bnxt(3*s); bnxt(8*s + 3*s)
-        bnxt(6*s)
-        btn_y2 = bnxt(btn_h2 + 4*s)
-        if b_xi <= rx <= b_xi + b_wi and btn_y2 <= ry <= btn_y2 + btn_h2:
+        # Frame boxes — click to focus for text input (only when custom frames active)
+        if is_custom_ht:
+            _fsx2,_fsy2,_fsw2,_fsh2 = b_xi+MX_FSTART_X*s, body_top-MX_FSTART_Y*s, MX_FSTART_W*s, MX_FSTART_H*s
+            _fex2,_fey2,_few2,_feh2 = b_xi+MX_FEND_X*s,   body_top-MX_FEND_Y*s,   MX_FEND_W*s,   MX_FEND_H*s
+            if _fsx2 <= rx <= _fsx2+_fsw2 and _fsy2 <= ry <= _fsy2+_fsh2:
+                try:
+                    from ui.racks.rack_mixdown import _frame_from_norm as _ffn
+                    _cur_start = _ffn(rack.p5)
+                except Exception:
+                    _cur_start = int(rack.p5)
+                return {'zone': 'mixdown_frame_focus', 'rack_idx': i, 'param': 'p5', 'current': _cur_start}
+            if _fex2 <= rx <= _fex2+_few2 and _fey2 <= ry <= _fey2+_feh2:
+                try:
+                    from ui.racks.rack_mixdown import _frame_from_norm as _ffn
+                    _cur_end = _ffn(rack.p6)
+                except Exception:
+                    _cur_end = int(rack.p6)
+                return {'zone': 'mixdown_frame_focus', 'rack_idx': i, 'param': 'p6', 'current': _cur_end}
+            # Click elsewhere while focused → commit
+            try:
+                import ui.mixer.interaction as _inter
+                atf = _inter._active_text_field
+                if atf and atf.get('mx_frame') and atf.get('rack_idx') == i:
+                    return {'zone': 'mixdown_frame_commit', 'rack_idx': i}
+            except Exception:
+                pass
+
+        # Render button
+        try:
+            from ui.racks.rack_mixdown import MX_RENDER_X, MX_RENDER_Y, MX_RENDER_W, MX_RENDER_H
+        except Exception:
+            MX_RENDER_X=-44; MX_RENDER_Y=252; MX_RENDER_W=790; MX_RENDER_H=26
+        _rnx = b_xi+MX_RENDER_X*s;  _rny = body_top-MX_RENDER_Y*s
+        _rnw = MX_RENDER_W*s;        _rnh = MX_RENDER_H*s
+        if _rnx <= rx <= _rnx+_rnw and _rny <= ry <= _rny+_rnh:
             return {'zone': 'mixdown_render', 'rack_idx': i}
 
     return {'zone': 'rack_body', 'rack_idx': i}
@@ -4258,7 +4374,58 @@ def handle_click(hit, context):
                 print(f"[MIXDOWN] start_render error: {e}")
         return True
 
-    if zone == 'mixdown_toggle':
+    if zone == 'mixdown_frame_focus':
+        i     = hit['rack_idx']
+        param = hit['param']
+        cur   = hit.get('current', 1)
+        try:
+            import ui.mixer.interaction as _inter
+            from ui.racks.rack_mixdown import _norm_from_frame
+            racks = getattr(context.scene, "pb_racks", [])
+            def _commit(text, _i=i, _param=param):
+                if text.isdigit() and _i < len(racks):
+                    frame_num = max(1, int(text))
+                    norm_val  = _norm_from_frame(frame_num)
+                    setattr(racks[_i], _param, norm_val)
+            _inter._active_text_field = {
+                'mx_frame':  True,
+                'text':      str(cur),
+                'cursor':    len(str(cur)),
+                'param':     param,
+                'rack_idx':  i,
+                'commit_fn': _commit,
+            }
+        except Exception as e:
+            print(f"[MIXDOWN] frame_focus error: {e}")
+        return True
+
+    if zone == 'mixdown_frame_commit':
+        i = hit['rack_idx']
+        try:
+            import ui.mixer.interaction as _inter
+            atf = _inter._active_text_field
+            if atf and atf.get('mx_frame') and atf.get('rack_idx') == i:
+                commit_fn = atf.get('commit_fn')
+                if commit_fn:
+                    commit_fn(atf.get('text', ''))
+                _inter._active_text_field = None
+        except Exception as e:
+            print(f"[MIXDOWN] frame_commit error: {e}")
+        return True
+
+    if zone == 'mixdown_place_ch_minus':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            racks[i].mixdown_place_ch = max(0, racks[i].mixdown_place_ch - 1)
+        return True
+
+    if zone == 'mixdown_place_ch_plus':
+        i     = hit['rack_idx']
+        racks = getattr(context.scene, "pb_racks", [])
+        if i < len(racks):
+            racks[i].mixdown_place_ch = min(32, racks[i].mixdown_place_ch + 1)
+        return True
         i     = hit['rack_idx']
         racks = getattr(context.scene, "pb_racks", [])
         if i < len(racks):

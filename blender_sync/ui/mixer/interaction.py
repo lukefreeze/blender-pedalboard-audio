@@ -626,6 +626,59 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
             save_ui_state(); context.area.tag_redraw()
             return {"RUNNING_MODAL"}
 
+        # ── Mixdown frame box text input — must come before HOME/other key handlers
+        try:
+            from ui.racks.rack_mixdown import _mx_state as _mxst
+        except Exception:
+            _mxst = None
+        if (_mxst is not None
+                and _mxst.get('text_focus') is not None
+                and _mxst.get('text_rack', -1) >= 0
+                and event.value == "PRESS"):
+            print(f"[MIXDOWN DEBUG] keyboard event: type={event.type!r} unicode={event.unicode!r} focus={_mxst['text_focus']} buf={_mxst['text_buf']!r}")
+            _buf = _mxst['text_buf']
+            _commit = False
+            _handled = True
+            if event.type == "BACK_SPACE":
+                _mxst['text_buf'] = _buf[:-1]
+                print(f"[MIXDOWN DEBUG] BACKSPACE → buf now {_mxst['text_buf']!r}")
+            elif event.type == "DEL":
+                _mxst['text_buf'] = ''
+            elif event.type in {"RET", "NUMPAD_ENTER"}:
+                _commit = True
+            elif event.type == "ESC":
+                _mxst['text_focus'] = None
+                _mxst['text_buf']   = ''
+                _mxst['text_rack']  = -1
+            elif event.unicode and event.unicode.isdigit():
+                if len(_buf) < 6:
+                    _mxst['text_buf'] = _buf + event.unicode
+                print(f"[MIXDOWN DEBUG] digit {event.unicode!r} → buf now {_mxst['text_buf']!r}")
+            else:
+                _handled = False
+                print(f"[MIXDOWN DEBUG] unhandled key type={event.type!r}")
+            if _commit:
+                _param = _mxst['text_focus']
+                _buf2  = _mxst['text_buf']
+                _racks = getattr(context.scene, "pb_racks", [])
+                _ri    = _mxst['text_rack']
+                print(f"[MIXDOWN DEBUG] COMMIT param={_param} buf={_buf2!r}")
+                if _buf2.isdigit() and _ri < len(_racks):
+                    setattr(_racks[_ri], _param, float(max(1, int(_buf2))))
+                _mxst['text_focus'] = None
+                _mxst['text_buf']   = ''
+                _mxst['text_rack']  = -1
+            if _handled or _commit:
+                context.area.tag_redraw()
+                return {"RUNNING_MODAL"}
+
+        # Also print if we have focus but event.value != PRESS to see what's arriving
+        if (_mxst is not None
+                and _mxst.get('text_focus') is not None
+                and event.value != "PRESS"
+                and event.type not in {"MOUSEMOVE", "INBETWEEN_MOUSEMOVE", "TIMER"}):
+            print(f"[MIXDOWN DEBUG] non-PRESS event while focused: type={event.type!r} value={event.value!r}")
+
         if event.type == "HOME" and event.value == "PRESS":
             SCROLL_X = 0.0
             SCROLL_Y = 0.0
@@ -636,6 +689,45 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         # ── Text field keyboard handling ─────────────────────────────────────
         if _active_text_field is not None and event.value == "PRESS":
             ai_idx  = _active_text_field.get('ai_idx', -1)
+
+            # ── Mixdown frame box branch ──────────────────────────────────────
+            if _active_text_field.get('mx_frame'):
+                text      = _active_text_field.get('text', '')
+                cursor    = _active_text_field.get('cursor', len(text))
+                consumed  = True
+                if event.type == "BACK_SPACE" and cursor > 0:
+                    text   = text[:cursor-1] + text[cursor:]
+                    cursor -= 1
+                elif event.type == "DEL" and cursor < len(text):
+                    text = text[:cursor] + text[cursor+1:]
+                elif event.type in {"RET", "NUMPAD_ENTER"}:
+                    # Commit — write value back to rack property
+                    try:
+                        commit_fn = _active_text_field.get('commit_fn')
+                        if commit_fn:
+                            commit_fn(text)
+                    except Exception as _cfe:
+                        print(f"[MIXDOWN] commit error: {_cfe}")
+                    _active_text_field = None
+                    context.area.tag_redraw()
+                    return {"RUNNING_MODAL"}
+                elif event.type == "ESC":
+                    _active_text_field = None
+                    context.area.tag_redraw()
+                    return {"RUNNING_MODAL"}
+                elif event.unicode and event.unicode.isdigit() and not event.ctrl:
+                    if len(text) < 6:
+                        text   = text[:cursor] + event.unicode + text[cursor:]
+                        cursor += 1
+                else:
+                    consumed = False
+                if consumed:
+                    _active_text_field['text']   = text
+                    _active_text_field['cursor'] = cursor
+                    context.area.tag_redraw()
+                    return {"RUNNING_MODAL"}
+                return {"PASS_THROUGH"}
+
             ai_racks = getattr(context.scene, "pb_ai_racks", []) if context.scene else []
             if ai_idx < 0 or ai_idx >= len(ai_racks):
                 _active_text_field = None

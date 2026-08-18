@@ -106,9 +106,11 @@ CH_BTN_LABEL_Y_OFFSET = -0.5
 GR_BAR_W        = 12
 GR_BAR_SPACING  = 16
 
-# X offset (unscaled px from rack left) for the preset selector panel on the rail.
-# Increase this to push the preset box right, away from baked logo text on COMP_SINGLE.
-COMP_SINGLE_PRESET_X = 380
+# The preset selector box is centred in the rack's top bar for every effect
+# type (see _draw_rack_expanded), so titles on the left and on/off/close
+# buttons on the right always have clear room either side of it.
+# Fine-tune nudge only — unscaled px, positive = right. Applies to all racks.
+PRESET_BOX_CENTER_X_OFFSET = 0.0
 
 # =============================================================================
 # SINGLE-BAND COMPRESSOR KNOB TUNING
@@ -698,7 +700,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     # --- TOP RAIL INTERACTIVE ELEMENTS (drawn last, always on top) ---
 
     # Corner screws — suppressed for racks with PNG skins that include them
-    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER", "MIXDOWN"):
         for sx2, sy2 in [(rx+14*scale, ry+rh-16*scale),
                          (rx+rw-14*scale, ry+rh-16*scale),
                          (rx+14*scale, ry+14*scale),
@@ -736,7 +738,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
                badge_fs, (0.35, 0.7, 1.0, 1.0))
     badge_w = badge_w + 6*scale
 
-    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):  # suppressed — label baked into background PNG
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER", "MIXDOWN"):  # suppressed — label baked into background PNG
         _draw_text(ename.upper(),
                    badge_x + badge_w,
                    ry+rh-22*scale, fs_name, (0.75,0.75,0.75,1.0))
@@ -745,9 +747,8 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
     presets   = PRESETS.get(etype, ["Default"])
     p_idx     = rack.preset_idx % max(1, len(presets))
     p_name    = presets[p_idx]
-    _preset_base_x = COMP_SINGLE_PRESET_X if etype == "COMP_SINGLE" else 280
-    p_box_x   = rx + _preset_base_x*scale
     p_box_w   = 160*scale
+    p_box_x   = rx + (rw - p_box_w) / 2.0 + PRESET_BOX_CENTER_X_OFFSET*scale
     p_box_y   = ry + rh - 26*scale
     p_box_h   = 16*scale
 
@@ -822,7 +823,7 @@ def _draw_rack_expanded(rx, ry, rack, rack_idx, scale, rack_width=None):
             pass
     on_h  = 16*scale
 
-    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER"):
+    if etype not in ("COMP_MULTI", "COMP_SINGLE", "EQ", "REVERB", "NOISE_GATE", "DELAY", "BOOSTER", "MIXDOWN"):
         _draw_text("CHANNELS", ch_right_x + 10*scale,
                    ch_top_y + 8*scale, fs_ch, (0.35,0.35,0.35,1.0))
 
