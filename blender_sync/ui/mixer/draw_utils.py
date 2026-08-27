@@ -191,10 +191,11 @@ def text_width(text: str, size: float) -> float:
 def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
               color: tuple, label: str, value_str: str, scale: float,
               label_above: bool = False, value_y_offset: float = 0.0,
-              font_size: float = 0.0) -> None:
+              value_x_offset: float = 0.0, font_size: float = 0.0) -> None:
     """Rotary knob — 270° arc, inner cap, pointer line, label + value.
 
-    value_y_offset: unscaled px nudge applied only to the value readout text.
+    value_y_offset: unscaled px nudge applied only to the value readout text (+ = up).
+    value_x_offset: unscaled px nudge applied only to the value readout text (+ = right).
     font_size: override font size in unscaled pt (0 = use default 8pt).
     """
     draw_circle(cx, cy, radius, (0.13, 0.13, 0.13, 1.0))
@@ -265,7 +266,7 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
                   cy + radius + 3 * scale,
                   fs, (0.6, 0.6, 0.6, 1.0))
         draw_text(value_str,
-                  cx - text_width(value_str, fs) / 2,
+                  cx - text_width(value_str, fs) / 2 + value_x_offset * scale,
                   cy - radius - fs - 2 * scale + value_y_offset * scale,
                   fs, (0.8, 0.8, 0.8, 1.0))
     else:
@@ -274,7 +275,7 @@ def draw_knob(cx: float, cy: float, radius: float, norm_value: float,
                   cy - radius - fs - 2 * scale,
                   fs, (0.6, 0.6, 0.6, 1.0))
         draw_text(value_str,
-                  cx - text_width(value_str, fs) / 2,
+                  cx - text_width(value_str, fs) / 2 + value_x_offset * scale,
                   cy - radius - fs * 2 - 4 * scale + value_y_offset * scale,
                   fs, (0.8, 0.8, 0.8, 1.0))
 

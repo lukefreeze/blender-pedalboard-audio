@@ -46,6 +46,23 @@ def _mx_frame_blink_timer():
 # ---------------------------------------------------------------------------
 _UI_SCALE  = 1.0
 
+# =============================================================================
+# AI RACK RAIL — CHANNEL NUMBER LABEL TUNING
+# The rail channel buttons are baked into a rack's full-unit skin art (see
+# _ai_bg_key below), so only the number text draws in code once a skin is
+# loaded — this nudges that text against the art. Unscaled px, + = right/up.
+# Only applied when a full-rack skin texture is present; the flat-rect
+# fallback (no skin yet) still centres the label on the GPU-drawn box as
+# before, so this has no effect until a rack's art is wired in.
+# =============================================================================
+AI_RAIL_CH_LABEL_X_OFFSET = 1.0
+AI_RAIL_CH_LABEL_Y_OFFSET = -3.0
+
+# Rail channel-number text colour, unassigned state — brighter than the old
+# (0.35, 0.12, 0.08) so it reads against the baked button art (same fix as
+# the body-level "PLACE ON CHANNEL" numbers in rack_piper.py).
+AI_RAIL_CH_LABEL_OFF_COLOR = (0.65, 0.25, 0.16, 1.0)
+
 # GR levels written by the audio engine — rack reads these for GR meters
 # gr_levels[rack_idx][channel_idx] = float 0.0-1.0 (0=no reduction, 1=max)
 _gr_levels = {}
@@ -88,6 +105,11 @@ RACK_EXPANDED_H_NG  = 320   # noise gate — display + 5-knob row
 RACK_EXPANDED_H_DL  = 320   # delay      — waveform display + 5-knob row
 RACK_EXPANDED_H_MX  = 320   # mixdown    — 4-column layout
 RACK_COLLAPSED_H    = 36
+# ^ AI-rack collapsed row height ONLY (see _get_ai_rack_height below). The
+# standard (DSP) rack collapse/stacking code shadows this name locally with
+# rack_base.RACK_COLLAPSED_H (=48) instead — see the comment in draw_racks()
+# for why. Do NOT "fix" standard racks by changing this value; it'll change
+# the AI rack row height too. If you ever unify these, update both.
 RACK_MARGIN_TOP     = 40           # gap between fader section and racks
 RACK_GAP            = 0            # gap between rack units
 RACK_RAIL_H         = 32           # top rail height
@@ -3302,9 +3324,18 @@ def draw_racks(region_width, region_height, scroll_x, scroll_y, ui_scale):
     """
     # rack_base owns the maintained chassis/shell renderers.
     # Import inside function to avoid circular imports at module load time.
+    # RACK_COLLAPSED_H is imported here too — Racks.py has its own stale
+    # module-level copy of this constant (used only by the AI-rack section
+    # below) that drifted out of sync with rack_base's value. Shadowing it
+    # locally with rack_base's live value keeps the space reserved for a
+    # collapsed row in this stacking loop matching what _draw_rack_collapsed
+    # (rack_base.py, the version that actually runs) draws — otherwise the
+    # row renders taller than its reserved slot and paints over the rack
+    # above it.
     from ui.racks.rack_base import (
         _draw_rack_expanded, _draw_rack_collapsed,
         _draw_add_rack_button, _draw_add_popup,
+        RACK_COLLAPSED_H,
     )
     global _UI_SCALE
     _UI_SCALE = ui_scale
@@ -3475,6 +3506,9 @@ def rack_knob_hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         from ui.mixer.channel_strip import strip_bottom_y as _strip_bot
     except Exception:
         return None
+    # Local shadow of the stale module-level RACK_COLLAPSED_H — see the
+    # comment in draw_racks() for why this must match rack_base's value.
+    from ui.racks.rack_base import RACK_COLLAPSED_H
 
     scene = bpy.context.scene
     if not scene: return None
@@ -3714,6 +3748,9 @@ def hit_test(rx, ry, region_height, scroll_x, scroll_y, ui_scale):
         from ui.mixer.channel_strip import strip_bottom_y as _strip_bot
     except Exception:
         return None
+    # Local shadow of the stale module-level RACK_COLLAPSED_H — see the
+    # comment in draw_racks() for why this must match rack_base's value.
+    from ui.racks.rack_base import RACK_COLLAPSED_H
 
     scene = bpy.context.scene
     if not scene: return None
@@ -4910,37 +4947,64 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     HAL_BORDER = (0.20, 0.08, 0.08, 1.0)
     HAL_TEXT   = (0.80, 0.22, 0.14, 1.0)
 
-    _draw_rect(rx, ry, rw, rh, HAL_BG)
     shader = _get_shader()
-    bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
-    batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
-    shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
-
-    for sx, sy in [(rx+14*scale, ry+rh-16*scale), (rx+rw-14*scale, ry+rh-16*scale),
-                   (rx+14*scale, ry+14*scale),     (rx+rw-14*scale, ry+14*scale)]:
-        _draw_circle(sx, sy, 4*scale, (0.07, 0.03, 0.03, 1.0))
-        _draw_circle(sx, sy, 4*scale, (0.25, 0.10, 0.08, 1.0), filled=False)
-        _draw_line(sx-3*scale, sy, sx+3*scale, sy, (0.25, 0.10, 0.08, 0.8))
-        _draw_line(sx, sy-3*scale, sx, sy+3*scale, (0.25, 0.10, 0.08, 0.8))
-
     rail_h = RACK_RAIL_H * scale
-    _draw_rect(rx, ry+rh-rail_h, rw, rail_h, HAL_RAIL)
-    _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.06, 0.04, 0.04, 1.0))
+
+    # Full-rack photoreal skin — one PNG spans the whole unit (rail + body).
+    # When present it replaces the flat chassis/rail/screws/collapse-arrow
+    # chrome below; dynamic content (badge #, preset name, channel states,
+    # knobs, script text, etc.) still draws on top at the same coordinates
+    # either way. Falls back to the old flat GPU chassis if the PNG isn't
+    # found yet — same convention as the DSP racks' "_bg" skins.
+    _ai_bg_key = {
+        "PIPER_TTS": "rack_piper_bg",
+        "RVC":       "rack_knnvc_bg",
+        "RESEMBLE":  "rack_voicefixer_bg",
+        "DEMUCS":    "rack_demucs_bg",
+        "WHISPER":   "rack_whisper_bg",
+    }.get(rack.ai_type)
+    _ai_bg_tex = None
+    if _ai_bg_key:
+        try:
+            from ui.mixer.texture_cache import get_texture as _gtc_aibg
+            _ai_bg_tex = _gtc_aibg(_ai_bg_key)
+        except Exception:
+            _ai_bg_tex = None
+
+    if _ai_bg_tex is not None:
+        from ui.mixer.texture_cache import blit_texture as _blt_aibg
+        _blt_aibg(_ai_bg_tex, rx, ry, rw, rh, key=_ai_bg_key)
+    else:
+        _draw_rect(rx, ry, rw, rh, HAL_BG)
+        bv = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
+        batch = batch_for_shader(shader, "LINE_STRIP", {"pos": bv})
+        shader.bind(); shader.uniform_float("color", HAL_BORDER); batch.draw(shader)
+
+        for sx, sy in [(rx+14*scale, ry+rh-16*scale), (rx+rw-14*scale, ry+rh-16*scale),
+                       (rx+14*scale, ry+14*scale),     (rx+rw-14*scale, ry+14*scale)]:
+            _draw_circle(sx, sy, 4*scale, (0.07, 0.03, 0.03, 1.0))
+            _draw_circle(sx, sy, 4*scale, (0.25, 0.10, 0.08, 1.0), filled=False)
+            _draw_line(sx-3*scale, sy, sx+3*scale, sy, (0.25, 0.10, 0.08, 0.8))
+            _draw_line(sx, sy-3*scale, sx, sy+3*scale, (0.25, 0.10, 0.08, 0.8))
+
+        _draw_rect(rx, ry+rh-rail_h, rw, rail_h, HAL_RAIL)
+        _draw_rect(rx, ry+rh-rail_h-2*scale, rw, 2*scale, (0.06, 0.04, 0.04, 1.0))
 
     col_x = rx + 4*scale
     col_y = ry + rh - 28*scale
     col_w = 24*scale
     col_h = 20*scale
-    _draw_rect(col_x, col_y, col_w, col_h, (0.08, 0.05, 0.05, 1.0))
-    cbv = [(col_x,col_y),(col_x+col_w,col_y),(col_x+col_w,col_y+col_h),
-           (col_x,col_y+col_h),(col_x,col_y)]
-    cb = batch_for_shader(shader, "LINE_STRIP", {"pos": cbv})
-    shader.bind(); shader.uniform_float("color", (0.30, 0.12, 0.08, 1.0)); cb.draw(shader)
-    ax = col_x + col_w * 0.5
-    ay = col_y + col_h * 0.5
-    arrow = [(ax-5*scale, ay-3*scale), (ax+5*scale, ay-3*scale), (ax, ay+5*scale)]
-    ab = batch_for_shader(shader, "TRIS", {"pos": arrow})
-    shader.uniform_float("color", (0.65, 0.25, 0.18, 1.0)); ab.draw(shader)
+    if _ai_bg_tex is None:
+        _draw_rect(col_x, col_y, col_w, col_h, (0.08, 0.05, 0.05, 1.0))
+        cbv = [(col_x,col_y),(col_x+col_w,col_y),(col_x+col_w,col_y+col_h),
+               (col_x,col_y+col_h),(col_x,col_y)]
+        cb = batch_for_shader(shader, "LINE_STRIP", {"pos": cbv})
+        shader.bind(); shader.uniform_float("color", (0.30, 0.12, 0.08, 1.0)); cb.draw(shader)
+        ax = col_x + col_w * 0.5
+        ay = col_y + col_h * 0.5
+        arrow = [(ax-5*scale, ay-3*scale), (ax+5*scale, ay-3*scale), (ax, ay+5*scale)]
+        ab = batch_for_shader(shader, "TRIS", {"pos": arrow})
+        shader.uniform_float("color", (0.65, 0.25, 0.18, 1.0)); ab.draw(shader)
 
     ai_type_names = dict(AI_RACK_TYPES)
     atype     = rack.ai_type
@@ -4951,18 +5015,20 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     badge_lbl = str(ai_idx + 1)
     badge_w   = max(22*scale, _text_width(badge_lbl, badge_fs) + 12*scale)
     badge_h   = 20*scale
-    _draw_rect(badge_x, badge_y, badge_w, badge_h, (0.15, 0.05, 0.03, 1.0))
-    bverts = [(badge_x,badge_y),(badge_x+badge_w,badge_y),
-              (badge_x+badge_w,badge_y+badge_h),(badge_x,badge_y+badge_h),(badge_x,badge_y)]
-    bbat = batch_for_shader(shader, "LINE_STRIP", {"pos": bverts})
-    shader.bind(); shader.uniform_float("color", (0.65, 0.22, 0.14, 0.7)); bbat.draw(shader)
+    if _ai_bg_tex is None:
+        _draw_rect(badge_x, badge_y, badge_w, badge_h, (0.15, 0.05, 0.03, 1.0))
+        bverts = [(badge_x,badge_y),(badge_x+badge_w,badge_y),
+                  (badge_x+badge_w,badge_y+badge_h),(badge_x,badge_y+badge_h),(badge_x,badge_y)]
+        bbat = batch_for_shader(shader, "LINE_STRIP", {"pos": bverts})
+        shader.bind(); shader.uniform_float("color", (0.65, 0.22, 0.14, 0.7)); bbat.draw(shader)
     tw_b = _text_width(badge_lbl, badge_fs)
     _draw_text(badge_lbl, badge_x+badge_w/2-tw_b/2,
                badge_y+badge_h/2-badge_fs/2, badge_fs, HAL_TEXT)
     fs_name = max(1, int(11 * scale))
     name_draw_x = badge_x + badge_w + 6*scale
-    _draw_text(aname.upper(), name_draw_x,
-               ry+rh-22*scale, fs_name, (0.75, 0.30, 0.20, 1.0))
+    if _ai_bg_tex is None:
+        _draw_text(aname.upper(), name_draw_x,
+                   ry+rh-22*scale, fs_name, (0.75, 0.30, 0.20, 1.0))
 
     # ── PRESET SELECTOR — in rail after name ──────────────────────────────
     # Geometry shared with hit test — single calculation
@@ -5017,38 +5083,57 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
             ra_b = batch_for_shader(shader, "TRIS", {"pos": ra})
             shader.bind(); shader.uniform_float("color", (0.45, 0.18, 0.10, 1.0)); ra_b.draw(shader)
 
-    # ── DELETE button (rightmost) ─────────────────────────────────────────
-    del_w = 18*scale
-    del_h = 16*scale
-    del_x = rx + rw - 26*scale
-    del_y = ry + rh - 27*scale
-    _draw_rect(del_x, del_y, del_w, del_h, (0.18, 0.04, 0.04, 1.0))
-    dvs = [(del_x,del_y),(del_x+del_w,del_y),(del_x+del_w,del_y+del_h),
-           (del_x,del_y+del_h),(del_x,del_y)]
-    dbat = batch_for_shader(shader, "LINE_STRIP", {"pos": dvs})
-    shader.bind(); shader.uniform_float("color", (0.6, 0.1, 0.1, 1.0)); dbat.draw(shader)
-    fs_del = max(1, int(9*scale))
-    tw_del = _text_width("X", fs_del)
-    _draw_text("X", del_x+del_w/2-tw_del/2, del_y+del_h/2-fs_del/2+1,
-               fs_del, (0.8, 0.15, 0.15, 1.0))
-
-    # ── ON/OFF button (left of delete) ────────────────────────────────────
-    on_w = 40*scale
-    on_h = 16*scale
-    on_x = del_x - on_w - 4*scale
-    on_y = ry + rh - 27*scale
-    if rack.enabled:
-        _draw_rect(on_x, on_y, on_w, on_h, (0.0, 0.12, 0.0, 1.0))
-        on_col = (0.0, 0.65, 0.3, 1.0); on_txt = "ON"
-    else:
-        _draw_rect(on_x, on_y, on_w, on_h, (0.12, 0.0, 0.0, 1.0))
-        on_col = (0.65, 0.0, 0.0, 1.0); on_txt = "OFF"
-    ovs = [(on_x,on_y),(on_x+on_w,on_y),(on_x+on_w,on_y+on_h),(on_x,on_y+on_h),(on_x,on_y)]
-    obat = batch_for_shader(shader, "LINE_STRIP", {"pos": ovs})
-    shader.bind(); shader.uniform_float("color", on_col); obat.draw(shader)
-    fs_on = max(1, int(9*scale))
-    tw_on = _text_width(on_txt, fs_on)
-    _draw_text(on_txt, on_x+on_w/2-tw_on/2, on_y+on_h/2-fs_on/2+1, fs_on, on_col)
+    # ── ON/OFF + CLOSE BUTTONS (PNG) — same textures/geometry as DSP racks ──
+    # RackOff.png (100×38px source): OFF button + close X — always drawn when expanded
+    # RackOn.png  (100×38px source): ON button only — drawn on top if enabled
+    # Pulled from rack_base so this matches hit_test_ai_racks()'s geometry
+    # exactly (it already reads these same constants) — previously this drew
+    # flat 40×16/18×16 ImGui-style rects at different coordinates than the
+    # hitbox expected.
+    try:
+        from ui.racks.rack_base import (RACK_BTN_W as _RBW4, RACK_BTN_H as _RBH4,
+                                        RACK_BTN_X_OFFSET as _RBXO4, RACK_BTN_Y_OFFSET as _RBYO4)
+    except Exception:
+        _RBW4, _RBH4, _RBXO4, _RBYO4 = 70.0, 26.6, -5.0, -2.0
+    _btn_w = _RBW4 * scale
+    _btn_h = _RBH4 * scale
+    _btn_x = rx + rw - _btn_w + _RBXO4 * scale
+    _btn_y = ry + rh - (RACK_RAIL_H * scale + _btn_h) / 2 + _RBYO4 * scale
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_aibtn
+        from ui.mixer.texture_cache import blit_texture as _blt_aibtn
+        _tex_aioff = _gtc_aibtn("rack_btn_off")
+        if _tex_aioff:
+            _blt_aibtn(_tex_aioff, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_off")
+        else:
+            # GPU fallback — old flat rects, kept so buttons never disappear
+            _fdel_x, _fdel_y = rx+rw-26*scale, ry+rh-27*scale
+            _draw_rect(_fdel_x, _fdel_y, 18*scale, 16*scale, (0.18, 0.04, 0.04, 1.0))
+            _fdvs = [(_fdel_x,_fdel_y),(_fdel_x+18*scale,_fdel_y),(_fdel_x+18*scale,_fdel_y+16*scale),
+                     (_fdel_x,_fdel_y+16*scale),(_fdel_x,_fdel_y)]
+            _fdbat = batch_for_shader(shader, "LINE_STRIP", {"pos": _fdvs})
+            shader.bind(); shader.uniform_float("color", (0.6, 0.1, 0.1, 1.0)); _fdbat.draw(shader)
+            fs_del = max(1, int(9*scale)); tw_del = _text_width("X", fs_del)
+            _draw_text("X", _fdel_x+9*scale-tw_del/2, _fdel_y+8*scale-fs_del/2+1,
+                       fs_del, (0.8, 0.15, 0.15, 1.0))
+            _fon_x, _fon_y = _fdel_x-44*scale, _fdel_y
+            _fon_col = (0.0, 0.65, 0.3, 1.0) if rack.enabled else (0.65, 0.0, 0.0, 1.0)
+            _draw_rect(_fon_x, _fon_y, 40*scale, 16*scale,
+                       (0.0,0.12,0.0,1.0) if rack.enabled else (0.12,0.0,0.0,1.0))
+            _fovs = [(_fon_x,_fon_y),(_fon_x+40*scale,_fon_y),(_fon_x+40*scale,_fon_y+16*scale),
+                     (_fon_x,_fon_y+16*scale),(_fon_x,_fon_y)]
+            _fobat = batch_for_shader(shader, "LINE_STRIP", {"pos": _fovs})
+            shader.bind(); shader.uniform_float("color", _fon_col); _fobat.draw(shader)
+            fs_on = max(1, int(9*scale))
+            _fon_txt = "ON" if rack.enabled else "OFF"
+            tw_on = _text_width(_fon_txt, fs_on)
+            _draw_text(_fon_txt, _fon_x+20*scale-tw_on/2, _fon_y+8*scale-fs_on/2+1, fs_on, _fon_col)
+        if rack.enabled:
+            _tex_aion = _gtc_aibtn("rack_btn_on")
+            if _tex_aion:
+                _blt_aibtn(_tex_aion, _btn_x, _btn_y, _btn_w, _btn_h, key="rack_btn_on")
+    except Exception:
+        pass
 
     # ── CHANNEL BUTTONS — in the rail, between name and ON/OFF ────────────
     ch_btn_s   = 18*scale
@@ -5061,9 +5146,9 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     group_off = getattr(rack, 'group_idx', 0) * 9
     num_ch    = 9
 
-    # Available space: from right edge of name to left edge of ON/OFF
+    # Available space: from right edge of name to left edge of ON/OFF+close
     name_right  = badge_x + badge_w + 6*scale + _text_width(aname.upper(), fs_name) + 8*scale
-    avail_w     = on_x - name_right - 6*scale
+    avail_w     = _btn_x - name_right - 6*scale
     max_fit     = max(1, int(avail_w / (ch_btn_s + ch_btn_gap)))
     num_ch      = min(num_ch, max_fit)
 
@@ -5075,22 +5160,31 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
     _draw_text("CHANNELS", ch_start_x,
                ch_btn_y + ch_btn_h + 1*scale, fs_chl, (0.38, 0.12, 0.06, 1.0))
 
+    # Channel-number label nudge — pulls from the module-level constants
+    # above (AI_RAIL_CH_LABEL_X_OFFSET / _Y_OFFSET) so they're easy to find
+    # and adjust without hunting through this function. Only applied once a
+    # full-rack skin is loaded — the flat-rect fallback (no skin yet) still
+    # centres the label on the GPU-drawn box exactly as before.
+    _ch_lbl_dx = AI_RAIL_CH_LABEL_X_OFFSET*scale if _ai_bg_tex is not None else 0.0
+    _ch_lbl_dy = AI_RAIL_CH_LABEL_Y_OFFSET*scale if _ai_bg_tex is not None else 0.0
+
     for ci in range(num_ch):
         bx = ch_start_x + ci * (ch_btn_s + ch_btn_gap)
         by = ch_btn_y
         assigned_ch = getattr(rack, f'ch{ci}', False)
         bg = (0.0, 0.18, 0.10, 1.0) if assigned_ch else (0.10, 0.05, 0.04, 1.0)
-        bc = (0.0, 0.75, 0.45, 1.0) if assigned_ch else (0.35, 0.12, 0.08, 1.0)
-        _draw_rect(bx, by, ch_btn_s, ch_btn_h, bg)
-        cverts = [(bx,by),(bx+ch_btn_s,by),(bx+ch_btn_s,by+ch_btn_h),
-                  (bx,by+ch_btn_h),(bx,by)]
-        cbat = batch_for_shader(shader, "LINE_STRIP", {"pos": cverts})
-        shader.bind(); shader.uniform_float("color", bc); cbat.draw(shader)
+        bc = (0.0, 0.75, 0.45, 1.0) if assigned_ch else AI_RAIL_CH_LABEL_OFF_COLOR
+        if _ai_bg_tex is None:
+            _draw_rect(bx, by, ch_btn_s, ch_btn_h, bg)
+            cverts = [(bx,by),(bx+ch_btn_s,by),(bx+ch_btn_s,by+ch_btn_h),
+                      (bx,by+ch_btn_h),(bx,by)]
+            cbat = batch_for_shader(shader, "LINE_STRIP", {"pos": cverts})
+            shader.bind(); shader.uniform_float("color", bc); cbat.draw(shader)
         fs_ci = max(1, int(8*scale))
         lbl_c = str(group_off + ci + 1)   # absolute VSE channel number
         tw_c  = _text_width(lbl_c, fs_ci)
-        _draw_text(lbl_c, bx + ch_btn_s/2 - tw_c/2,
-                   by + ch_btn_h/2 - fs_ci/2, fs_ci, bc)
+        _draw_text(lbl_c, bx + ch_btn_s/2 - tw_c/2 + _ch_lbl_dx,
+                   by + ch_btn_h/2 - fs_ci/2 + _ch_lbl_dy, fs_ci, bc)
 
     if atype == "PIPER_TTS":
         try:
@@ -5155,25 +5249,43 @@ def draw_ai_racks(rx, ry, scale, area_width=None, group_idx=0):
 
     rw = (area_width if area_width is not None else RACK_WIDTH) * scale
 
+    # PNG skin — one combined brushed-metal art file covers BOTH the divider
+    # bar and the add-button bar, stacked top/bottom (divider on top, button
+    # on bottom, split down the middle). Sliced via UV sub-rects so each row
+    # blits from its own half of the same texture. Falls back to the old
+    # flat rect + border + text/LED-dot per row if no art is dropped in.
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_airack
+        from ui.mixer.texture_cache import blit_texture as _blt_airack
+        _airack_tex = _gtc_airack("add_ai_rack_btn")
+    except Exception:
+        _airack_tex = None
+
     div_h = 28 * scale
-    _draw_rect(rx, ry - div_h, rw, div_h, (0.06, 0.04, 0.04, 1.0))
     shader = _get_shader()
-    div_verts = [(rx, ry-div_h), (rx+rw, ry-div_h),
-                 (rx+rw, ry), (rx, ry), (rx, ry-div_h)]
-    div_batch = batch_for_shader(shader, "LINE_STRIP", {"pos": div_verts})
-    shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0))
-    div_batch.draw(shader)
 
-    fs_sec = max(1, int(9 * scale))
-    lbl    = "AI PROCESSING"
-    tw_lbl = _text_width(lbl, fs_sec)
-    _draw_text(lbl, rx + 12*scale, ry - div_h + div_h/2 - fs_sec/2,
-               fs_sec, (0.70, 0.18, 0.10, 1.0))
+    if _airack_tex:
+        # Top half of the art (v: 0.5-1.0) = the "AI PROCESSING" divider bar.
+        _blt_airack(_airack_tex, rx, ry - div_h, rw, div_h,
+                    key="add_ai_rack_btn", uv=(0, 0.5, 1, 1))
+    else:
+        _draw_rect(rx, ry - div_h, rw, div_h, (0.06, 0.04, 0.04, 1.0))
+        div_verts = [(rx, ry-div_h), (rx+rw, ry-div_h),
+                     (rx+rw, ry), (rx, ry), (rx, ry-div_h)]
+        div_batch = batch_for_shader(shader, "LINE_STRIP", {"pos": div_verts})
+        shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0))
+        div_batch.draw(shader)
 
-    eye_dot_x = rx + 12*scale + tw_lbl + 14*scale
-    eye_dot_y = ry - div_h/2
-    _draw_circle(eye_dot_x, eye_dot_y, 4*scale, (0.75, 0.12, 0.07, 1.0))
-    _draw_circle(eye_dot_x, eye_dot_y, 2*scale, (1.0,  0.3,  0.15, 1.0))
+        fs_sec = max(1, int(9 * scale))
+        lbl    = "AI PROCESSING"
+        tw_lbl = _text_width(lbl, fs_sec)
+        _draw_text(lbl, rx + 12*scale, ry - div_h + div_h/2 - fs_sec/2,
+                   fs_sec, (0.70, 0.18, 0.10, 1.0))
+
+        eye_dot_x = rx + 12*scale + tw_lbl + 14*scale
+        eye_dot_y = ry - div_h/2
+        _draw_circle(eye_dot_x, eye_dot_y, 4*scale, (0.75, 0.12, 0.07, 1.0))
+        _draw_circle(eye_dot_x, eye_dot_y, 2*scale, (1.0,  0.3,  0.15, 1.0))
 
     y_cursor = ry - div_h
     total_h  = div_h
@@ -5203,15 +5315,21 @@ def draw_ai_racks(rx, ry, scale, area_width=None, group_idx=0):
 
     add_h = 28 * scale
     add_y = y_cursor - add_h
-    _draw_rect(rx, add_y, rw, add_h, (0.06, 0.04, 0.04, 1.0))
-    av = [(rx,add_y),(rx+rw,add_y),(rx+rw,add_y+add_h),(rx,add_y+add_h),(rx,add_y)]
-    ab = batch_for_shader(shader, "LINE_STRIP", {"pos": av})
-    shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0)); ab.draw(shader)
-    fs_add = max(1, int(9 * scale))
-    add_lbl = "+  ADD AI RACK"
-    tw_add  = _text_width(add_lbl, fs_add)
-    _draw_text(add_lbl, rx + rw/2 - tw_add/2,
-               add_y + add_h/2 - fs_add/2, fs_add, (0.50, 0.14, 0.08, 1.0))
+
+    if _airack_tex:
+        # Bottom half of the same art (v: 0.0-0.5) = the "+ ADD AI RACK" button bar.
+        _blt_airack(_airack_tex, rx, add_y, rw, add_h,
+                    key="add_ai_rack_btn", uv=(0, 0, 1, 0.5))
+    else:
+        _draw_rect(rx, add_y, rw, add_h, (0.06, 0.04, 0.04, 1.0))
+        av = [(rx,add_y),(rx+rw,add_y),(rx+rw,add_y+add_h),(rx,add_y+add_h),(rx,add_y)]
+        ab = batch_for_shader(shader, "LINE_STRIP", {"pos": av})
+        shader.bind(); shader.uniform_float("color", (0.22, 0.08, 0.06, 1.0)); ab.draw(shader)
+        fs_add = max(1, int(9 * scale))
+        add_lbl = "+  ADD AI RACK"
+        tw_add  = _text_width(add_lbl, fs_add)
+        _draw_text(add_lbl, rx + rw/2 - tw_add/2,
+                   add_y + add_h/2 - fs_add/2, fs_add, (0.50, 0.14, 0.08, 1.0))
     total_h += add_h
 
     return total_h
@@ -5314,14 +5432,20 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
         y_walk -= rh + RACK_GAP * scale
     add_y = y_walk - add_h   # bottom-left of the ADD AI RACK button
 
-    # Check AI popup first — it draws downward from add_y
+    # Check AI popup first — it draws downward from _ai_popup_y.
+    # Must use the STORED _ai_popup_y here, not a freshly recomputed add_y —
+    # _draw_ai_add_popup() draws from _ai_popup_y (the raw click Y that opened
+    # the popup, set in handle_ai_rack_click), so the hit-test has to read the
+    # same value or the two disagree on where the popup actually is (this was
+    # the "have to click the bottom edge of each row" bug). Mirrors how the
+    # DSP add-rack popup already does it with _popup_x/_popup_y.
     if _ai_popup_open:
         popup_w = 260 * scale
         title_h = 24 * scale
         item_h  = 28 * scale
         popup_h = title_h + len(AI_RACK_TYPES) * item_h + 6 * scale
-        popup_top = add_y        # popup top = add button bottom
-        popup_bot = add_y - popup_h
+        popup_top = _ai_popup_y
+        popup_bot = _ai_popup_y - popup_h
         if (_ai_popup_x <= mouse_x <= _ai_popup_x + popup_w and
                 popup_bot <= mouse_y <= popup_top):
             for i, (atype, _) in enumerate(AI_RACK_TYPES):
@@ -5397,39 +5521,75 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             _sp_x_p  = rack_x + _marg_p
             _sp_w_p  = (rack_x + rw * 0.52) - rack_x - _marg_p*2
 
-            # SCRIPT TEXT AREA click
+            # SCRIPT TEXT AREA click — geometry + raw mouse pos passed through
+            # so handle_ai_rack_click() can map the click to a character
+            # index (click-to-position-cursor / drag-select) via the SAME
+            # word-wrap layout rack_piper.py's draw code uses.
             _ta_top_p  = _uy_p + _uh_p
             _ta_bot_p  = _uy_p + 28*scale
             if (_sp_x_p <= mouse_x <= _sp_x_p+_sp_w_p and
                     _ta_bot_p <= mouse_y <= _ta_top_p):
-                return {'zone': 'ai_piper_text', 'ai_idx': ai_idx}
+                return {'zone': 'ai_piper_text', 'ai_idx': ai_idx,
+                        'sp_x': _sp_x_p, 'sp_y': _uy_p,
+                        'sp_w': _sp_w_p, 'sp_h': _uh_p, 'scale': scale,
+                        'mouse_x': mouse_x, 'mouse_y': mouse_y}
 
-            # Button row geometry — mirrors rack_piper.py exactly
-            _gw_p  = min(80*scale, _sp_w_p*0.48)
-            _gh_p  = max(16*scale, 20*scale)
-            _gx_p  = _sp_x_p + 4*scale
-            _gy_p  = _uy_p + 4*scale
+            # Button row geometry — mirrors rack_piper.py exactly, including
+            # its independent per-button PIPER_{GEN,PV,CL}_BTN_*_OFFSET/SCALE
+            # tuning constants, imported live so a change there stays in sync
+            # here. Base positions come from the SAME natural-flow formula
+            # rack_piper.py uses (never from another button's tuned position),
+            # so each button's own offset/scale is independent there too.
+            try:
+                from ui.racks.rack_piper import (
+                    PIPER_GEN_BTN_X_OFFSET as _PGXO, PIPER_GEN_BTN_Y_OFFSET as _PGYO,
+                    PIPER_GEN_BTN_W_SCALE as _PGWS, PIPER_GEN_BTN_H_SCALE as _PGHS,
+                    PIPER_PV_BTN_X_OFFSET as _PPXO, PIPER_PV_BTN_Y_OFFSET as _PPYO,
+                    PIPER_PV_BTN_W_SCALE as _PPWS,
+                    PIPER_CL_BTN_X_OFFSET as _PCXO, PIPER_CL_BTN_Y_OFFSET as _PCYO,
+                    PIPER_CL_BTN_W_SCALE as _PCWS,
+                    PIPER_VOICE_PANEL_X_OFFSET as _PVPXO,
+                    PIPER_VOICE_PANEL_W_SCALE as _PVPWS,
+                )
+            except Exception:
+                _PGXO = _PGYO = _PPXO = _PPYO = _PCXO = _PCYO = _PVPXO = 0.0
+                _PGWS = _PGHS = _PPWS = _PCWS = _PVPWS = 1.0
+
+            _gen_w_base = min(80*scale, _sp_w_p*0.48)
+            _pv_w_base  = min(60*scale, _sp_w_p*0.36)
+            _cl_w_base  = min(38*scale, _sp_w_p*0.22)
+            _gen_x_base = _sp_x_p + 4*scale
+            _pv_x_base  = _gen_x_base + _gen_w_base + 4*scale
+            _cl_x_base  = _pv_x_base + _pv_w_base + 4*scale
+            _row_y_base = _uy_p + 4*scale
+
+            _gw_p = _gen_w_base * _PGWS
+            _gh_p = max(16*scale, 20*scale) * _PGHS
+            _gx_p = _gen_x_base + _PGXO*scale
+            _gy_p = _row_y_base + _PGYO*scale
 
             # GENERATE button
             if _gx_p <= mouse_x <= _gx_p+_gw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
                 return {'zone': 'ai_process', 'ai_idx': ai_idx, 'ai_type': 'PIPER_TTS'}
 
-            # PREVIEW button (next to GENERATE)
-            _pvw_p = min(60*scale, _sp_w_p*0.36)
-            _pvx_p = _gx_p + _gw_p + 4*scale
-            if _pvx_p <= mouse_x <= _pvx_p+_pvw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
+            # PREVIEW button
+            _pvw_p = _pv_w_base * _PPWS
+            _pvx_p = _pv_x_base + _PPXO*scale
+            _pvy_p = _row_y_base + _PPYO*scale
+            if _pvx_p <= mouse_x <= _pvx_p+_pvw_p and _pvy_p <= mouse_y <= _pvy_p+_gh_p:
                 return {'zone': 'ai_piper_preview', 'ai_idx': ai_idx}
 
-            # CLEAR button (after PREVIEW)
-            _clw_p = min(38*scale, _sp_w_p*0.22)
-            _clx_p = _pvx_p + _pvw_p + 4*scale
-            if _clx_p <= mouse_x <= _clx_p+_clw_p and _gy_p <= mouse_y <= _gy_p+_gh_p:
+            # CLEAR button
+            _clw_p = _cl_w_base * _PCWS
+            _clx_p = _cl_x_base + _PCXO*scale
+            _cly_p = _row_y_base + _PCYO*scale
+            if _clx_p <= mouse_x <= _clx_p+_clw_p and _cly_p <= mouse_y <= _cly_p+_gh_p:
                 return {'zone': 'ai_piper_clear', 'ai_idx': ai_idx}
 
             # Voice panel geometry
             _spl_x_p  = rack_x + rw * 0.52
-            _vp_x_p   = _spl_x_p + _marg_p*0.5
-            _vp_w_p   = rack_x + rw - _spl_x_p - _marg_p*1.5
+            _vp_x_p   = _spl_x_p + _marg_p*0.5 + _PVPXO*scale
+            _vp_w_p   = (rack_x + rw - _spl_x_p - _marg_p*1.5) * _PVPWS
             _vp_y_p   = _uy_p
             _vp_h_p   = _uh_p
             _fs_lbl_p = max(1, int(8*scale))
@@ -6288,20 +6448,44 @@ def handle_ai_rack_click(hit, context):
                 setattr(ai_racks[i], prop, float(min(32, cur + 1)))
         return True
 
-    # Piper text area click — activate text field
+    # Piper text area click — activate text field, place the cursor at the
+    # clicked character (not always the end), and arm drag-select. The
+    # click's own geometry/mouse position rode along on `hit` (see
+    # hit_test_ai_racks' ai_piper_text branch) so the cursor index comes
+    # from the SAME word-wrap layout the text is actually drawn with.
     if zone == 'ai_piper_text':
         ai_racks = getattr(context.scene, "pb_ai_racks", [])
         i = hit['ai_idx']
         if i < len(ai_racks):
             rack = ai_racks[i]
-            # Signal interaction.py to activate text field for this rack
+            text = getattr(rack, 'ai_text', '') or ''
+            try:
+                from ui.racks.rack_piper import cursor_index_from_xy
+                idx = cursor_index_from_xy(
+                    text, hit['sp_x'], hit['sp_y'], hit['sp_w'], hit['sp_h'],
+                    hit['scale'], hit['mouse_x'], hit['mouse_y'])
+            except Exception as _cie:
+                print(f"[PIPER] cursor hit-test error: {_cie}")
+                idx = len(text)
+            # Signal interaction.py to activate text field for this rack.
+            # sel_start/sel_end start collapsed at the click point; a plain
+            # click leaves no selection, dragging extends it from here.
             try:
                 import ui.mixer.interaction as _inter
                 _inter._active_text_field = {
                     'ai_idx': i,
-                    'cursor': len(getattr(rack, 'ai_text', '') or ''),
+                    'cursor': idx,
+                    'sel_start': idx,
+                    'sel_end': idx,
+                    'drag_anchor': idx,
+                    # Geometry snapshot so drag-select (MOUSEMOVE, no fresh
+                    # hit-test each frame) can keep re-deriving the cursor
+                    # from the same layout without re-walking the rack tree.
+                    'drag_sp_x': hit['sp_x'], 'drag_sp_y': hit['sp_y'],
+                    'drag_sp_w': hit['sp_w'], 'drag_sp_h': hit['sp_h'],
+                    'drag_scale': hit['scale'],
                 }
-                print(f"[PIPER] text field activated for rack {i}")
+                print(f"[PIPER] text field activated for rack {i}, cursor={idx}")
             except Exception as _te:
                 print(f"[PIPER] text field activate error: {_te}")
         return True

@@ -78,6 +78,13 @@ is_dragging_v      = False
 is_panning         = False
 is_zooming         = False
 
+# Text-selection drag — armed on LEFTMOUSE press inside the Piper script box
+# (see handle_ai_rack_click's ai_piper_text branch), cleared on release.
+# While True, MOUSEMOVE re-derives the cursor from the mouse position using
+# the same word-wrap layout the text is drawn with (rack_piper.cursor_index_
+# from_xy) and extends the selection from the click's drag_anchor.
+is_dragging_text   = False
+
 active_knob_track  = -1
 active_knob_type   = ""
 active_rack_knob   = None   # (rack_idx, param_idx) or None
@@ -143,7 +150,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                active_rack_knob, \
                active_ai_knob, \
                _active_text_field, \
-               is_dragging_h, is_dragging_v, \
+               is_dragging_h, is_dragging_v, is_dragging_text, \
                _last_click_time, _last_click_track
 
         import ui.mixer.mixer_hud as _hud
@@ -175,12 +182,36 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                        or active_rack_knob is not None
                        or active_ai_knob is not None
                        or _active_text_field is not None
-                       or is_dragging_h or is_dragging_v)
+                       or is_dragging_h or is_dragging_v or is_dragging_text)
 
         if not (is_inside or mid_drag or widget_drag):
             return {"PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":
+            if is_dragging_text and _active_text_field is not None:
+                try:
+                    from ui.racks.rack_piper import cursor_index_from_xy
+                    text = ""
+                    ai_idx_d = _active_text_field.get('ai_idx', -1)
+                    ai_racks_d = getattr(context.scene, "pb_ai_racks", [])
+                    if 0 <= ai_idx_d < len(ai_racks_d):
+                        text = getattr(ai_racks_d[ai_idx_d], 'ai_text', '') or ''
+                    idx = cursor_index_from_xy(
+                        text,
+                        _active_text_field.get('drag_sp_x', 0.0),
+                        _active_text_field.get('drag_sp_y', 0.0),
+                        _active_text_field.get('drag_sp_w', 0.0),
+                        _active_text_field.get('drag_sp_h', 0.0),
+                        _active_text_field.get('drag_scale', UI_SCALE),
+                        rx, ry)
+                    anchor = _active_text_field.get('drag_anchor', idx)
+                    _active_text_field['cursor']    = idx
+                    _active_text_field['sel_start'] = anchor
+                    _active_text_field['sel_end']   = idx
+                    context.area.tag_redraw()
+                except Exception as _dse:
+                    print(f"[PIPER] drag-select error: {_dse}")
+                return {"RUNNING_MODAL"}
             if is_zooming:
                 old_s    = UI_SCALE
                 UI_SCALE = max(0.1, min(5.0, UI_SCALE +
@@ -330,6 +361,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
                 # Any click outside a text field closes it
+                is_dragging_text = False
                 if _active_text_field is not None:
                     _active_text_field = None
                     context.area.tag_redraw()
@@ -536,11 +568,23 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         from ui.mixer.channel_strip import strip_bottom_y as _sbot_ai
                         rack_top_ai  = _sbot_ai(base_y_ai, n_group_dsp, UI_SCALE) - _rk_ai.RACK_MARGIN_TOP*UI_SCALE
 
-                        # Walk down past this group's DSP racks
+                        # Walk down past this group's DSP racks.
+                        # RACK_COLLAPSED_H must come from rack_base, NOT from
+                        # Racks — Racks.RACK_COLLAPSED_H (36) is a legacy value
+                        # kept only for AI-rack sizing; the real collapsed-rack
+                        # draw height (rack_base._draw_rack_collapsed) is 48.
+                        # Using the stale 36 here under-counts every collapsed
+                        # DSP rack above the AI section by 12 unscaled px,
+                        # pushing ai_section_top_y (and everything hit-tested
+                        # below it — the AI popup, add button, and every AI
+                        # rack's own hitboxes) down out of alignment with what's
+                        # actually drawn. Same fix already applied inside
+                        # Racks.py's own draw_racks()/rack_knob_hit_test()/hit_test().
+                        from ui.racks.rack_base import RACK_COLLAPSED_H as _RB_COLLAPSED_H
                         cur_y_ai = rack_top_ai
                         for _ri in group_dsp:
                             if _ri.collapsed:
-                                _rh = _rk_ai.RACK_COLLAPSED_H * UI_SCALE
+                                _rh = _RB_COLLAPSED_H * UI_SCALE
                             elif _ri.effect_type == "COMP_MULTI":
                                 _rh = _rk_ai.RACK_EXPANDED_H_MB * UI_SCALE
                             elif _ri.effect_type == "EQ":
@@ -575,6 +619,12 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                         if ai_hit.get('zone') in ('ai_dnf_knob', 'ai_piper_knob', 'ai_rvc_knob'):
                             active_ai_knob = (ai_hit['ai_idx'], ai_hit['knob_idx'])
                             return {"RUNNING_MODAL"}
+                        if ai_hit.get('zone') == 'ai_piper_text':
+                            # Arm drag-select — handle_ai_rack_click() below
+                            # places the cursor and stashes the geometry
+                            # MOUSEMOVE needs to keep extending the selection
+                            # while the button stays down.
+                            is_dragging_text = True
                         if ai_handle_click(ai_hit, context):
                             context.area.tag_redraw()
                         return {"RUNNING_MODAL"}
@@ -589,6 +639,7 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 active_ai_knob     = None
                 is_dragging_h      = False
                 is_dragging_v      = False
+                is_dragging_text   = False
 
         if event.type == "MIDDLEMOUSE":
             if event.value == "PRESS":
@@ -815,6 +866,36 @@ class VSE_OT_PB_Interaction(bpy.types.Operator):
                 _active_text_field['sel_start'] = 0
                 _active_text_field['sel_end']   = len(text)
                 cursor = len(text)
+            elif event.type == "C" and event.ctrl:
+                # Ctrl+C — copy selection (or the whole field if nothing
+                # selected) to the SYSTEM clipboard, so it can be pasted
+                # into another application. Text/cursor are unchanged.
+                if _has_sel():
+                    lo, hi = _sel_range()
+                    context.window_manager.clipboard = text[lo:hi]
+                else:
+                    context.window_manager.clipboard = text
+            elif event.type == "X" and event.ctrl:
+                # Ctrl+X — cut selection to the system clipboard
+                if _has_sel():
+                    context.window_manager.clipboard = text[_sel_range()[0]:_sel_range()[1]]
+                    text, cursor = _delete_sel(); _clear_sel()
+                else:
+                    consumed = False
+            elif event.type == "V" and event.ctrl:
+                # Ctrl+V — paste from the system clipboard (e.g. text copied
+                # from another application), replacing any selection.
+                paste = context.window_manager.clipboard or ""
+                paste = paste.replace("\r\n", "\n").replace("\r", "\n")
+                if _tf_field != 'ai_text':
+                    # Single-line fields — collapse any newlines to spaces
+                    paste = paste.replace("\n", " ")
+                if _has_sel():
+                    text, cursor = _delete_sel(); _clear_sel()
+                paste = paste[:max(0, 4096 - len(text))]   # respect the same 4096 cap as typing
+                if paste:
+                    text   = text[:cursor] + paste + text[cursor:]
+                    cursor += len(paste)
             elif event.type == "RET" or event.type == "NUMPAD_ENTER":
                 if event.shift and _tf_field == 'ai_text':
                     if _has_sel():

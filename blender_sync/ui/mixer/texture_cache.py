@@ -103,8 +103,42 @@ SKIN_MAP = {
     "rack_mixdown_sr_btn_on":     "mixdown_sr_btn_on.png",
     "rack_mixdown_bd_btn_on":     "mixdown_bd_btn_on.png",
     "rack_mixdown_range_btn_on":  "mixdown_range_btn_on.png",
+    # ---------------------------------------------------------------------------
+    # Collapsed rack backgrounds — one PNG per effect type, same convention as
+    # the expanded "_bg" skins above (rack_<type>_collapsed_bg.png in
+    # skins/default/). Title/logo/expand-arrow are baked into the art; the
+    # rest of the row (badge #, preset name, channel badges, ON/OFF+close)
+    # draws on top at fixed coordinates — see rack_base._COLLAPSED_BG_KEY.
+    # Drop the PNG in with the exact filename below and it just works, no
+    # code changes needed. Missing files fall back to a flat rect + border.
+    # ---------------------------------------------------------------------------
+    "rack_comp_single_collapsed_bg": "rack_comp_single_collapsed_bg.png",
+    "rack_comp_multi_collapsed_bg":  "rack_comp_multi_collapsed_bg.png",
+    "rack_eq_collapsed_bg":          "rack_eq_collapsed_bg.png",
+    "rack_reverb_collapsed_bg":      "rack_reverb_collapsed_bg.png",
+    "rack_noisegate_collapsed_bg":   "rack_noisegate_collapsed_bg.png",
+    "rack_delay_collapsed_bg":       "rack_delay_collapsed_bg.png",
+    "rack_booster_collapsed_bg":     "rack_booster_collapsed_bg.png",
+    "rack_mixdown_collapsed_bg":     "rack_mixdown_collapsed_bg.png",
+    # ---------------------------------------------------------------------------
+    # Collapsed rack per-channel LED strip — universal across all rack types
+    # (see rack_base._draw_rack_collapsed). One small LED per channel (1-9),
+    # channel number drawn above each. Unused channels show the "off" LED;
+    # channels routed to this rack blink between "off" and "on" to show
+    # they're live. Same two files cover every rack type — no per-type
+    # naming needed here.
+    # ---------------------------------------------------------------------------
+    "rack_collapsed_ch_led_off": "rack_collapsed_ch_led_off.png",
+    "rack_collapsed_ch_led_on":  "rack_collapsed_ch_led_on.png",
     "rack_knnvc_bg":       "rack_knnvc_bg.png",
     "rack_demucs_bg":      "rack_demucs_bg.png",
+    # AI rack full-unit skins (rail + body baked into one image, same
+    # convention as the DSP rack "_bg" skins above). Drop the PNG in with
+    # this exact filename and _draw_ai_rack_expanded picks it up automatically
+    # — no code changes needed. Missing files fall back to the flat GPU chassis.
+    "rack_piper_bg":       "rack_piper_bg.png",
+    "rack_voicefixer_bg":  "rack_voicefixer_bg.png",
+    "rack_whisper_bg":     "rack_whisper_bg.png",
     "add_rack_btn":        "add_rack_btn.png",
     "add_ai_rack_btn":     "add_ai_rack_btn.png",
     "rack_chassis":  "rack_chassis.png",
@@ -201,12 +235,19 @@ def get_texture_with_fallback(*keys):
 
 
 def blit_texture(tex, x: float, y: float, w: float, h: float,
-                 alpha: float = 1.0, key: str = "", blend: str = "ALPHA_PREMULT") -> None:
+                 alpha: float = 1.0, key: str = "", blend: str = "ALPHA_PREMULT",
+                 uv=None) -> None:
     """Blit a gpu.GPUTexture into a screen-space rect (x,y = bottom-left).
 
     blend: GPU blend mode passed to gpu.state.blend_set before drawing.
            Default "ALPHA_PREMULT" is correct for pre-multiplied skin PNGs.
            Pass "ALPHA" for overlays whose RGB is NOT pre-multiplied (e.g. glass layers).
+    uv:    optional (u0, v0, u1, v1) sub-rect of the source texture to sample,
+           normalized 0..1, where v=0 is the BOTTOM of the image and v=1 is
+           the TOP (matches the default full-image mapping below). Use this
+           to slice one tall combined-art PNG into separate draw calls (e.g.
+           a divider bar stacked above a button bar in a single file).
+           Defaults to the full image (0, 0, 1, 1) when omitted.
     """
     if tex is None or w <= 0 or h <= 0:
         return
@@ -217,7 +258,8 @@ def blit_texture(tex, x: float, y: float, w: float, h: float,
         gpu.state.blend_set(blend)
         shader = gpu.shader.from_builtin("IMAGE")
         verts  = [(x, y), (x+w, y), (x, y+h), (x+w, y+h)]
-        uvs    = [(0, 0), (1, 0), (0, 1), (1, 1)]
+        u0, v0, u1, v1 = uv if uv is not None else (0, 0, 1, 1)
+        uvs    = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)]
         batch  = batch_for_shader(shader, "TRI_STRIP",
                                   {"pos": verts, "texCoord": uvs})
         shader.bind()

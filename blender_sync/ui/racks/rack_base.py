@@ -113,6 +113,45 @@ GR_BAR_SPACING  = 16
 PRESET_BOX_CENTER_X_OFFSET = 0.0
 
 # =============================================================================
+# COLLAPSED RACK — per-effect-type background skin
+# =============================================================================
+# One PNG per effect type, same idea as the expanded "_bg" skins: the title/
+# logo, expand-arrow icon, and any decorative chrome are baked into the art;
+# the row layout (badge number, preset name, channel badges, ON/OFF+close)
+# stays fixed and is drawn on top at the same coordinates for every rack type.
+#
+# To add a new rack's collapsed art: drop a PNG named exactly like the value
+# below into ui/assets/skins/default/, matching the key for that effect_type.
+# No code changes needed — get_texture() picks it up automatically. Any type
+# missing its PNG falls back to the old flat rect + border so it doesn't
+# disappear.
+_COLLAPSED_BG_KEY = {
+    "COMP_SINGLE": "rack_comp_single_collapsed_bg",
+    "COMP_MULTI":  "rack_comp_multi_collapsed_bg",
+    "EQ":          "rack_eq_collapsed_bg",
+    "REVERB":      "rack_reverb_collapsed_bg",
+    "NOISE_GATE":  "rack_noisegate_collapsed_bg",
+    "DELAY":       "rack_delay_collapsed_bg",
+    "BOOSTER":     "rack_booster_collapsed_bg",
+    "MIXDOWN":     "rack_mixdown_collapsed_bg",
+}
+
+# =============================================================================
+# COLLAPSED RACK — per-channel LED strip
+# =============================================================================
+# All 9 channels are always shown as a small numbered LED each (not just the
+# ones this rack uses). Channels routed to this rack blink between the "off"
+# and "on" LED skins to show they're live; unused channels sit on "off".
+# PNGs: rack_collapsed_ch_led_off.png / rack_collapsed_ch_led_on.png in
+# skins/default/ — see SKIN_MAP in texture_cache.py. Falls back to plain
+# circles (dim grey / blinking green) if the PNGs aren't there yet.
+RACK_COLLAPSED_LED_W        = 10.0   # unscaled px — LED icon width
+RACK_COLLAPSED_LED_H        = 10.0   # unscaled px — LED icon height
+RACK_COLLAPSED_LED_GAP      = 5.0    # unscaled px — gap between adjacent LEDs
+RACK_COLLAPSED_LED_NUM_GAP  = 3.0    # unscaled px — gap between number and LED top
+RACK_COLLAPSED_LED_FLASH_HZ = 2.0    # blink rate, full on/off cycles per second
+
+# =============================================================================
 # SINGLE-BAND COMPRESSOR KNOB TUNING
 # All values are unscaled px — multiplied by scale at draw time.
 #
@@ -833,40 +872,45 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
     """Draw a collapsed rack unit — single row.
 
     Layout (left → right):
-      [screws] [▶ expand arrow] [badge#] [EFFECT NAME]  [CH badges…]  [preset]  [ON/OFF] [X]
+      [screws] [▶ expand arrow] [badge#] [EFFECT NAME]  [CH badges…]  [ON/OFF] [X]
     Right side buttons are right-aligned; channel badges sit just left of them.
+    No preset name here — that's expanded-only, see _draw_rack_expanded.
     """
     _rs = _get_racks_state()
     EFFECT_TYPES      = _rs['EFFECT_TYPES']
-    PRESETS           = _rs['PRESETS']
-    _led_states       = _rs['_led_states']
-
-    # Lazy import — cannot be done at module level (circular import)
-    try:
-        import Racks as _rk
-        get_rack_channels = _rk.get_rack_channels
-    except Exception:
-        get_rack_channels = lambda r: set()
 
     rw = (rack_width if rack_width is not None else RACK_WIDTH) * scale
     rh = RACK_COLLAPSED_H * scale
     cy = ry + rh / 2   # vertical centre
+    etype = rack.effect_type
 
-    # Background + border
-    _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
-    shader = _get_shader()
-    verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
-    batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
-    shader.bind()
-    shader.uniform_float("color",(0.25,0.25,0.25,1.0))
-    batch.draw(shader)
+    # Background — per-effect-type PNG skin (see _COLLAPSED_BG_KEY above).
+    # Falls back to the old flat rect + border for any type without art yet.
+    _collapsed_bg_drawn = False
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_cbg
+        from ui.mixer.texture_cache import blit_texture as _blt_cbg
+        _cbg_key = _COLLAPSED_BG_KEY.get(etype)
+        _cbg_tex = _gtc_cbg(_cbg_key) if _cbg_key else None
+        if _cbg_tex:
+            _blt_cbg(_cbg_tex, rx, ry, rw, rh, key=_cbg_key)
+            _collapsed_bg_drawn = True
+    except Exception:
+        _collapsed_bg_drawn = False
+    if not _collapsed_bg_drawn:
+        _draw_rect(rx, ry, rw, rh, (0.1, 0.1, 0.1, 1.0))
+        shader = _get_shader()
+        verts  = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
+        batch  = batch_for_shader(shader,"LINE_STRIP",{"pos":verts})
+        shader.bind()
+        shader.uniform_float("color",(0.25,0.25,0.25,1.0))
+        batch.draw(shader)
 
     # Corner screws suppressed — baked into background PNG
 
     # Expand arrow suppressed — baked into background PNG
 
     # Badge number only — rect, border and effect name suppressed (baked into PNG)
-    etype       = rack.effect_type
     badge_fs    = max(1, int(12*scale))
     badge_label = str(rack_idx + 1)
     badge_x     = rx + 38*scale
@@ -874,10 +918,9 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
                badge_fs, (0.35, 0.7, 1.0, 1.0))
 
     # ── Right-side controls — same pixel sizes as expanded rack, centred in row ──
-    # Expanded rack reference: X = 18×16, ON/OFF = 40×16, ch badges = 26×26 (CH_BTN_SIZE)
+    # Expanded rack reference: X = 18×16, ON/OFF = 40×16
     btn_h    = 16*scale   # matches expanded rail button height exactly
     btn_y    = cy - btn_h / 2
-    ch_size  = CH_BTN_SIZE * scale   # 26px — square channel badges, same as expanded
 
     # [ON/OFF + CLOSE] PNG buttons — same PNGs as expanded, centred in collapsed rail
     _btn_w = RACK_BTN_W * scale
@@ -926,46 +969,60 @@ def _draw_rack_collapsed(rx, ry, rack, rack_idx, scale, rack_width=None):
         except Exception:
             pass
 
-    # Channel assignment badges — left of ON/OFF (26×26 squares, matching expanded)
-    assigned = get_rack_channels(rack)
-    ch_gap   = 4*scale
-    fs_b     = max(1, int(10*scale))
-    ch_right = onoff_x - 6*scale
-    for i, ch_idx in enumerate(sorted(assigned)):
-        bx = ch_right - (i + 1) * (ch_size + ch_gap)
-        ch_y = cy - ch_size / 2   # vertically centred (taller than btn_h, that's fine)
-        if ch_idx < 9 and getattr(rack, f'ch{ch_idx}', False):
-            bg = (0.0, 0.18, 0.10, 1.0)
-            bc = (0.0, 0.75, 0.45, 1.0)
-            tc = (0.0, 0.85, 0.55, 1.0)
-        else:
-            bg = (0.07, 0.07, 0.07, 1.0)
-            bc = (0.2,  0.2,  0.2,  1.0)
-            tc = (0.2,  0.2,  0.2,  1.0)
-        _draw_rect(bx, ch_y, ch_size, ch_size, bg)
-        sv = _get_shader()
-        cv = [(bx,ch_y),(bx+ch_size,ch_y),(bx+ch_size,ch_y+ch_size),(bx,ch_y+ch_size),(bx,ch_y)]
-        sv.bind(); sv.uniform_float("color", bc)
-        batch_for_shader(sv,"LINE_STRIP",{"pos":cv}).draw(sv)
-        tw = _text_width(str(ch_idx+1), fs_b)
-        _draw_text(str(ch_idx+1), bx+ch_size/2-tw/2, ch_y+ch_size/2-fs_b/2, fs_b, tc)
-        # LED dot — same style as expanded rack channel buttons
-        is_lit = _led_states.get((rack_idx, ch_idx), False)
-        led_col = (0.0,1.0,0.55,1.0) if is_lit else (0.0,0.25,0.14,1.0)
-        _draw_circle(bx + ch_size - 4*scale, ch_y + 4*scale, 2.5*scale, led_col)
+    # Channel LED strip — left of ON/OFF. All 9 channels always shown (not
+    # just the ones this rack uses), each a small LED with its channel number
+    # above it. Channels this rack IS using blink between the off/on LED skins
+    # to show they're live routing; unused channels sit on "off". This is a
+    # simple assignment blink, independent of playback — see
+    # update_led_states()/_led_states in Racks.py for the real audio-activity
+    # indicator used on the expanded rack's channel buttons.
+    import time as _time_led
+    _flash_on = (_time_led.time() * RACK_COLLAPSED_LED_FLASH_HZ) % 1.0 < 0.5
 
-    # Preset name — centred in remaining middle space
-    presets = PRESETS.get(etype, ["Default"])
-    p_idx   = rack.preset_idx % max(1, len(presets))
-    p_name  = presets[p_idx]
-    fs_p    = max(1, int(8*scale))
-    # Centre between end of name label and start of channel badges
-    mid_start = badge_x + badge_w + _text_width(ename.upper(), name_fs) + 10*scale
-    mid_end   = ch_right - len(assigned) * (ch_size + ch_gap)
-    mid_cx    = (mid_start + mid_end) / 2
-    tw_p      = _text_width(p_name, fs_p)
-    if mid_cx - tw_p/2 > mid_start:   # only draw if it fits
-        _draw_text(p_name, mid_cx - tw_p/2, cy - fs_p/2, fs_p, (0.3,0.3,0.3,1.0))
+    fs_led  = max(1, int(9*scale))
+    led_w   = RACK_COLLAPSED_LED_W * scale
+    led_h   = RACK_COLLAPSED_LED_H * scale
+    led_gap = RACK_COLLAPSED_LED_GAP * scale
+    num_gap = RACK_COLLAPSED_LED_NUM_GAP * scale
+
+    unit_h  = fs_led + num_gap + led_h   # number + gap + LED, stacked
+    led_y   = cy - unit_h / 2            # bottom of LED — whole unit centred on cy
+    num_y   = led_y + led_h + num_gap    # baseline for the channel number, above the LED
+
+    group_offset = getattr(rack, 'group_idx', 0) * 9
+    ch_right = _btn_x - 6*scale
+    strip_w  = 9*led_w + 8*led_gap
+    strip_x0 = ch_right - strip_w
+
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_led
+        from ui.mixer.texture_cache import blit_texture as _blt_led
+    except Exception:
+        _gtc_led = None
+        _blt_led = None
+
+    for local_idx in range(9):
+        led_x   = strip_x0 + local_idx * (led_w + led_gap)
+        is_used = getattr(rack, f'ch{local_idx}', False)
+        show_on = is_used and _flash_on
+        led_key = "rack_collapsed_ch_led_on" if show_on else "rack_collapsed_ch_led_off"
+
+        _led_tex = _gtc_led(led_key) if _gtc_led else None
+        if _led_tex:
+            _blt_led(_led_tex, led_x, led_y, led_w, led_h, key=led_key)
+        else:
+            # Fallback until the LED PNGs are dropped in — dim grey / green dot
+            fb_col = (0.0, 0.9, 0.4, 1.0) if show_on else (0.15, 0.15, 0.15, 1.0)
+            _draw_circle(led_x + led_w/2, led_y + led_h/2, led_w/2, fb_col)
+
+        label   = str(group_offset + local_idx + 1)
+        tw      = _text_width(label, fs_led)
+        num_col = (0.75, 0.75, 0.75, 1.0) if is_used else (0.35, 0.35, 0.35, 1.0)
+        _draw_text(label, led_x + led_w/2 - tw/2, num_y, fs_led, num_col)
+
+    # Preset name — collapsed rows have no preset box/arrows to attach it to,
+    # so it's expanded-rack-only. See _draw_rack_expanded's PRESET SELECTOR
+    # section for the live preset display.
 
 
 def _draw_add_rack_button(rx, ry, scale, rack_width=None):
@@ -974,19 +1031,34 @@ def _draw_add_rack_button(rx, ry, scale, rack_width=None):
     rh  = 28*scale
     fs  = max(1, int(10*scale))
 
-    _draw_rect(rx, ry, rw, rh, (0.07, 0.07, 0.07, 1.0))
+    # PNG skin — brushed-metal button art. Unlike add_ai_rack_btn.png, the
+    # label is NOT baked into this art, so it's drawn on top every time,
+    # whether the PNG or the flat-rect fallback is used underneath.
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_addbtn
+        from ui.mixer.texture_cache import blit_texture as _blt_addbtn
+        _addbtn_tex = _gtc_addbtn("add_rack_btn")
+    except Exception:
+        _addbtn_tex = None
 
-    shader = _get_shader()
-    border_verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
-    batch = batch_for_shader(shader,"LINE_STRIP",{"pos":border_verts})
-    shader.bind()
-    shader.uniform_float("color",(0.2,0.2,0.2,1.0))
-    batch.draw(shader)
+    if _addbtn_tex:
+        _blt_addbtn(_addbtn_tex, rx, ry, rw, rh, key="add_rack_btn")
+        label_col = (0.78, 0.78, 0.78, 1.0)   # light grey — reads on brushed metal
+    else:
+        _draw_rect(rx, ry, rw, rh, (0.07, 0.07, 0.07, 1.0))
+
+        shader = _get_shader()
+        border_verts = [(rx,ry),(rx+rw,ry),(rx+rw,ry+rh),(rx,ry+rh),(rx,ry)]
+        batch = batch_for_shader(shader,"LINE_STRIP",{"pos":border_verts})
+        shader.bind()
+        shader.uniform_float("color",(0.2,0.2,0.2,1.0))
+        batch.draw(shader)
+        label_col = (0.3, 0.3, 0.3, 1.0)      # dim grey — matches old flat-rect look
 
     label = "+  ADD RACK EFFECT"
     tw    = _text_width(label, fs)
     _draw_text(label, rx + rw/2 - tw/2,
-               ry + rh/2 - fs/2, fs, (0.3,0.3,0.3,1.0))
+               ry + rh/2 - fs/2, fs, label_col)
 
 
 def _draw_add_popup(px, py, scale):

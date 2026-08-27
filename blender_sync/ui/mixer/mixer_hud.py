@@ -147,8 +147,17 @@ def draw_callback_px(self, context) -> None:
         tracks = getattr(bpy.context.scene, "pb_sync_tracks", [])
         base_y = height - 150*UI_SCALE - SCROLL_Y
 
+        # Groups of up to 9 channels — mirrors the strip loop below and
+        # draw_racks() in Racks.py, which both continue seamlessly rightward
+        # with no gap between groups. Previously the desk background blocks
+        # below drew exactly once, sized only for the first 9 channels, so
+        # channel 10+ strips and racks rendered fine but sat on bare canvas —
+        # no second desk background was ever drawn for them. Now each group
+        # gets its own copy of both background blocks, tiled to match.
+        _num_groups = max(1, (len(tracks) + 8) // 9)
+
         # ── Mixer desk background ─────────────────────────────────────────
-        # One PNG blit covering all 9 strips before individual strips draw.
+        # One PNG blit per group of up to 9 strips, tiled left to right.
         try:
             from ui.mixer.draw_utils import draw_element as _de
             from ui.mixer.channel_strip import send_section_height as _sh, SEND_MIN_SLOTS as _SMS
@@ -158,16 +167,19 @@ def draw_callback_px(self, context) -> None:
             # Extra sends slots open downward and the PNG is tall enough to cover them.
             _base_send_h = _sh(_SMS, UI_SCALE)
             _strip_h_fixed = _STH * UI_SCALE + _base_send_h + _RMT * UI_SCALE
-            _desk_x     = STRIP_LEFT_MARGIN * UI_SCALE + SCROLL_X
-            _desk_y     = base_y - _strip_h_fixed   # anchored at top (base_y)
-            _n_strips   = min(len(tracks), 9)
-            _desk_w     = _n_strips * STRIP_STRIDE * UI_SCALE + (STRIP_W - STRIP_STRIDE) * UI_SCALE
-            _de("mixer_desk_bg", _desk_x, _desk_y, _desk_w, _strip_h_fixed,
-                draw_rect, (0.07, 0.07, 0.07, 1.0))
+            _desk_y     = base_y - _strip_h_fixed   # anchored at top (base_y) — same for every group
+            for _g in range(_num_groups):
+                _n_strips = min(len(tracks) - _g*9, 9)
+                if _n_strips <= 0:
+                    break
+                _desk_x = STRIP_LEFT_MARGIN * UI_SCALE + _g*9*STRIP_STRIDE*UI_SCALE + SCROLL_X
+                _desk_w = _n_strips * STRIP_STRIDE * UI_SCALE + (STRIP_W - STRIP_STRIDE) * UI_SCALE
+                _de("mixer_desk_bg", _desk_x, _desk_y, _desk_w, _strip_h_fixed,
+                    draw_rect, (0.07, 0.07, 0.07, 1.0))
         except Exception:
             pass
 
-        # ── 3-part strip skin backgrounds (drawn full-width, once for all 9 strips) ──
+        # ── 3-part strip skin backgrounds (drawn per group, once per group's strips) ──
         # Drawn BEFORE strip elements so knobs/faders draw on top of the background.
         try:
             from ui.mixer.texture_cache import get_texture as _gt
@@ -183,32 +195,36 @@ def draw_callback_px(self, context) -> None:
             )
             scene2     = bpy.context.scene
             all_racks2 = getattr(scene2, "pb_racks", []) if scene2 else []
-            n_racks2   = sum(1 for r in all_racks2 if getattr(r, "group_idx", 0) == 0)
-            _slots2    = max(_SMS, n_racks2)
-            _send_h2   = (_SLH + _slots2 * _SLOTH) * UI_SCALE
-            _dx        = _SLM * UI_SCALE + SCROLL_X
-            _n2        = min(len(tracks), 9)
-            _dw        = _n2 * _SSTRIDE * UI_SCALE + (_SW - _SSTRIDE) * UI_SCALE
 
-            # Top slice: HEADER + GAIN  (135px at scale 1)
-            _top_h2 = (_SHH + _SGH) * UI_SCALE
-            _tex = _gt("strip_top_bg")
-            if _tex: _bt(_tex, _dx, base_y - _top_h2, _dw, _top_h2, key="strip_top_bg")
+            for _g in range(_num_groups):
+                _n2 = min(len(tracks) - _g*9, 9)
+                if _n2 <= 0:
+                    break
+                n_racks2  = sum(1 for r in all_racks2 if getattr(r, "group_idx", 0) == _g)
+                _slots2   = max(_SMS, n_racks2)
+                _send_h2  = (_SLH + _slots2 * _SLOTH) * UI_SCALE
+                _dx       = _SLM * UI_SCALE + _g*9*_SSTRIDE*UI_SCALE + SCROLL_X
+                _dw       = _n2 * _SSTRIDE * UI_SCALE + (_SW - _SSTRIDE) * UI_SCALE
 
-            # Send slot tile: tiled per slot row  (27px each at scale 1)
-            _slot_h2   = _SLOTH * UI_SCALE
-            _slot_top2 = base_y - (_SHH + _SGH + 12) * UI_SCALE - _SLH * UI_SCALE
-            _stex = _gt("strip_send_slot_bg")
-            if _stex:
-                for _si in range(_slots2):
-                    _sy = _slot_top2 - _si * _slot_h2 - _slot_h2
-                    _bt(_stex, _dx, _sy, _dw, _slot_h2, key="strip_send_slot_bg")
+                # Top slice: HEADER + GAIN  (135px at scale 1)
+                _top_h2 = (_SHH + _SGH) * UI_SCALE
+                _tex = _gt("strip_top_bg")
+                if _tex: _bt(_tex, _dx, base_y - _top_h2, _dw, _top_h2, key="strip_top_bg")
 
-            # Bottom slice: EQ + PAN + FADER  (523px at scale 1)
-            _bot_h2  = (_SEQ + _SPAN + _FTP + _FH + _NBH + _FBP) * UI_SCALE
-            _bot_top = base_y - (_SHH + _SGH + 12 + 12) * UI_SCALE - _send_h2
-            _btex = _gt("strip_bottom_bg")
-            if _btex: _bt(_btex, _dx, _bot_top - _bot_h2, _dw, _bot_h2, key="strip_bottom_bg")
+                # Send slot tile: tiled per slot row  (27px each at scale 1)
+                _slot_h2   = _SLOTH * UI_SCALE
+                _slot_top2 = base_y - (_SHH + _SGH + 12) * UI_SCALE - _SLH * UI_SCALE
+                _stex = _gt("strip_send_slot_bg")
+                if _stex:
+                    for _si in range(_slots2):
+                        _sy = _slot_top2 - _si * _slot_h2 - _slot_h2
+                        _bt(_stex, _dx, _sy, _dw, _slot_h2, key="strip_send_slot_bg")
+
+                # Bottom slice: EQ + PAN + FADER  (523px at scale 1)
+                _bot_h2  = (_SEQ + _SPAN + _FTP + _FH + _NBH + _FBP) * UI_SCALE
+                _bot_top = base_y - (_SHH + _SGH + 12 + 12) * UI_SCALE - _send_h2
+                _btex = _gt("strip_bottom_bg")
+                if _btex: _bt(_btex, _dx, _bot_top - _bot_h2, _dw, _bot_h2, key="strip_bottom_bg")
         except Exception as _e3:
             pass
 
