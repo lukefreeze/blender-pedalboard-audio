@@ -1,8 +1,18 @@
-# The Hijacker — Blender Audio Addon
+<p align="center">
+  <img src="docs/HijackerLogo.png" alt="The Hijacker — Blender Audio Addon" width="480">
+</p>
 
+<p align="center">
 A professional audio mixing and processing suite for Blender's Video Sequence Editor, powered by a custom C++ audio engine that runs entirely independently of Blender's native audio system.
+</p>
 
-![Blender 4.5](https://img.shields.io/badge/Blender-4.5-orange) ![Platform Windows](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue) ![Python 3.11](https://img.shields.io/badge/Python-3.11-green) ![Status Alpha](https://img.shields.io/badge/Status-Alpha-red) ![License MIT](https://img.shields.io/badge/License-MIT-yellow)
+<p align="center">
+  <img src="https://img.shields.io/badge/Blender-4.5-orange" alt="Blender 4.5">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue" alt="Platform Windows">
+  <img src="https://img.shields.io/badge/Python-3.11-green" alt="Python 3.11">
+  <img src="https://img.shields.io/badge/Status-Alpha-red" alt="Status Alpha">
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License MIT">
+</p>
 
 > **Alpha:** Core features are complete and working. UI polish is the final remaining step before release.
 
