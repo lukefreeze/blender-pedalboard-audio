@@ -4971,6 +4971,33 @@ def _draw_ai_rack_expanded(rx, ry, rw, rh, rack, ai_idx, scale):
         except Exception:
             _ai_bg_tex = None
 
+    # RVC (kNN-VC) depends on system PyTorch. While that check hasn't passed
+    # yet, _draw_rvc_body shows a flat setup-warning card instead of the real
+    # UI — so the full-unit skin shouldn't be blit behind it either, or the
+    # finished rack art would show through around the warning card. Withhold
+    # the skin (falls through to the flat HAL_BG chassis below) until the
+    # dep check succeeds; _draw_rvc_body then draws the real skin-blit rack.
+    if rack.ai_type == "RVC" and _ai_bg_tex is not None:
+        try:
+            from ui.racks.rack_knnvc import _check_deps as _rvc_deps_ready
+            if not _rvc_deps_ready():
+                _ai_bg_tex = None
+        except Exception:
+            pass
+
+    # VoiceFixer (RESEMBLE) depends on system Python + the voicefixer pip
+    # package. Same reasoning as the RVC gating above — withhold the
+    # full-unit skin blit until _check_voicefixer() succeeds, so the setup
+    # warning / "checking..." screens don't show the finished rack art
+    # behind them.
+    if rack.ai_type == "RESEMBLE" and _ai_bg_tex is not None:
+        try:
+            from ui.racks.rack_voicefixer import _check_voicefixer as _vf_deps_ready
+            if not _vf_deps_ready():
+                _ai_bg_tex = None
+        except Exception:
+            pass
+
     if _ai_bg_tex is not None:
         from ui.mixer.texture_cache import blit_texture as _blt_aibg
         _blt_aibg(_ai_bg_tex, rx, ry, rw, rh, key=_ai_bg_key)
@@ -5825,14 +5852,28 @@ def hit_test_ai_racks(mouse_x, mouse_y, ai_section_top_y, rack_x, scale,
             _work_h_vf  = _work_top_vf - _work_bot_vf
             _fs_lbl_vf  = max(1, int(7*scale))
 
-            # Mode selector buttons (3 stacked in left panel)
+            # Mode selector buttons (3 stacked in left panel) — geometry
+            # mirrors rack_voicefixer.py's draw function exactly, including
+            # its VF_MODE_X_OFFSET/_Y_OFFSET/_W_SCALE/_H_SCALE/_GAP tuning
+            # constants, so the hitboxes track wherever those constants move
+            # or resize the buttons instead of drifting from what's drawn.
+            try:
+                from ui.racks.rack_voicefixer import (
+                    VF_MODE_X_OFFSET as _VF_MX, VF_MODE_Y_OFFSET as _VF_MY,
+                    VF_MODE_W_SCALE as _VF_MWS, VF_MODE_H_SCALE as _VF_MHS,
+                    VF_MODE_GAP as _VF_MGAP)
+            except Exception:
+                _VF_MX, _VF_MY, _VF_MWS, _VF_MHS, _VF_MGAP = 0.0, 0.0, 1.0, 1.0, 3.0
+            _mode_x_off_vf = _VF_MX * scale
             _mode_sec_h = _work_h_vf * 0.62
-            _mode_sep_y = _work_bot_vf + _work_h_vf - _fs_lbl_vf*2 - 18*scale
-            _btn_h_m    = min(_mode_sec_h/3 - 3*scale, 28*scale)
+            _mode_sep_y = _work_bot_vf + _work_h_vf - _fs_lbl_vf*2 - 18*scale + _VF_MY*scale
+            _btn_h_m    = min(_mode_sec_h/3 - 3*scale, 28*scale) * _VF_MHS
+            _btn_w_m    = (_left_w_vf - 8*scale) * _VF_MWS
+            _btn_x_m    = _lx_vf + 4*scale + _mode_x_off_vf
             for _mi in range(3):
-                _btn_y_m = _mode_sep_y - (_mi+1)*(_btn_h_m+3*scale)
+                _btn_y_m = _mode_sep_y - (_mi+1)*(_btn_h_m+_VF_MGAP*scale)
                 if _btn_y_m < _work_bot_vf + 2*scale: break
-                if (_lx_vf+4*scale <= mouse_x <= _lx_vf+_left_w_vf-4*scale and
+                if (_btn_x_m <= mouse_x <= _btn_x_m+_btn_w_m and
                         _btn_y_m <= mouse_y <= _btn_y_m+_btn_h_m):
                     return {'zone': 'ai_vf_mode', 'ai_idx': ai_idx, 'mode_idx': _mi}
 

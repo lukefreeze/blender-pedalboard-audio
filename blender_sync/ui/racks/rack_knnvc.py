@@ -44,6 +44,44 @@ _AMBER       = (0.86,  0.53,  0.00,  1.0)
 
 RACK_RAIL_H = 32
 
+# =============================================================================
+# CONTROLS PANEL KNOB TUNING
+# The drawn knob (arc + pointer) is computed from the panel geometry, then
+# scaled by these multipliers — independent per knob so TOPK and REF SECS
+# can each be grown/shrunk to match their respective graphic in the skin
+# art. 1.0 = original computed size (min(18*scale, right_w*0.28, work_h*0.18)).
+# Mirrors rack_base.py's SB_KNOB_SCALE / rack_piper.py's *_W_SCALE pattern.
+# =============================================================================
+KNNVC_TOPK_KNOB_SCALE    = 1.7
+KNNVC_REFSECS_KNOB_SCALE = 1.7
+
+# Per-knob centre position nudge — unscaled px, + = right/up. Needed because
+# growing a knob via the *_SCALE constants above only grows the arc/pointer
+# around its existing centre; it doesn't re-centre it against the (larger)
+# knob graphic baked into the skin art, so each knob needs its own nudge to
+# land back on top of its artwork. Same convention as CH_BTN_LABEL_X_OFFSET
+# in rack_base.py / PIPER_*_VALUE_X_OFFSET in rack_piper.py.
+KNNVC_TOPK_KNOB_X_OFFSET    = -2.0
+KNNVC_TOPK_KNOB_Y_OFFSET    = -1.0
+KNNVC_REFSECS_KNOB_X_OFFSET = -4.0
+KNNVC_REFSECS_KNOB_Y_OFFSET = 0.5
+
+# Left-panel text nudges — unscaled px, + = right. "USE RAIL"/"CH X" is the
+# SOURCE box value (src_disp, below); the per-channel digits are the small
+# 1-9 buttons in the ADD FROM TIMELINE selector row — NOT the "CH1Sample"
+# name-field text, which has its own KNNVC_ADD_NAME_X_OFFSET further down.
+KNNVC_SOURCE_VALUE_X_OFFSET = 6.0   # "CH X" / "USE RAIL" readout, top of left panel
+KNNVC_SRC_CH_LABEL_X_OFFSET = 0.0   # per-channel number, ADD FROM TIMELINE selector row
+
+# Add-voice name field text nudge — unscaled px, + = right. Moves both the
+# live value ("CH1Sample" default, or whatever's been typed) and the "enter
+# name..." placeholder; the blinking cursor position is offset by the same
+# amount so it stays aligned with the text it's drawn against.
+KNNVC_ADD_NAME_X_OFFSET = 4.0
+
+# ADD TO VOICES button label nudge — unscaled px, + = up/- = down.
+KNNVC_ADD_BTN_LABEL_Y_OFFSET = -1.5
+
 _READY      = "READY"
 _NO_REF     = "NO_REF"
 _PROCESSING = "PROCESSING"
@@ -125,7 +163,7 @@ def _discover_ref_voices(ai_idx):
         return []
 
 
-def _draw_setup_warning(rx, ry, rw, rh, scale):
+def _draw_setup_warning(rx, ry, rw, rh, scale, has_skin=False):
     sh = gpu.shader.from_builtin("UNIFORM_COLOR")
     rail_h   = RACK_RAIL_H * scale
     body_bot = ry
@@ -133,10 +171,16 @@ def _draw_setup_warning(rx, ry, rw, rh, scale):
     body_h   = body_top - body_bot
     margin   = 8 * scale
 
-    _draw_rect(rx, body_bot, rw, body_h, _BG)
-    bvs = [(rx,body_bot),(rx+rw,body_bot),(rx+rw,body_top),(rx,body_top),(rx,body_bot)]
-    bb = batch_for_shader(sh,"LINE_STRIP",{"pos":bvs})
-    sh.bind(); sh.uniform_float("color",_BORDER); bb.draw(sh)
+    # Outer body fill/border — suppressed when the full-unit skin PNG is
+    # already blit underneath by _draw_ai_rack_expanded (Racks.py). The
+    # warning card itself always draws its own box below regardless of skin,
+    # since it needs to read clearly as an alert no matter what art sits
+    # behind it (same convention as rack_piper.py's has_skin gating).
+    if not has_skin:
+        _draw_rect(rx, body_bot, rw, body_h, _BG)
+        bvs = [(rx,body_bot),(rx+rw,body_bot),(rx+rw,body_top),(rx,body_top),(rx,body_bot)]
+        bb = batch_for_shader(sh,"LINE_STRIP",{"pos":bvs})
+        sh.bind(); sh.uniform_float("color",_BORDER); bb.draw(sh)
 
     warn_w = rw - margin * 4
     warn_h = min(body_h * 0.78, 160 * scale)
@@ -196,16 +240,29 @@ def _draw_setup_warning(rx, ry, rw, rh, scale):
 
 def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     sh = gpu.shader.from_builtin("UNIFORM_COLOR")
-    # ── Skin background
-    try:
-        from ui.mixer.draw_utils import draw_element as _de
-        rail_h = 32 * scale; body_h = rh - rail_h
-        _de("rack_knnvc_bg", rx, ry, rw, body_h, _draw_rect, (0.04, 0.04, 0.04, 1.0))
-    except Exception:
-        pass
 
+    # Full-rack photoreal skin — when present, Racks.py's _draw_ai_rack_expanded
+    # has already blit the whole unit (rail + body) before calling this
+    # function, so the flat panel fills/borders below are skipped entirely and
+    # only dynamic content (state text, selection highlights, cursor, knob
+    # values) draws on top. Falls back to the old flat panel look if the PNG
+    # isn't found yet — same convention as rack_piper.py's _has_skin gating.
+    # (Replaces the old body-only draw_element() skin attempt, which predates
+    # the full-unit blit Racks.py now does before dispatching here.)
+    try:
+        from ui.mixer.texture_cache import get_texture as _gtc_rvc
+        _has_skin = _gtc_rvc("rack_knnvc_bg") is not None
+    except Exception:
+        _has_skin = False
+
+    # Deps not ready yet — Racks.py's _draw_ai_rack_expanded withholds the
+    # full-unit skin blit in this state (see its RVC-specific check right
+    # before the blit), so even though the skin texture may already be
+    # loaded in cache, nothing has actually been drawn behind us. Force
+    # has_skin=False here so the warning card draws its own flat black body
+    # chrome instead of assuming art is already sitting underneath it.
     if not _check_deps():
-        bx,by,bw,bh = _draw_setup_warning(rx, ry, rw, rh, scale)
+        bx,by,bw,bh = _draw_setup_warning(rx, ry, rw, rh, scale, has_skin=False)
         try: rack['rvc_setup_btn'] = (bx,by,bw,bh)
         except Exception: pass
         return
@@ -216,10 +273,11 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     body_h   = body_top - body_bot
     margin   = 8 * scale
 
-    _draw_rect(rx, body_bot, rw, body_h, _BG)
-    bvs = [(rx,body_bot),(rx+rw,body_bot),(rx+rw,body_top),(rx,body_top),(rx,body_bot)]
-    bb = batch_for_shader(sh,"LINE_STRIP",{"pos":bvs})
-    sh.bind(); sh.uniform_float("color",_BORDER); bb.draw(sh)
+    if not _has_skin:
+        _draw_rect(rx, body_bot, rw, body_h, _BG)
+        bvs = [(rx,body_bot),(rx+rw,body_bot),(rx+rw,body_top),(rx,body_top),(rx,body_bot)]
+        bb = batch_for_shader(sh,"LINE_STRIP",{"pos":bvs})
+        sh.bind(); sh.uniform_float("color",_BORDER); bb.draw(sh)
 
     sbar_h   = max(16*scale, body_h*0.07)
     sbar_y   = body_bot
@@ -241,17 +299,22 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
 
     # ── LEFT PANEL: source info + voice cards + add from timeline ─────────────
     lx = left_x; ly = work_bot; lh = work_h
-    _draw_rect(lx, ly, left_w, lh, _PANEL)
-    lvs = [(lx,ly),(lx+left_w,ly),(lx+left_w,ly+lh),(lx,ly+lh),(lx,ly)]
-    lb = batch_for_shader(sh,"LINE_STRIP",{"pos":lvs})
-    sh.bind(); sh.uniform_float("color",_BORDER); lb.draw(sh)
+    if not _has_skin:
+        _draw_rect(lx, ly, left_w, lh, _PANEL)
+        lvs = [(lx,ly),(lx+left_w,ly),(lx+left_w,ly+lh),(lx,ly+lh),(lx,ly)]
+        lb = batch_for_shader(sh,"LINE_STRIP",{"pos":lvs})
+        sh.bind(); sh.uniform_float("color",_BORDER); lb.draw(sh)
 
     # Source channel display (assigned from rail)
-    _draw_text("SOURCE", lx+5*scale, ly+lh-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
+    # "SOURCE" label suppressed once skinned — expected to be baked into
+    # rack_knnvc_bg.png like Piper's "SCRIPT"/"VOICE" labels were.
+    if not _has_skin:
+        _draw_text("SOURCE", lx+5*scale, ly+lh-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
     active_chs = [ci+1 for ci in range(9) if getattr(rack, f"ch{ci}", False)]
     src_disp   = f"CH {active_chs[0]}" if active_chs else "USE RAIL"
     fs_ch      = max(1, int(7*scale))
-    _draw_text(src_disp, lx+5*scale, ly+lh-fs_lbl-fs_ch-10*scale, fs_ch,
+    _draw_text(src_disp, lx+5*scale + KNNVC_SOURCE_VALUE_X_OFFSET*scale,
+               ly+lh-fs_lbl-fs_ch-10*scale, fs_ch,
                _ACCENT if active_chs else _TEXT_DIM)
 
     # ── ADD FROM TIMELINE section (bottom of left panel) ──────────────────
@@ -259,32 +322,40 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     add_y         = ly
     add_sep_y     = add_y + add_section_h
 
-    # Separator line
-    sep_verts = [(lx+4*scale, add_sep_y), (lx+left_w-4*scale, add_sep_y)]
-    sep_b = batch_for_shader(sh,"LINES",{"pos":sep_verts})
-    sh.bind(); sh.uniform_float("color",_BORDER); sep_b.draw(sh)
+    # Separator line — suppressed once skinned, baked into the art.
+    if not _has_skin:
+        sep_verts = [(lx+4*scale, add_sep_y), (lx+left_w-4*scale, add_sep_y)]
+        sep_b = batch_for_shader(sh,"LINES",{"pos":sep_verts})
+        sh.bind(); sh.uniform_float("color",_BORDER); sep_b.draw(sh)
 
-    _draw_text("ADD FROM TIMELINE", lx+5*scale, add_sep_y+fs_lbl+3*scale, fs_lbl, _TEXT_LABEL)
+    if not _has_skin:
+        _draw_text("ADD FROM TIMELINE", lx+5*scale, add_sep_y+fs_lbl+3*scale, fs_lbl, _TEXT_LABEL)
 
     # Channel selector for timeline extraction (stored in p5 as int 0-8)
     add_ch = int(getattr(rack, "p5", 0.0))  # 0-based
     ch_btn_s = min(16*scale, (left_w-10*scale)/9)
     ch_btn_y = add_y + add_section_h - fs_lbl - ch_btn_s - 4*scale
-    _draw_text("SRC", lx+5*scale, ch_btn_y+ch_btn_s/2-fs_lbl/2, max(1,int(6*scale)), _TEXT_LABEL)
+    if not _has_skin:
+        _draw_text("SRC", lx+5*scale, ch_btn_y+ch_btn_s/2-fs_lbl/2, max(1,int(6*scale)), _TEXT_LABEL)
     for ci in range(9):
         bx2 = lx + 5*scale + 16*scale + ci*(ch_btn_s+1*scale)
         by2 = ch_btn_y
         issel = (ci == add_ch)
         bc = _ACCENT if issel else _ACCENT_DIM
         bg = _PANEL_SEL if issel else _PANEL
-        _draw_rect(bx2, by2, ch_btn_s, ch_btn_s, bg)
-        cbvs = [(bx2,by2),(bx2+ch_btn_s,by2),(bx2+ch_btn_s,by2+ch_btn_s),(bx2,by2+ch_btn_s),(bx2,by2)]
-        cbat = batch_for_shader(sh,"LINE_STRIP",{"pos":cbvs})
-        sh.bind(); sh.uniform_float("color",bc); cbat.draw(sh)
+        # Per-slot button chrome suppressed once skinned — selection state is
+        # conveyed by the number colour below instead (mirrors rack_base.py's
+        # _draw_channel_buttons number_only fallback treatment).
+        if not _has_skin:
+            _draw_rect(bx2, by2, ch_btn_s, ch_btn_s, bg)
+            cbvs = [(bx2,by2),(bx2+ch_btn_s,by2),(bx2+ch_btn_s,by2+ch_btn_s),(bx2,by2+ch_btn_s),(bx2,by2)]
+            cbat = batch_for_shader(sh,"LINE_STRIP",{"pos":cbvs})
+            sh.bind(); sh.uniform_float("color",bc); cbat.draw(sh)
         fs_ci = max(1,int(6*scale))
         lc = str(ci+1)
         tw_c = _text_width(lc,fs_ci)
-        _draw_text(lc, bx2+ch_btn_s/2-tw_c/2, by2+ch_btn_s/2-fs_ci/2, fs_ci, bc)
+        _draw_text(lc, bx2+ch_btn_s/2-tw_c/2 + KNNVC_SRC_CH_LABEL_X_OFFSET*scale,
+                   by2+ch_btn_s/2-fs_ci/2, fs_ci, bc)
 
     # Name input field (stored in rack['add_voice_name'])
     # Check if this field is active for text input
@@ -310,22 +381,26 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     name_field_y = ch_btn_y - name_field_h - 3*scale
     name_field_w = left_w - 10*scale
 
-    # Background — brighter when active
+    # Background — brighter when active. Flat-fallback only; once skinned the
+    # baked art reads clearly enough on its own (same call made for Piper's
+    # script-panel focus glow — see rack_piper.py's panel_bg comment).
     _nf_bg  = (0.08,0.03,0.12,1.0) if _name_active else _BG
     _nf_col = _ACCENT if _name_active else _ACCENT_DIM
-    _draw_rect(lx+5*scale, name_field_y, name_field_w, name_field_h, _nf_bg)
-    nfvs = [(lx+5*scale, name_field_y), (lx+5*scale+name_field_w, name_field_y),
-            (lx+5*scale+name_field_w, name_field_y+name_field_h),
-            (lx+5*scale, name_field_y+name_field_h), (lx+5*scale, name_field_y)]
-    nfb = batch_for_shader(sh,"LINE_STRIP",{"pos":nfvs})
-    sh.bind(); sh.uniform_float("color",_nf_col); nfb.draw(sh)
+    if not _has_skin:
+        _draw_rect(lx+5*scale, name_field_y, name_field_w, name_field_h, _nf_bg)
+        nfvs = [(lx+5*scale, name_field_y), (lx+5*scale+name_field_w, name_field_y),
+                (lx+5*scale+name_field_w, name_field_y+name_field_h),
+                (lx+5*scale, name_field_y+name_field_h), (lx+5*scale, name_field_y)]
+        nfb = batch_for_shader(sh,"LINE_STRIP",{"pos":nfvs})
+        sh.bind(); sh.uniform_float("color",_nf_col); nfb.draw(sh)
 
     # Text display
+    _name_text_x = lx + 8*scale + KNNVC_ADD_NAME_X_OFFSET*scale
     if name_val:
         disp_name = name_val[:16] if len(name_val) <= 16 else name_val[:15]+"..."
-        _draw_text(disp_name, lx+8*scale, name_field_y+name_field_h/2-fs_sm/2, fs_sm, _TEXT)
+        _draw_text(disp_name, _name_text_x, name_field_y+name_field_h/2-fs_sm/2, fs_sm, _TEXT)
     else:
-        _draw_text("enter name...", lx+8*scale,
+        _draw_text("enter name...", _name_text_x,
                    name_field_y+name_field_h/2-fs_sm/2, fs_sm, _TEXT_LABEL)
 
     # Blinking cursor when active
@@ -333,7 +408,7 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
         _blink = int(_time.time() * 2) % 2 == 0
         if _blink:
             _pre_cur = name_val[:min(_name_cursor, len(name_val))]
-            _cur_x   = lx + 8*scale + _text_width(_pre_cur, fs_sm)
+            _cur_x   = _name_text_x + _text_width(_pre_cur, fs_sm)
             _draw_line(_cur_x, name_field_y + 2*scale,
                        _cur_x, name_field_y + name_field_h - 2*scale,
                        _TEXT, max(1.0, scale))
@@ -345,16 +420,20 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     add_busy  = rack.get('add_voice_busy', False)
     add_col   = _AMBER if not add_busy else (0.60,0.35,0.00,1.0)
     add_lbl   = "ADDING..." if add_busy else "ADD TO VOICES >"
-    _draw_rect(lx+5*scale, add_btn_y, add_btn_w, add_btn_h, (0.06,0.03,0.00,1.0))
-    abvs = [(lx+5*scale,add_btn_y),(lx+5*scale+add_btn_w,add_btn_y),
-            (lx+5*scale+add_btn_w,add_btn_y+add_btn_h),
-            (lx+5*scale,add_btn_y+add_btn_h),(lx+5*scale,add_btn_y)]
-    abb = batch_for_shader(sh,"LINE_STRIP",{"pos":abvs})
-    sh.bind(); sh.uniform_float("color",add_col); abb.draw(sh)
+    # Button chrome suppressed once skinned — baked into the art; only the
+    # state-dependent label (ADD TO VOICES/ADDING...) below still draws live.
+    if not _has_skin:
+        _draw_rect(lx+5*scale, add_btn_y, add_btn_w, add_btn_h, (0.06,0.03,0.00,1.0))
+        abvs = [(lx+5*scale,add_btn_y),(lx+5*scale+add_btn_w,add_btn_y),
+                (lx+5*scale+add_btn_w,add_btn_y+add_btn_h),
+                (lx+5*scale,add_btn_y+add_btn_h),(lx+5*scale,add_btn_y)]
+        abb = batch_for_shader(sh,"LINE_STRIP",{"pos":abvs})
+        sh.bind(); sh.uniform_float("color",add_col); abb.draw(sh)
     fs_add = max(1,int(7*scale))
     tw_add = _text_width(add_lbl, fs_add)
     _draw_text(add_lbl, lx+5*scale+add_btn_w/2-tw_add/2,
-               add_btn_y+add_btn_h/2-fs_add/2, fs_add, add_col)
+               add_btn_y+add_btn_h/2-fs_add/2 + KNNVC_ADD_BTN_LABEL_Y_OFFSET*scale,
+               fs_add, add_col)
 
     # ── VOICE CARDS (above add section) ────────────────────────────────────
     voices   = _discover_ref_voices(ai_idx)
@@ -365,9 +444,10 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     cards_bot  = ly + lh - fs_lbl - fs_ch*2 - 14*scale
     cards_h    = cards_bot - (add_sep_y + 2*scale)
 
-    # Hint text above cards
+    # Hint text above cards — suppressed once skinned, baked into the art.
     hint_y = cards_bot - fs_lbl - 2*scale
-    _draw_text("REFERENCE VOICES", lx+5*scale, hint_y, fs_lbl, _TEXT_LABEL)
+    if not _has_skin:
+        _draw_text("REFERENCE VOICES", lx+5*scale, hint_y, fs_lbl, _TEXT_LABEL)
 
     prev_btn_w = max(16*scale, card_h*0.7)
     card_name_w = left_w - 8*scale - prev_btn_w - 4*scale
@@ -386,7 +466,8 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
 
     # ▲ up arrow
     up_col = _ACCENT if can_up else _ACCENT_DIM
-    _draw_rect(arr_x, arr_y, arr_sz, arr_sz, _PANEL)
+    if not _has_skin:
+        _draw_rect(arr_x, arr_y, arr_sz, arr_sz, _PANEL)
     _up_tri = [
         (arr_x + arr_sz*0.50, arr_y + arr_sz*0.72),
         (arr_x + arr_sz*0.20, arr_y + arr_sz*0.28),
@@ -398,7 +479,8 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     # ▼ down arrow
     dn_x   = arr_x + arr_sz + 2*scale
     dn_col = _ACCENT if can_dn else _ACCENT_DIM
-    _draw_rect(dn_x, arr_y, arr_sz, arr_sz, _PANEL)
+    if not _has_skin:
+        _draw_rect(dn_x, arr_y, arr_sz, arr_sz, _PANEL)
     _dn_tri = [
         (dn_x + arr_sz*0.50, arr_y + arr_sz*0.28),
         (dn_x + arr_sz*0.20, arr_y + arr_sz*0.72),
@@ -426,13 +508,19 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
             bg = _PANEL_SEL if issel else _PANEL
             bc = _ACCENT    if issel else _BORDER
 
-            # Card background
-            _draw_rect(lx+4*scale, cy_card, left_w-8*scale, card_h, bg)
+            # Card background — fill+border suppressed once skinned (each
+            # slot's box is baked into rack_knnvc_bg.png); a thin accent
+            # border still draws over the selected slot as a highlight,
+            # since which voice is selected/scrolled-to is dynamic and can't
+            # be pre-baked into the art.
             cvs2 = [(lx+4*scale,cy_card),(lx+left_w-4*scale,cy_card),
                     (lx+left_w-4*scale,cy_card+card_h),
                     (lx+4*scale,cy_card+card_h),(lx+4*scale,cy_card)]
-            cb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":cvs2})
-            sh.bind(); sh.uniform_float("color",bc); cb2.draw(sh)
+            if not _has_skin:
+                _draw_rect(lx+4*scale, cy_card, left_w-8*scale, card_h, bg)
+            if not _has_skin or issel:
+                cb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":cvs2})
+                sh.bind(); sh.uniform_float("color",bc); cb2.draw(sh)
 
             # Voice name
             tc = _TEXT if issel else _TEXT_DIM
@@ -451,13 +539,21 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
             except Exception:
                 pass
             _pb_bg  = (0.18,0.04,0.24,1.0) if _is_prev else (0.10,0.03,0.15,1.0)
-            _pb_col = _ACCENT if _is_prev else _ACCENT_DIM
+            # Idle glyph used to sit on its own contrast box; now that the
+            # box is suppressed when skinned, _ACCENT_DIM reads as invisible
+            # against the art. Keep it bright whenever skinned so the ">" is
+            # visible in both play and stop states; unskinned fallback keeps
+            # the original dim/bright distinction since its box still gives contrast.
+            _pb_col = _ACCENT if (_is_prev or _has_skin) else _ACCENT_DIM
             _pb_ico = "■" if _is_prev else ">"
-            _draw_rect(pb_x, pb_y, prev_btn_w, pb_h, _pb_bg)
-            pbvs = [(pb_x,pb_y),(pb_x+prev_btn_w,pb_y),
-                    (pb_x+prev_btn_w,pb_y+pb_h),(pb_x,pb_y+pb_h),(pb_x,pb_y)]
-            pbb = batch_for_shader(sh,"LINE_STRIP",{"pos":pbvs})
-            sh.bind(); sh.uniform_float("color",_pb_col); pbb.draw(sh)
+            # Button chrome suppressed once skinned — baked into the art;
+            # only the ▶/■ glyph (drawn below) still needs to swap live.
+            if not _has_skin:
+                _draw_rect(pb_x, pb_y, prev_btn_w, pb_h, _pb_bg)
+                pbvs = [(pb_x,pb_y),(pb_x+prev_btn_w,pb_y),
+                        (pb_x+prev_btn_w,pb_y+pb_h),(pb_x,pb_y+pb_h),(pb_x,pb_y)]
+                pbb = batch_for_shader(sh,"LINE_STRIP",{"pos":pbvs})
+                sh.bind(); sh.uniform_float("color",_pb_col); pbb.draw(sh)
             fs_pv = max(1,int(6*scale))
             tw_pv = _text_width(_pb_ico,fs_pv)
             _draw_text(_pb_ico, pb_x+prev_btn_w/2-tw_pv/2,
@@ -476,16 +572,20 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
 
     # ── CENTRE PANEL: state display + convert/preview + output ch ─────────────
     cx = centre_x; cy2 = work_bot; ch2 = work_h
-    _draw_rect(cx, cy2, centre_w, ch2, _PANEL)
-    cvs3 = [(cx,cy2),(cx+centre_w,cy2),(cx+centre_w,cy2+ch2),(cx,cy2+ch2),(cx,cy2)]
-    cb3 = batch_for_shader(sh,"LINE_STRIP",{"pos":cvs3})
-    sh.bind(); sh.uniform_float("color",_BORDER); cb3.draw(sh)
-    _draw_text("CONVERSION", cx+5*scale, cy2+ch2-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
+    if not _has_skin:
+        _draw_rect(cx, cy2, centre_w, ch2, _PANEL)
+        cvs3 = [(cx,cy2),(cx+centre_w,cy2),(cx+centre_w,cy2+ch2),(cx,cy2+ch2),(cx,cy2)]
+        cb3 = batch_for_shader(sh,"LINE_STRIP",{"pos":cvs3})
+        sh.bind(); sh.uniform_float("color",_BORDER); cb3.draw(sh)
+        _draw_text("CONVERSION", cx+5*scale, cy2+ch2-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
 
-    # State display area (replaces the empty waveform box)
+    # State display area (replaces the empty waveform box). Fill suppressed
+    # once skinned; the status-coloured border below still draws every time
+    # since it's a live state indicator, not static chrome.
     state_h = ch2 * 0.44
     state_y = cy2 + ch2 - fs_lbl - 10*scale - state_h
-    _draw_rect(cx+4*scale, state_y, centre_w-8*scale, state_h, _BG)
+    if not _has_skin:
+        _draw_rect(cx+4*scale, state_y, centre_w-8*scale, state_h, _BG)
     stvs = [(cx+4*scale,state_y),(cx+centre_w-4*scale,state_y),
             (cx+centre_w-4*scale,state_y+state_h),
             (cx+4*scale,state_y+state_h),(cx+4*scale,state_y)]
@@ -596,11 +696,15 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     else:
         c_lbl = "GENERATE"
     c_bg  = (0.08,0.02,0.12,1.0) if status == _PROCESSING else (0.10,0.03,0.15,1.0)
-    _draw_rect(conv_x, btn_y2, conv_w, btn_h2, c_bg)
-    evs = [(conv_x,btn_y2),(conv_x+conv_w,btn_y2),(conv_x+conv_w,btn_y2+btn_h2),
-           (conv_x,btn_y2+btn_h2),(conv_x,btn_y2)]
-    eb = batch_for_shader(sh,"LINE_STRIP",{"pos":evs})
-    sh.bind(); sh.uniform_float("color",_ACCENT); eb.draw(sh)
+    # Button chrome suppressed once skinned — baked into the art; only the
+    # state-dependent label (GENERATE/GENERATING.../PLACE ON TRACK) below
+    # still needs to draw live.
+    if not _has_skin:
+        _draw_rect(conv_x, btn_y2, conv_w, btn_h2, c_bg)
+        evs = [(conv_x,btn_y2),(conv_x+conv_w,btn_y2),(conv_x+conv_w,btn_y2+btn_h2),
+               (conv_x,btn_y2+btn_h2),(conv_x,btn_y2)]
+        eb = batch_for_shader(sh,"LINE_STRIP",{"pos":evs})
+        sh.bind(); sh.uniform_float("color",_ACCENT); eb.draw(sh)
     fs_btn = max(1,int(8*scale))
     tw_c2  = _text_width(c_lbl, fs_btn)
     _draw_text(c_lbl, conv_x+conv_w/2-tw_c2/2,
@@ -619,11 +723,14 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     _prev_bg  = (0.18,0.04,0.24,1.0) if _is_playing else (0.04,0.02,0.06,1.0)
     prev_col  = _ACCENT if (_has_out or _is_playing) else _ACCENT_DIM
     pv_lbl    = "■ STOP" if _is_playing else "> PREVIEW"
-    _draw_rect(prev_x, btn_y2, prev_w, btn_h2, _prev_bg)
-    pvs2 = [(prev_x,btn_y2),(prev_x+prev_w,btn_y2),(prev_x+prev_w,btn_y2+btn_h2),
-            (prev_x,btn_y2+btn_h2),(prev_x,btn_y2)]
-    pb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":pvs2})
-    sh.bind(); sh.uniform_float("color",prev_col); pb2.draw(sh)
+    # Button chrome suppressed once skinned — baked into the art; only the
+    # state-dependent label (PREVIEW/STOP) below still needs to draw live.
+    if not _has_skin:
+        _draw_rect(prev_x, btn_y2, prev_w, btn_h2, _prev_bg)
+        pvs2 = [(prev_x,btn_y2),(prev_x+prev_w,btn_y2),(prev_x+prev_w,btn_y2+btn_h2),
+                (prev_x,btn_y2+btn_h2),(prev_x,btn_y2)]
+        pb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":pvs2})
+        sh.bind(); sh.uniform_float("color",prev_col); pb2.draw(sh)
     tw_pv  = _text_width(pv_lbl, fs_btn)
     _draw_text(pv_lbl, prev_x+prev_w/2-tw_pv/2,
                btn_y2+btn_h2/2-fs_btn/2, fs_btn, prev_col)
@@ -634,58 +741,86 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
     out_ch_val = int(getattr(rack, "p3", 0.0)) or (active_chs[0]+1 if active_chs else 2)
     out_ch_val = max(1, min(9, out_ch_val))
 
-    _draw_text("OUT CH", cx+5*scale, row2_y+row2_h/2-fs_lbl/2, fs_lbl, _TEXT_LABEL)
+    if not _has_skin:
+        _draw_text("OUT CH", cx+5*scale, row2_y+row2_h/2-fs_lbl/2, fs_lbl, _TEXT_LABEL)
     lbl_tw = _text_width("OUT CH ", fs_lbl)
     arr_w  = max(14*scale, row2_h)
     oc_s   = max(22*scale, row2_h)
     oc_x   = cx + 5*scale + lbl_tw + arr_w + 2*scale
 
-    _draw_rect(cx+5*scale+lbl_tw, row2_y, arr_w, row2_h, _PANEL)
+    if not _has_skin:
+        _draw_rect(cx+5*scale+lbl_tw, row2_y, arr_w, row2_h, _PANEL)
     _ax = cx+5*scale+lbl_tw
-    mv_l = [(_ax+arr_w*0.65, row2_y+row2_h*0.18),
-            (_ax+arr_w*0.28, row2_y+row2_h*0.50),
-            (_ax+arr_w*0.65, row2_y+row2_h*0.82)]
-    al = batch_for_shader(sh,"TRI_FAN",{"pos":mv_l})
-    sh.bind(); sh.uniform_float("color",_ACCENT); al.draw(sh)
+    # Left arrow — suppressed once skinned (baked into the art either side
+    # of the output-channel box); the box's hit test is unaffected, this
+    # only turns off the drawn triangle.
+    if not _has_skin:
+        mv_l = [(_ax+arr_w*0.65, row2_y+row2_h*0.18),
+                (_ax+arr_w*0.28, row2_y+row2_h*0.50),
+                (_ax+arr_w*0.65, row2_y+row2_h*0.82)]
+        al = batch_for_shader(sh,"TRI_FAN",{"pos":mv_l})
+        sh.bind(); sh.uniform_float("color",_ACCENT); al.draw(sh)
 
-    _draw_rect(oc_x, row2_y, oc_s, row2_h, _PANEL)
-    ocvs = [(oc_x,row2_y),(oc_x+oc_s,row2_y),(oc_x+oc_s,row2_y+row2_h),
-            (oc_x,row2_y+row2_h),(oc_x,row2_y)]
-    ocb = batch_for_shader(sh,"LINE_STRIP",{"pos":ocvs})
-    sh.bind(); sh.uniform_float("color",_BORDER); ocb.draw(sh)
+    if not _has_skin:
+        _draw_rect(oc_x, row2_y, oc_s, row2_h, _PANEL)
+        ocvs = [(oc_x,row2_y),(oc_x+oc_s,row2_y),(oc_x+oc_s,row2_y+row2_h),
+                (oc_x,row2_y+row2_h),(oc_x,row2_y)]
+        ocb = batch_for_shader(sh,"LINE_STRIP",{"pos":ocvs})
+        sh.bind(); sh.uniform_float("color",_BORDER); ocb.draw(sh)
     oc_str = str(out_ch_val)
     tw_oc  = _text_width(oc_str, fs_lbl)
     _draw_text(oc_str, oc_x+oc_s/2-tw_oc/2, row2_y+row2_h/2-fs_lbl/2, fs_lbl, _ACCENT)
 
     plus_x = oc_x + oc_s + 2*scale
-    _draw_rect(plus_x, row2_y, arr_w, row2_h, _PANEL)
-    mv_r = [(plus_x+arr_w*0.35, row2_y+row2_h*0.18),
-            (plus_x+arr_w*0.72, row2_y+row2_h*0.50),
-            (plus_x+arr_w*0.35, row2_y+row2_h*0.82)]
-    ar = batch_for_shader(sh,"TRI_FAN",{"pos":mv_r})
-    sh.bind(); sh.uniform_float("color",_ACCENT); ar.draw(sh)
+    if not _has_skin:
+        _draw_rect(plus_x, row2_y, arr_w, row2_h, _PANEL)
+    # Right arrow — suppressed once skinned, same reasoning as the left
+    # arrow above.
+    if not _has_skin:
+        mv_r = [(plus_x+arr_w*0.35, row2_y+row2_h*0.18),
+                (plus_x+arr_w*0.72, row2_y+row2_h*0.50),
+                (plus_x+arr_w*0.35, row2_y+row2_h*0.82)]
+        ar = batch_for_shader(sh,"TRI_FAN",{"pos":mv_r})
+        sh.bind(); sh.uniform_float("color",_ACCENT); ar.draw(sh)
 
     # ── RIGHT PANEL: knobs ────────────────────────────────────────────────────
     rx2 = right_x; ry2 = work_bot; rh2 = work_h
-    _draw_rect(rx2, ry2, right_w, rh2, _PANEL)
-    rvs = [(rx2,ry2),(rx2+right_w,ry2),(rx2+right_w,ry2+rh2),(rx2,ry2+rh2),(rx2,ry2)]
-    rb = batch_for_shader(sh,"LINE_STRIP",{"pos":rvs})
-    sh.bind(); sh.uniform_float("color",_BORDER); rb.draw(sh)
-    _draw_text("CONTROLS", rx2+5*scale, ry2+rh2-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
+    if not _has_skin:
+        _draw_rect(rx2, ry2, right_w, rh2, _PANEL)
+        rvs = [(rx2,ry2),(rx2+right_w,ry2),(rx2+right_w,ry2+rh2),(rx2,ry2+rh2),(rx2,ry2)]
+        rb = batch_for_shader(sh,"LINE_STRIP",{"pos":rvs})
+        sh.bind(); sh.uniform_float("color",_BORDER); rb.draw(sh)
+        _draw_text("CONTROLS", rx2+5*scale, ry2+rh2-fs_lbl-4*scale, fs_lbl, _TEXT_LABEL)
 
-    knob_r = min(18*scale, right_w*0.28, work_h*0.18)
-    ky0    = ry2 + rh2 * 0.72
+    knob_r_base = min(18*scale, right_w*0.28, work_h*0.18)
+    ky0         = ry2 + rh2 * 0.72
 
+    # Knob names ("TOPK"/"REF SECS") suppressed once skinned — same treatment
+    # as Piper's SPEED/NOISE/NOISE W knob labels; the live value string
+    # (topk_val / ref_secs) always keeps drawing since it's dynamic. Knob
+    # radius is scaled per-knob via KNNVC_TOPK_KNOB_SCALE / _REFSECS_ above;
+    # centre position is nudged per-knob via the *_X_OFFSET/_Y_OFFSET
+    # constants so each can be matched to its background art independently.
     norm0    = float(getattr(rack,"p0",0.5))
     topk_val = int(2 + norm0*6)
-    _draw_knob(rx2+right_w*0.30, ky0, knob_r, norm0,
-               (_ACCENT[0],_ACCENT[1],_ACCENT[2]), "TOPK", str(topk_val), scale)
+    _draw_knob(rx2+right_w*0.30 + KNNVC_TOPK_KNOB_X_OFFSET*scale,
+               ky0 + KNNVC_TOPK_KNOB_Y_OFFSET*scale,
+               knob_r_base * KNNVC_TOPK_KNOB_SCALE, norm0,
+               (_ACCENT[0],_ACCENT[1],_ACCENT[2]),
+               "" if _has_skin else "TOPK", str(topk_val), scale)
 
     norm1    = float(getattr(rack,"p1",0.5))
     ref_secs = int(10 + norm1*50)
-    _draw_knob(rx2+right_w*0.72, ky0, knob_r, norm1,
-               (_ACCENT[0],_ACCENT[1],_ACCENT[2]), "REF SECS", str(ref_secs)+"s", scale)
+    _draw_knob(rx2+right_w*0.72 + KNNVC_REFSECS_KNOB_X_OFFSET*scale,
+               ky0 + KNNVC_REFSECS_KNOB_Y_OFFSET*scale,
+               knob_r_base * KNNVC_REFSECS_KNOB_SCALE, norm1,
+               (_ACCENT[0],_ACCENT[1],_ACCENT[2]),
+               "" if _has_skin else "REF SECS", str(ref_secs)+"s", scale)
 
+    # Help-text column — kept even when skinned. Unlike the section headers
+    # above, this is six lines of tooltip-style copy that's unlikely to be
+    # baked into a control-panel graphic — flag to confirm once the PNG
+    # exists; easy to wrap in `if not _has_skin:` if it turns out to be baked.
     fs_n   = max(1,int(6*scale))
     note_y = ry2 + rh2*0.30
     for note in ["TOPK: neighbours","(2=sharp,8=smooth)","","REF SECS: max ref","clip length","(30s recommended)"]:
@@ -693,11 +828,12 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
         note_y -= (fs_n+2*scale)
 
     # ── STATUS BAR ───────────────────────────────────────────────────────────
-    _draw_rect(sbar_x, sbar_y, sbar_w, sbar_h, (0.03,0.01,0.04,1.0))
-    svs = [(sbar_x,sbar_y),(sbar_x+sbar_w,sbar_y),(sbar_x+sbar_w,sbar_y+sbar_h),
-           (sbar_x,sbar_y+sbar_h),(sbar_x,sbar_y)]
-    sb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":svs})
-    sh.bind(); sh.uniform_float("color",_BORDER); sb2.draw(sh)
+    if not _has_skin:
+        _draw_rect(sbar_x, sbar_y, sbar_w, sbar_h, (0.03,0.01,0.04,1.0))
+        svs = [(sbar_x,sbar_y),(sbar_x+sbar_w,sbar_y),(sbar_x+sbar_w,sbar_y+sbar_h),
+               (sbar_x,sbar_y+sbar_h),(sbar_x,sbar_y)]
+        sb2 = batch_for_shader(sh,"LINE_STRIP",{"pos":svs})
+        sh.bind(); sh.uniform_float("color",_BORDER); sb2.draw(sh)
 
     voices_now  = _discover_ref_voices(ai_idx)
     ref_name    = "none"
@@ -713,12 +849,15 @@ def _draw_rvc_body(rx, ry, rw, rh, rack, ai_idx, scale):
         f"ENGINE: kNN-VC  |  {src_str}  |  OUT:CH{out_ch_sb}  |  REF:{ref_name}  |  TOPK:{topk_disp}  |  OFFLINE",
         sbar_x+7*scale, sbar_y+sbar_h/2-fs_sb/2, fs_sb, _TEXT_DIM)
 
-    dot_cols = {
-        _READY:      _AMBER,
-        _NO_REF:     _AMBER,
-        _PROCESSING: (0.90,0.50,0.10,1.0),
-        _DONE:       _GREEN,
-        _ERROR:      (0.90,0.10,0.05,1.0),
-    }
-    _draw_circle(sbar_x+sbar_w-9*scale, sbar_y+sbar_h/2,
-                 3.5*scale, dot_cols.get(status,_AMBER))
+    # Status LED — suppressed once skinned; baked into the background art in
+    # the bottom-right corner of the rack, same as the other static chrome.
+    if not _has_skin:
+        dot_cols = {
+            _READY:      _AMBER,
+            _NO_REF:     _AMBER,
+            _PROCESSING: (0.90,0.50,0.10,1.0),
+            _DONE:       _GREEN,
+            _ERROR:      (0.90,0.10,0.05,1.0),
+        }
+        _draw_circle(sbar_x+sbar_w-9*scale, sbar_y+sbar_h/2,
+                     3.5*scale, dot_cols.get(status,_AMBER))
